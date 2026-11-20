@@ -1,0 +1,7 @@
+/target
+/build
+apps/macos/.build
+apps/macos/.swiftpm
+.DS_Store
+*.xcworkspace
+xcuserdata/
