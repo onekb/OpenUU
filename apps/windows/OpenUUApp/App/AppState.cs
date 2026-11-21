@@ -30,6 +30,7 @@ public sealed class UserPrefsModel
     public bool MapCtrlToMacCommand { get; set; } = true;
     public string CaptureScheme { get; set; } = "main";
     public double DrawerHeight { get; set; } = 215.0;
+    public bool SuppressAntiFraudWarning { get; set; } = false;
 }
 
 /// <summary>
@@ -356,6 +357,20 @@ public sealed class AppState : ObservableBase, IDisposable
         }
     }
 
+    private bool _suppressAntiFraudWarning;
+    public bool SuppressAntiFraudWarning
+    {
+        get => _suppressAntiFraudWarning;
+        set
+        {
+            if (SetField(ref _suppressAntiFraudWarning, value))
+            {
+                _prefs.SuppressAntiFraudWarning = value;
+                SavePrefs();
+            }
+        }
+    }
+
     public bool IsRunningAsAdministrator { get; } = CheckIsAdmin();
 
     // Quick Connect Fields
@@ -524,7 +539,7 @@ public sealed class AppState : ObservableBase, IDisposable
         foreach (var existing in OpenUULogger.Shared.RecentEntries(OpenUULogLevel.Debug, 200))
             LogEntries.Add(existing);
 
-        OpenUULogger.Shared.Info("APP", $"launched platform=windows version=v0.6.0 admin={IsRunningAsAdministrator} fps={_targetFps}");
+        OpenUULogger.Shared.Info("APP", $"launched platform=windows version=v0.6.1 admin={IsRunningAsAdministrator} fps={_targetFps}");
 
         ProbeBridge.OnProbeResults = results =>
         {
@@ -572,6 +587,7 @@ public sealed class AppState : ObservableBase, IDisposable
         _showDebugHud = _prefs.DebugHud;
         _mapCtrlToMacCommand = _prefs.MapCtrlToMacCommand;
         _captureScheme = string.IsNullOrWhiteSpace(_prefs.CaptureScheme) ? "main" : _prefs.CaptureScheme;
+        _suppressAntiFraudWarning = _prefs.SuppressAntiFraudWarning;
         SavePrefs();
     }
 
@@ -1376,7 +1392,7 @@ public sealed class AppState : ObservableBase, IDisposable
         string snap = $"savedDevices={DeviceBook.Devices.Count} activeSessions={ConnectedHostCount} totalWindows={TotalOpenRemoteWindows}";
 
         string report = OpenUULogger.Shared.BuildDiagnosticReport(
-            "v0.6.0-windows",
+            "v0.6.1-windows",
             role,
             CaptureScheme,
             caps,

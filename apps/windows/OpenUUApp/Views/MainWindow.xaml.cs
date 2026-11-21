@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private bool _syncingUi;
     private string _selectedGroupFilter = "全部";
     private bool _isDrawerCollapsed;
+    private bool _isShowingAntiFraudDialog;
     public bool AllowTrueClose { get; set; }
 
     public MainWindow(AppState state)
@@ -1118,9 +1119,59 @@ public partial class MainWindow : Window
     private void NavSecurityBtn_Click(object sender, RoutedEventArgs e) => _state.SelectedTab = SidebarTab.SecurityQuality;
     private void NavNetworkBtn_Click(object sender, RoutedEventArgs e) => _state.SelectedTab = SidebarTab.NetworkLogs;
 
-    private void ToggleHostBtn_Click(object sender, RoutedEventArgs e) => _state.ToggleHostService();
-    private void StartHostBtn_Click(object sender, RoutedEventArgs e) => _state.StartHost();
+    private void ToggleHostBtn_Click(object sender, RoutedEventArgs e) => ToggleHostWithAntiFraudCheck();
+    private void StartHostBtn_Click(object sender, RoutedEventArgs e) => StartHostWithAntiFraudCheck();
     private void DisconnectAllBtn_Click(object sender, RoutedEventArgs e) => _state.DisconnectAllClientSessions();
+
+    public void ToggleHostWithAntiFraudCheck()
+    {
+        if (_state.IsHostRunning)
+            _state.StopHostService();
+        else
+            StartHostWithAntiFraudCheck();
+    }
+
+    public void StartHostWithAntiFraudCheck()
+    {
+        if (_state.IsHostRunning || _isShowingAntiFraudDialog)
+            return;
+
+        if (!_state.SuppressAntiFraudWarning)
+        {
+            _isShowingAntiFraudDialog = true;
+            try
+            {
+                var dlg = new AntiFraudWarningDialog();
+                if (IsVisible && WindowState != WindowState.Minimized)
+                {
+                    dlg.Owner = this;
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                }
+                else
+                {
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                    dlg.Topmost = true;
+                }
+
+                if (dlg.ShowDialog() != true)
+                {
+                    _state.StatusLog = "已取消开启本机被控";
+                    return;
+                }
+
+                if (dlg.DontShowAgain)
+                {
+                    _state.SuppressAntiFraudWarning = true;
+                }
+            }
+            finally
+            {
+                _isShowingAntiFraudDialog = false;
+            }
+        }
+
+        _state.StartHost();
+    }
 
     private void CopyMyCodeBtn_Click(object sender, RoutedEventArgs e) => _state.CopyMyDeviceCode();
     private void CopyInviteBtn_Click(object sender, RoutedEventArgs e) => _state.CopyInvitationBundle();

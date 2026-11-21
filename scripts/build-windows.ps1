@@ -1,6 +1,7 @@
 param(
     [switch]$SelfContained = $true,
     [switch]$SkipZip = $false,
+    [switch]$SkipInstaller = $false,
     [switch]$SyncIcons = $false,
     [string]$OutDir = ""
 )
@@ -46,7 +47,7 @@ if ($SyncIcons -or -not (Test-Path $iconPath)) {
 $nativeOutDir = Join-Path $RootDir "build\native-win-x64"
 New-Item -ItemType Directory -Force -Path $nativeOutDir | Out-Null
 
-Write-Host "==> 1/4 Building openuu-core (Rust release cdylib) & openuu-cli..."
+Write-Host "==> 1/5 Building openuu-core (Rust release cdylib) & openuu-cli..."
 cargo rustc --manifest-path (Join-Path $RootDir "Cargo.toml") -p openuu-core --release --lib --crate-type cdylib
 if ($LASTEXITCODE -ne 0) { throw "cargo rustc openuu-core failed with exit code $LASTEXITCODE" }
 
@@ -59,7 +60,7 @@ if (-not (Test-Path $coreDllSrc)) {
 }
 Copy-Item -Force $coreDllSrc (Join-Path $nativeOutDir "openuu_core.dll")
 
-Write-Host "==> 2/4 Building openuu_win_media.dll (Media Foundation & DXGI/DWM helper)..."
+Write-Host "==> 2/5 Building openuu_win_media.dll (Media Foundation & DXGI/DWM helper)..."
 $cppSrc = Join-Path $RootDir "apps\windows\native\openuu_win_media.cpp"
 $mediaDllOut = Join-Path $nativeOutDir "openuu_win_media.dll"
 
@@ -100,7 +101,7 @@ $publishDir = if ($OutDir) { $OutDir } else { Join-Path $RootDir "build\OpenUU-W
 if (Test-Path $publishDir) {
     Remove-Item -Recurse -Force $publishDir -ErrorAction SilentlyContinue
     if (Test-Path (Join-Path $publishDir "OpenUU.dll")) {
-        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.6.0"
+        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.6.1"
         Write-Host "==> Note: $publishDir is currently in use by a running OpenUU.exe; publishing to $fallbackDir ..."
         $publishDir = $fallbackDir
         if (Test-Path $publishDir) {
@@ -109,9 +110,14 @@ if (Test-Path $publishDir) {
     }
 }
 
+$csprojPath = Join-Path $RootDir "apps\windows\OpenUUApp\OpenUUApp.csproj"
+[xml]$csprojXml = Get-Content $csprojPath -Encoding UTF8
+$appVersion = ($csprojXml.Project.PropertyGroup.Version | Select-Object -First 1)
+if (-not $appVersion) { $appVersion = "0.6.1" }
+
 $scValue = if ($SelfContained) { "true" } else { "false" }
-Write-Host "==> 3/4 Publishing OpenUUApp (.NET 8 WPF win-x64, self-contained=$scValue)..."
-dotnet publish (Join-Path $RootDir "apps\windows\OpenUUApp\OpenUUApp.csproj") `
+Write-Host "==> 3/5 Publishing OpenUUApp v$appVersion (.NET 8 WPF win-x64, self-contained=$scValue)..."
+dotnet publish $csprojPath `
     -c Release `
     -r win-x64 `
     --self-contained $scValue `
@@ -137,15 +143,53 @@ if ($env:OPENUU_WINDOWS_CERT_SHA1) {
 
 $zipPath = Join-Path $RootDir "build\OpenUU-Windows-x64.zip"
 if (-not $SkipZip) {
-    Write-Host "==> 4/4 Creating portable archive $zipPath ..."
+    Write-Host "==> 4/5 Creating portable archive $zipPath ..."
     if (Test-Path $zipPath) {
         Remove-Item -Force $zipPath
     }
     Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
 }
 
+$setupPath = Join-Path $RootDir "build\OpenUU-Windows-x64-Setup.exe"
+$installerBuilt = $false
+if (-not $SkipInstaller) {
+    $isccCmd = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+    $isccPath = if ($isccCmd) {
+        $isccCmd.Source
+    }
+    else {
+        @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+
+    if ($isccPath) {
+        Write-Host "==> 5/5 Building Windows Setup installer $setupPath (Inno Setup)..."
+        $issFile = Join-Path $RootDir "apps\windows\installer\OpenUU.iss"
+        $outBuildDir = Join-Path $RootDir "build"
+        & $isccPath "/Q" "/DMyAppVersion=$appVersion" "/DPublishDir=$publishDir" "/DOutputDir=$outBuildDir" $issFile
+        if ($LASTEXITCODE -ne 0) { throw "ISCC.exe failed with exit code $LASTEXITCODE" }
+        $installerBuilt = $true
+
+        if ($env:OPENUU_WINDOWS_CERT_SHA1) {
+            $signtool = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+            if ($signtool) {
+                & $signtool.Source sign /sha1 $env:OPENUU_WINDOWS_CERT_SHA1 /fd SHA256 $setupPath
+            }
+        }
+    }
+    else {
+        Write-Warning "ISCC.exe (Inno Setup 6) not found; skipping Setup.exe installer. Install via: winget install JRSoftware.InnoSetup"
+    }
+}
+
 Write-Host "==> Done! Standalone Windows app created at:"
-Write-Host "    Executable : $publishDir\OpenUU.exe"
+Write-Host "    Executable  : $publishDir\OpenUU.exe"
 if (-not $SkipZip) {
     Write-Host "    Portable ZIP: $zipPath"
+}
+if ($installerBuilt) {
+    Write-Host "    Installer   : $setupPath"
 }

@@ -100,7 +100,8 @@
 | 平台 | 安装包 | 系统要求与说明 |
 | :--- | :--- | :--- |
 | **macOS (Apple Silicon / M 系列芯片)** | `OpenUU-*-macOS-arm64.dmg` | 控制端 + 被控端，需 macOS 14.0+ |
-| **Windows (64 位)** | `OpenUU-*-Windows-x64.zip` | 控制端 + 被控端，需 Windows 10 / 11 (`x64`，免安装解压即用) |
+| **Windows (64 位 · 安装版)** | `OpenUU-*-Windows-x64-Setup.exe` | **推荐** · 控制端 + 被控端，支持免提权单用户或全用户安装、自动创建快捷方式与标准卸载（Windows 10 / 11 `x64`） |
+| **Windows (64 位 · 便携版)** | `OpenUU-*-Windows-x64.zip` | 控制端 + 被控端，免安装解压即用（Windows 10 / 11 `x64`） |
 | **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端，需 Android 8.0+ (`arm64-v8a`) |
 | **iOS / iPadOS** | `OpenUU-*-iOS-unsigned.ipa` | 控制端，需 iOS 17.0+，未签名 IPA（需自签安装） |
 
@@ -108,7 +109,7 @@
 > OpenUU 为个人发起的完全开源项目，**暂未购买 Apple Developer / Microsoft EV 代码签名与应用商店商业证书**，因此首次安装或打开时系统会弹出安全拦截提示，属正常现象。全部代码均在本仓库公开，有顾虑的朋友也可直接[从源码自行编译](#-开发者与源码构建)。
 
 - **🪟 Windows 提示“Windows 已保护你的电脑 (Microsoft Defender SmartScreen)”**：  
-  解压 `.zip` 后双击 `OpenUU.exe`，若弹出蓝色拦截窗口，点击 **「更多信息」** → **「仍要运行」** 即可直接启动（无需安装任何运行时依赖）。  
+  双击运行安装程序 `OpenUU-*-Windows-x64-Setup.exe`（或解压便携版 `.zip` 后双击 `OpenUU.exe`），若弹出蓝色拦截窗口，点击 **「更多信息」** → **「仍要运行」** 即可（内置完整运行时，无需额外安装任何依赖）。  
   > 作为 **被控端** 时无需额外系统权限即可开箱使用；若需远控操控目标机器上以「管理员身份」运行的软件窗口，可在「安全与画质」页点击 **「以管理员身份重启」**。
 
 - **🍎 macOS 提示“已损坏，无法打开”或“无法验证开发者”**：  
@@ -185,6 +186,7 @@ open ./build/OpenUU.app
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 .\build\OpenUU-Windows\OpenUU.exe
+# 安装程序产物：.\build\OpenUU-Windows-x64-Setup.exe
 # 便携版压缩包产物：.\build\OpenUU-Windows-x64.zip
 ```
 

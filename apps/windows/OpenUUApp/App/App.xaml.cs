@@ -66,7 +66,7 @@ public partial class OpenUUApplication : System.Windows.Application
 
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("打开 OpenUU 主面板", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
-            menu.Items.Add("开启 / 关闭本机被控", null, (_, _) => Dispatcher.Invoke(() => _state?.ToggleHostService()));
+            menu.Items.Add("开启 / 关闭本机被控", null, (_, _) => Dispatcher.Invoke(() => _mainWindow?.ToggleHostWithAntiFraudCheck()));
             menu.Items.Add("断开所有远控连接", null, (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
             menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             menu.Items.Add("退出 OpenUU", null, (_, _) => Dispatcher.Invoke(ShutdownCleanly));

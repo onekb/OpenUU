@@ -532,7 +532,11 @@
       const assets = Array.isArray(rel.assets) ? rel.assets : [];
       const map = {
         macos: assets.find((a) => /\.dmg$/i.test(a.name)),
-        windows: assets.find((a) => /windows.*\.(zip|exe|msi)$/i.test(a.name)),
+        windows:
+          assets.find((a) => /windows.*setup\.exe$/i.test(a.name)) ||
+          assets.find((a) => /windows.*\.(exe|msi)$/i.test(a.name)) ||
+          assets.find((a) => /windows.*\.zip$/i.test(a.name)),
+        "windows-zip": assets.find((a) => /windows.*\.zip$/i.test(a.name)),
         android: assets.find((a) => /\.apk$/i.test(a.name)),
         ios: assets.find((a) => /\.ipa$/i.test(a.name)),
       };
@@ -548,7 +552,7 @@
         }
       });
     } catch {
-      // Fallback to v0.6.0 built-in URLs
+      // Fallback to v0.6.1 built-in URLs
     }
   }
 
