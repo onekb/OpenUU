@@ -13,6 +13,14 @@ interface NativeCallbackListener {
         height: Int,
         data: ByteArray
     )
+    fun onAudio(
+        codec: Int,
+        flags: Int,
+        channels: Int,
+        sampleRate: Int,
+        timestampUs: Long,
+        data: ByteArray
+    )
     fun onStatus(msg: String)
     fun onProbeResult(json: String)
 }
@@ -119,6 +127,9 @@ object OpenUUNativeBridge {
 
     @JvmStatic
     external fun nativeRequestKeyframe(handle: Long, windowId: Int): Int
+
+    @JvmStatic
+    external fun nativeSendAudioControl(handle: Long, enabled: Boolean, muteHost: Boolean): Int
 
     @JvmStatic
     external fun nativeSendResizeWindow(

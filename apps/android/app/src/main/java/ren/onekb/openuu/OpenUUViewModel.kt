@@ -96,7 +96,20 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
 
     private var lastSyncedClipHash: String = ""
 
+    private class BufferedVideoPacket(
+        val codec: Int,
+        val flags: Int,
+        val timestampUs: Long,
+        val width: Int,
+        val height: Int,
+        val data: ByteArray
+    )
+
     private val popoverDecoders = ConcurrentHashMap<Int, VideoDecoderSurface>()
+    private val pendingFramesLock = Any()
+    private val pendingWindowFrames = LinkedHashMap<Int, ArrayList<BufferedVideoPacket>>()
+    @Volatile
+    private var userPausedAtLauncher: Boolean = false
     private val knownNormalWindowIds = LinkedHashSet<Int>()
     private var hadPriorTopology: Boolean = false
     private val windowHistory = ArrayDeque<Int>()
@@ -147,6 +160,9 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private val _activePopovers = MutableStateFlow<List<WindowTopologyItem>>(emptyList())
     val activePopovers: StateFlow<List<WindowTopologyItem>> = _activePopovers.asStateFlow()
 
+    private val _popoverReadyIds = MutableStateFlow<Set<Int>>(emptySet())
+    val popoverReadyIds: StateFlow<Set<Int>> = _popoverReadyIds.asStateFlow()
+
     private val _selectedWindowId = MutableStateFlow(0)
     val selectedWindowId: StateFlow<Int> = _selectedWindowId.asStateFlow()
 
@@ -164,6 +180,15 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
 
     private val _showDebugHud = MutableStateFlow(false)
     val showDebugHud: StateFlow<Boolean> = _showDebugHud.asStateFlow()
+
+    private val audioPrefs = appContext.getSharedPreferences("openuu_audio_prefs", Context.MODE_PRIVATE)
+    private val audioPlayer = AudioStreamPlayer()
+
+    private val _remoteAudioEnabled = MutableStateFlow(audioPrefs.getBoolean("remote_audio_enabled", true))
+    val remoteAudioEnabled: StateFlow<Boolean> = _remoteAudioEnabled.asStateFlow()
+
+    private val _muteHostAudio = MutableStateFlow(audioPrefs.getBoolean("mute_host_audio", true))
+    val muteHostAudio: StateFlow<Boolean> = _muteHostAudio.asStateFlow()
 
     private val _touchMode = MutableStateFlow(TouchMode.DIRECT_TOUCH)
     val touchMode: StateFlow<TouchMode> = _touchMode.asStateFlow()
@@ -451,12 +476,68 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private fun clearWindowTrackingState() {
         knownNormalWindowIds.clear()
         hadPriorTopology = false
+        userPausedAtLauncher = false
         windowHistory.clear()
         windowNoticeSeq++
         _windowSwitchNotice.value = null
+        _popoverReadyIds.value = emptySet()
+        synchronized(pendingFramesLock) {
+            pendingWindowFrames.clear()
+        }
         dragTargetWindowId = 0
         dragTargetRelX = 0f
         dragTargetRelY = 0f
+    }
+
+    private fun bufferPendingWindowFrame(
+        windowId: Int,
+        codec: Int,
+        flags: Int,
+        timestampUs: Long,
+        width: Int,
+        height: Int,
+        data: ByteArray
+    ) {
+        val isKey = (flags and 0x01) != 0
+        synchronized(pendingFramesLock) {
+            if (!pendingWindowFrames.containsKey(windowId) && pendingWindowFrames.size >= 12) {
+                val oldestKey = pendingWindowFrames.keys.firstOrNull()
+                if (oldestKey != null) pendingWindowFrames.remove(oldestKey)
+            }
+            val list = pendingWindowFrames.getOrPut(windowId) { ArrayList(8) }
+            if (isKey) {
+                list.clear()
+            } else if (list.size >= 10) {
+                return
+            }
+            list.add(
+                BufferedVideoPacket(
+                    codec = codec,
+                    flags = flags,
+                    timestampUs = timestampUs,
+                    width = width,
+                    height = height,
+                    data = data.copyOf()
+                )
+            )
+        }
+    }
+
+    private fun drainPendingFramesInto(windowId: Int, decoder: VideoDecoderSurface) {
+        val drained: List<BufferedVideoPacket>? = synchronized(pendingFramesLock) {
+            pendingWindowFrames.remove(windowId)
+        }
+        drained?.forEach { pkt ->
+            decoder.submitFrame(pkt.codec, pkt.flags, pkt.timestampUs, pkt.width, pkt.height, pkt.data)
+        }
+    }
+
+    private fun markPopoverFrameReady(windowId: Int) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            if (_activePopovers.value.any { it.windowId == windowId }) {
+                _popoverReadyIds.value = _popoverReadyIds.value + windowId
+            }
+        }
     }
 
     private fun releaseAllPopoverDecoders() {
@@ -464,20 +545,31 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         for (id in keys) {
             popoverDecoders.remove(id)?.release()
         }
+        _popoverReadyIds.value = emptySet()
     }
 
     fun getOrCreatePopoverDecoder(windowId: Int): VideoDecoderSurface {
-        return popoverDecoders.computeIfAbsent(windowId) { popWinId ->
+        var newlyCreated = false
+        val decoder = popoverDecoders.computeIfAbsent(windowId) { popWinId ->
+            newlyCreated = true
             VideoDecoderSurface(
+                isPopover = true,
                 onTelemetry = { /* Popover surfaces do not overwrite main stream telemetry */ },
                 onRequestKeyframe = {
                     val handle = runtimeHandle
                     if (handle != 0L && popWinId != 0) {
                         OpenUUNativeBridge.nativeRequestKeyframe(handle, popWinId)
                     }
+                },
+                onFirstFrameRendered = {
+                    markPopoverFrameReady(popWinId)
                 }
             )
         }
+        if (newlyCreated) {
+            drainPendingFramesInto(windowId, decoder)
+        }
+        return decoder
     }
 
     private fun recomputeWindowBuckets(allWindows: List<WindowTopologyItem>, selectedId: Int) {
@@ -496,16 +588,22 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         // Pre-create decoders for active popovers and release decoders for closed popovers
         val activePopoverIds = popovers.map { it.windowId }.toSet()
         for (pop in popovers) {
-            getOrCreatePopoverDecoder(pop.windowId)
+            val dec = getOrCreatePopoverDecoder(pop.windowId)
+            drainPendingFramesInto(pop.windowId, dec)
         }
         for (existingId in popoverDecoders.keys.toList()) {
             if (existingId !in activePopoverIds) {
                 popoverDecoders.remove(existingId)?.release()
             }
         }
+        val filteredReady = _popoverReadyIds.value.intersect(activePopoverIds)
+        if (filteredReady != _popoverReadyIds.value) {
+            _popoverReadyIds.value = filteredReady
+        }
     }
 
     private fun resetSessionState() {
+        audioPlayer.stop()
         activeWindowIdAtomic = 0
         clearWindowTrackingState()
         releaseAllPopoverDecoders()
@@ -531,6 +629,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     fun openRemoteApp(bundleId: String, appName: String = bundleId) {
         if (runtimeHandle == 0L) return
         appendLog("打开远程应用: $appName ($bundleId)")
+        userPausedAtLauncher = false
         _showAppLauncher.value = false
         val hadActive = activeWindowIdAtomic != 0
         if (!hadActive) {
@@ -546,6 +645,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun selectRemoteWindow(windowId: Int) {
+        userPausedAtLauncher = false
         val prev = activeWindowIdAtomic
         if (windowId == prev && !_showAppLauncher.value) {
             recomputeWindowBuckets(_remoteWindows.value, windowId)
@@ -560,10 +660,90 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         _selectedWindowId.value = windowId
         _showAppLauncher.value = false
         videoDecoder.resetStream()
+        if (windowId != 0) {
+            drainPendingFramesInto(windowId, videoDecoder)
+        }
         recomputeWindowBuckets(_remoteWindows.value, windowId)
         if (runtimeHandle != 0L && windowId != 0) {
             OpenUUNativeBridge.nativeRequestKeyframe(runtimeHandle, windowId)
         }
+    }
+
+    fun enterRemoteWorkspace() {
+        _selectedTab.value = MainTab.REMOTE
+        if (_selectedWindowId.value == 0 && _normalWindows.value.isNotEmpty()) {
+            userPausedAtLauncher = false
+            val normals = _normalWindows.value
+            val chosen = windowHistory.lastOrNull { id -> normals.any { it.windowId == id } }
+                ?.let { id -> normals.firstOrNull { it.windowId == id } }
+                ?: normals.firstOrNull { it.kind == 0 }
+                ?: normals.first()
+            selectRemoteWindow(chosen.windowId)
+        }
+    }
+
+    fun canNavigateBackWindow(): Boolean {
+        val cur = _selectedWindowId.value
+        val normals = _normalWindows.value
+        return windowHistory.any { id -> id != 0 && id != cur && normals.any { it.windowId == id } }
+    }
+
+    fun navigateBackWindow(): Boolean {
+        val cur = _selectedWindowId.value
+        val normals = _normalWindows.value
+        while (windowHistory.isNotEmpty()) {
+            val prevId = windowHistory.removeLast()
+            val match = normals.firstOrNull { it.windowId == prevId && it.windowId != cur }
+            if (match != null) {
+                userPausedAtLauncher = false
+                dragTargetWindowId = 0
+                activeWindowIdAtomic = match.windowId
+                _selectedWindowId.value = match.windowId
+                _showAppLauncher.value = false
+                videoDecoder.resetStream()
+                drainPendingFramesInto(match.windowId, videoDecoder)
+                recomputeWindowBuckets(_remoteWindows.value, match.windowId)
+                if (runtimeHandle != 0L) {
+                    OpenUUNativeBridge.nativeRequestKeyframe(runtimeHandle, match.windowId)
+                }
+                val seq = ++windowNoticeSeq
+                _windowSwitchNotice.value = "返回窗口 · ${match.displayTitle}"
+                viewModelScope.launch {
+                    delay(1800L)
+                    if (windowNoticeSeq == seq) {
+                        _windowSwitchNotice.value = null
+                    }
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    fun enterAppLauncherPage() {
+        val prev = activeWindowIdAtomic
+        if (prev != 0 && _normalWindows.value.any { it.windowId == prev }) {
+            windowHistory.remove(prev)
+            windowHistory.addLast(prev)
+        }
+        userPausedAtLauncher = true
+        dragTargetWindowId = 0
+        activeWindowIdAtomic = 0
+        _selectedWindowId.value = 0
+        _showAppLauncher.value = true
+        _manualFullscreen.value = false
+        videoDecoder.resetStream()
+        recomputeWindowBuckets(_remoteWindows.value, 0)
+        refreshRemoteApps()
+    }
+
+    fun dismissActivePopoversViaEsc(): Boolean {
+        val topPop = _activePopovers.value.lastOrNull() ?: return false
+        if (runtimeHandle == 0L) return false
+        val targetId = if (activeWindowIdAtomic != 0) activeWindowIdAtomic else topPop.windowId
+        OpenUUNativeBridge.nativeSendKeyEvent(runtimeHandle, targetId, MacKeyCodes.ESCAPE, true, false, 0)
+        OpenUUNativeBridge.nativeSendKeyEvent(runtimeHandle, targetId, MacKeyCodes.ESCAPE, false, false, 0)
+        return true
     }
 
     fun closeRemoteWindowTab(windowId: Int) {
@@ -635,6 +815,25 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         _showDebugHud.value = !_showDebugHud.value
     }
 
+    fun toggleRemoteAudio() {
+        val next = !_remoteAudioEnabled.value
+        _remoteAudioEnabled.value = next
+        audioPrefs.edit().putBoolean("remote_audio_enabled", next).apply()
+        audioPlayer.setMuted(!next)
+        if (runtimeHandle != 0L && _connectionPhase.value.isConnected) {
+            OpenUUNativeBridge.nativeSendAudioControl(runtimeHandle, next, _muteHostAudio.value)
+        }
+    }
+
+    fun toggleMuteHostAudio() {
+        val next = !_muteHostAudio.value
+        _muteHostAudio.value = next
+        audioPrefs.edit().putBoolean("mute_host_audio", next).apply()
+        if (runtimeHandle != 0L && _connectionPhase.value.isConnected) {
+            OpenUUNativeBridge.nativeSendAudioControl(runtimeHandle, _remoteAudioEnabled.value, next)
+        }
+    }
+
     fun setTouchMode(mode: TouchMode) {
         _touchMode.value = mode
     }
@@ -694,6 +893,53 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         return w to h
     }
 
+    fun sendPopoverMouseDirect(
+        popoverWindowId: Int,
+        lx: Float,
+        ly: Float,
+        effectiveRelX: Float,
+        effectiveRelY: Float,
+        eventType: Int,
+        button: Int,
+        clickCount: Int
+    ) {
+        if (runtimeHandle == 0L || popoverWindowId == 0) return
+        val mods = _stickyModifiers.value
+        if (eventType == 1) {
+            dragTargetWindowId = popoverWindowId
+            dragTargetRelX = effectiveRelX
+            dragTargetRelY = effectiveRelY
+        } else if (eventType == 2 && dragTargetWindowId == popoverWindowId) {
+            dragTargetWindowId = 0
+            dragTargetRelX = 0f
+            dragTargetRelY = 0f
+        }
+        OpenUUNativeBridge.nativeSendMouseEvent(
+            runtimeHandle,
+            popoverWindowId,
+            lx,
+            ly,
+            eventType,
+            button,
+            clickCount,
+            mods
+        )
+    }
+
+    fun sendPopoverScrollDirect(popoverWindowId: Int, lx: Float, ly: Float, deltaX: Float, deltaY: Float) {
+        if (runtimeHandle == 0L || popoverWindowId == 0) return
+        OpenUUNativeBridge.nativeSendScrollEvent(
+            runtimeHandle,
+            popoverWindowId,
+            lx,
+            ly,
+            deltaX,
+            deltaY,
+            true,
+            _stickyModifiers.value
+        )
+    }
+
     fun sendMouseNormalized(
         nx: Float,
         ny: Float,
@@ -703,6 +949,8 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     ) {
         if (runtimeHandle == 0L) return
         val (parentW, parentH) = currentLogicalSize()
+        val rawPx = nx * parentW
+        val rawPy = ny * parentH
         val px = nx.coerceIn(0f, 1f) * parentW
         val py = ny.coerceIn(0f, 1f) * parentH
         val mods = _stickyModifiers.value
@@ -710,10 +958,8 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         // Keep MOUSE_DRAG (3) and MOUSE_UP (2) routed to the same target window that received MOUSE_DOWN (1)
         if ((eventType == 3 || eventType == 2) && dragTargetWindowId != 0) {
             val targetId = dragTargetWindowId
-            val pop = _activePopovers.value.firstOrNull { it.windowId == targetId }
             val (lx, ly) = when {
-                pop != null -> (px - pop.relX) to (py - pop.relY)
-                targetId != activeWindowIdAtomic -> (px - dragTargetRelX) to (py - dragTargetRelY)
+                targetId != activeWindowIdAtomic -> (rawPx - dragTargetRelX) to (rawPy - dragTargetRelY)
                 else -> px to py
             }
             if (eventType == 2) {
@@ -734,15 +980,15 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             return
         }
 
-        // Hit-test topmost active popovers (kind == 2) first
+        // Hit-test topmost active popovers (kind == 2) first (using unclamped rawPx/rawPy so letterbox-overflow menus work!)
         val hitPopover = _activePopovers.value.asReversed().firstOrNull { pop ->
             pop.width > 1f && pop.height > 1f &&
-                px >= pop.relX && px <= pop.relX + pop.width &&
-                py >= pop.relY && py <= pop.relY + pop.height
+                rawPx >= pop.relX && rawPx <= pop.relX + pop.width &&
+                rawPy >= pop.relY && rawPy <= pop.relY + pop.height
         }
         if (hitPopover != null) {
-            val lx = px - hitPopover.relX
-            val ly = py - hitPopover.relY
+            val lx = rawPx - hitPopover.relX
+            val ly = rawPy - hitPopover.relY
             if (eventType == 1) {
                 dragTargetWindowId = hitPopover.windowId
                 dragTargetRelX = hitPopover.relX
@@ -794,21 +1040,23 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     fun sendScrollNormalized(nx: Float, ny: Float, deltaX: Float, deltaY: Float) {
         if (runtimeHandle == 0L) return
         val (parentW, parentH) = currentLogicalSize()
+        val rawPx = nx * parentW
+        val rawPy = ny * parentH
         val px = nx.coerceIn(0f, 1f) * parentW
         val py = ny.coerceIn(0f, 1f) * parentH
         val mods = _stickyModifiers.value
 
         val hitPopover = _activePopovers.value.asReversed().firstOrNull { pop ->
             pop.width > 1f && pop.height > 1f &&
-                px >= pop.relX && px <= pop.relX + pop.width &&
-                py >= pop.relY && py <= pop.relY + pop.height
+                rawPx >= pop.relX && rawPx <= pop.relX + pop.width &&
+                rawPy >= pop.relY && rawPy <= pop.relY + pop.height
         }
         if (hitPopover != null) {
             OpenUUNativeBridge.nativeSendScrollEvent(
                 runtimeHandle,
                 hitPopover.windowId,
-                px - hitPopover.relX,
-                py - hitPopover.relY,
+                rawPx - hitPopover.relX,
+                rawPy - hitPopover.relY,
                 deltaX,
                 deltaY,
                 true,
@@ -842,13 +1090,13 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         )
     }
 
-    fun sendKeyTap(keyCode: Int, explicitModifiers: Int? = null) {
+    fun sendKeyTap(keyCode: Int, explicitModifiers: Int? = null, isRepeat: Boolean = false) {
         val winId = activeWindowIdAtomic
         if (runtimeHandle == 0L || winId == 0) return
         val mods = explicitModifiers ?: _stickyModifiers.value
-        OpenUUNativeBridge.nativeSendKeyEvent(runtimeHandle, winId, keyCode, true, false, mods)
+        OpenUUNativeBridge.nativeSendKeyEvent(runtimeHandle, winId, keyCode, true, isRepeat, mods)
         OpenUUNativeBridge.nativeSendKeyEvent(runtimeHandle, winId, keyCode, false, false, mods)
-        if (explicitModifiers == null && _stickyModifiers.value != 0) {
+        if (!isRepeat && explicitModifiers == null && _stickyModifiers.value != 0) {
             _stickyModifiers.value = 0
         }
     }
@@ -857,6 +1105,65 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         val winId = activeWindowIdAtomic
         if (runtimeHandle == 0L || winId == 0 || text.isEmpty()) return
         OpenUUNativeBridge.nativeSendTextCommit(runtimeHandle, winId, text)
+    }
+
+    /**
+     * Processes committed text directly from the mobile soft keyboard (IME) without requiring
+     * a local staging input box:
+     * - If sticky modifiers (⌘/⌃/⌥/⇧) are latched and a single ASCII char is typed, triggers the Mac shortcut.
+     * - Routes Return/Enter, Tab, Backspace, and standalone Space to real Mac virtual key codes.
+     * - Streams CJK/words/emoji/symbols directly via `sendTextCommit`.
+     */
+    fun handleDirectImeInput(rawText: String) {
+        if (rawText.isEmpty()) return
+        val activeMods = _stickyModifiers.value
+        if (activeMods != 0 && rawText.length == 1) {
+            val mapped = MacKeyCodes.asciiToKeyAndShift(rawText[0])
+            if (mapped != null) {
+                val (code, extraShift) = mapped
+                sendKeyTap(code, activeMods or extraShift)
+                _stickyModifiers.value = 0
+                return
+            }
+        }
+        if (rawText == " ") {
+            sendKeyTap(MacKeyCodes.SPACE)
+            return
+        }
+
+        val chunk = StringBuilder()
+        fun flushChunk() {
+            if (chunk.isNotEmpty()) {
+                sendTextCommit(chunk.toString())
+                chunk.setLength(0)
+            }
+        }
+
+        var i = 0
+        while (i < rawText.length) {
+            when (val ch = rawText[i]) {
+                '\r' -> {
+                    flushChunk()
+                    if (i + 1 < rawText.length && rawText[i + 1] == '\n') i++
+                    sendKeyTap(MacKeyCodes.RETURN)
+                }
+                '\n' -> {
+                    flushChunk()
+                    sendKeyTap(MacKeyCodes.RETURN)
+                }
+                '\t' -> {
+                    flushChunk()
+                    sendKeyTap(MacKeyCodes.TAB)
+                }
+                '\b', '\u007F' -> {
+                    flushChunk()
+                    sendKeyTap(MacKeyCodes.DELETE)
+                }
+                else -> chunk.append(ch)
+            }
+            i++
+        }
+        flushChunk()
     }
 
     fun requestKeyframeNow() {
@@ -1140,6 +1447,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
 
                     val curSelected = _selectedWindowId.value
                     if (hadPrior && newlyOpened.isNotEmpty()) {
+                        userPausedAtLauncher = false
                         val targetNew = newlyOpened.last()
                         if (curSelected != 0 && curSelected != targetNew.windowId && normals.any { it.windowId == curSelected }) {
                             windowHistory.remove(curSelected)
@@ -1155,7 +1463,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                             }
                         }
                         _proactiveTabRevealTick.value = _proactiveTabRevealTick.value + 1L
-                    } else if (normals.isNotEmpty() && (curSelected == 0 || normals.none { it.windowId == curSelected })) {
+                    } else if (normals.isNotEmpty() && ((curSelected == 0 && !userPausedAtLauncher) || (curSelected != 0 && normals.none { it.windowId == curSelected }))) {
                         var fallback: WindowTopologyItem? = null
                         while (windowHistory.isNotEmpty()) {
                             val prevId = windowHistory.removeLast()
@@ -1168,6 +1476,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                         val chosen = fallback ?: normals.firstOrNull { it.kind == 0 } ?: normals.first()
                         selectRemoteWindow(chosen.windowId)
                     } else if (normals.isEmpty() && curSelected != 0) {
+                        userPausedAtLauncher = false
                         activeWindowIdAtomic = 0
                         _selectedWindowId.value = 0
                         _showAppLauncher.value = true
@@ -1225,7 +1534,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         var active = activeWindowIdAtomic
         val isPopover = popoverDecoders.containsKey(windowId) ||
             _remoteWindows.value.any { it.windowId == windowId && it.kind == 2 }
-        if (active == 0 && windowId != 0 && !isPopover) {
+        if (active == 0 && windowId != 0 && !isPopover && !userPausedAtLauncher) {
             active = windowId
             activeWindowIdAtomic = windowId
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -1234,11 +1543,30 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                 recomputeWindowBuckets(_remoteWindows.value, windowId)
             }
         }
-        if (windowId == active) {
-            videoDecoder.submitFrame(codec, flags, timestampUs, width, height, data)
-        } else if (isPopover) {
-            getOrCreatePopoverDecoder(windowId).submitFrame(codec, flags, timestampUs, width, height, data)
+        when {
+            windowId == active -> {
+                videoDecoder.submitFrame(codec, flags, timestampUs, width, height, data)
+            }
+            isPopover -> {
+                getOrCreatePopoverDecoder(windowId).submitFrame(codec, flags, timestampUs, width, height, data)
+            }
+            windowId != 0 -> {
+                // Buffer early frames arriving over QUIC before the WindowTopology control packet is processed!
+                bufferPendingWindowFrame(windowId, codec, flags, timestampUs, width, height, data)
+            }
         }
+    }
+
+    override fun onAudio(
+        codec: Int,
+        flags: Int,
+        channels: Int,
+        sampleRate: Int,
+        timestampUs: Long,
+        data: ByteArray
+    ) {
+        if (!_remoteAudioEnabled.value) return
+        audioPlayer.submitFrame(codec, flags, channels, sampleRate, timestampUs, data)
     }
 
     override fun onStatus(msg: String) {
@@ -1253,6 +1581,14 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                         .trim()
                         .ifEmpty { "Mac" }
                     _connectionPhase.value = ConnectionPhase.Connected(hostName)
+                    audioPlayer.setMuted(!_remoteAudioEnabled.value)
+                    if (runtimeHandle != 0L) {
+                        OpenUUNativeBridge.nativeSendAudioControl(
+                            runtimeHandle,
+                            _remoteAudioEnabled.value,
+                            _muteHostAudio.value
+                        )
+                    }
                     refreshIdentityAndDeviceBook()
                     refreshRemoteApps()
                     _selectedTab.value = MainTab.REMOTE
@@ -1331,6 +1667,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         }
         releaseAllPopoverDecoders()
         videoDecoder.release()
+        audioPlayer.release()
         if (runtimeHandle != 0L) {
             val handle = runtimeHandle
             runtimeHandle = 0L

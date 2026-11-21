@@ -1,7 +1,22 @@
 package ren.onekb.openuu
 
+import android.content.Context
+import android.graphics.SurfaceTexture
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.KeyEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.TextureView
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -20,6 +35,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,11 +43,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -49,13 +67,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.AspectRatio
@@ -64,6 +79,8 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.DesktopMac
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
@@ -73,8 +90,6 @@ import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.ZoomOutMap
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -98,12 +113,17 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -193,12 +213,15 @@ fun RemoteWorkspaceView(
     val appIcons by viewModel.appIcons.collectAsState()
     val normalWindows by viewModel.normalWindows.collectAsState()
     val activePopovers by viewModel.activePopovers.collectAsState()
+    val popoverReadyIds by viewModel.popoverReadyIds.collectAsState()
     val selectedWindowId by viewModel.selectedWindowId.collectAsState()
     val windowSwitchNotice by viewModel.windowSwitchNotice.collectAsState()
     val proactiveTabRevealTick by viewModel.proactiveTabRevealTick.collectAsState()
     val pinLandscapeTabBar by viewModel.pinLandscapeTabBar.collectAsState()
     val showAppLauncher by viewModel.showAppLauncher.collectAsState()
     val showDebugHud by viewModel.showDebugHud.collectAsState()
+    val remoteAudioEnabled by viewModel.remoteAudioEnabled.collectAsState()
+    val muteHostAudio by viewModel.muteHostAudio.collectAsState()
     val touchMode by viewModel.touchMode.collectAsState()
     val videoFitMode by viewModel.videoFitMode.collectAsState()
     val manualFullscreen by viewModel.manualFullscreen.collectAsState()
@@ -209,11 +232,66 @@ fun RemoteWorkspaceView(
 
     val hostName = (connectionPhase as? ConnectionPhase.Connected)?.hostName ?: "Mac"
     var showKeyboardDock by remember { mutableStateOf(false) }
+    var imeSoftKeyboardRequested by remember { mutableStateOf(false) }
+    var imeRequestSeq by remember { mutableLongStateOf(0L) }
+    var imeComposingPreview by remember { mutableStateOf("") }
     var showSessionSheet by remember { mutableStateOf(false) }
     var showGestureGuide by remember { mutableStateOf(false) }
     var showLastWindowCloseSheet by remember { mutableStateOf(false) }
-    var imeText by remember { mutableStateOf("") }
     var viewportLogicalSize by remember { mutableStateOf(Size(960f, 640f)) }
+
+    val density = LocalDensity.current
+    val isSystemImeVisible = WindowInsets.ime.getBottom(density) > 0
+    var sawImeVisibleForRequest by remember { mutableStateOf(false) }
+    LaunchedEffect(isSystemImeVisible, imeRequestSeq) {
+        if (isSystemImeVisible) {
+            sawImeVisibleForRequest = true
+        } else if (sawImeVisibleForRequest && imeSoftKeyboardRequested) {
+            // User dismissed system IME via system Back or keyboard's hide chevron
+            sawImeVisibleForRequest = false
+            imeSoftKeyboardRequested = false
+            imeComposingPreview = ""
+        }
+    }
+    LaunchedEffect(selectedWindowId) {
+        if (selectedWindowId == 0) {
+            imeSoftKeyboardRequested = false
+            sawImeVisibleForRequest = false
+            imeComposingPreview = ""
+        }
+    }
+
+    val openKeyboardAndIme: () -> Unit = {
+        showKeyboardDock = true
+        sawImeVisibleForRequest = false
+        imeSoftKeyboardRequested = true
+        imeRequestSeq++
+    }
+    val closeKeyboardAndIme: () -> Unit = {
+        imeSoftKeyboardRequested = false
+        sawImeVisibleForRequest = false
+        imeComposingPreview = ""
+        showKeyboardDock = false
+    }
+    val toggleKeyboardDockAndIme: () -> Unit = {
+        if (!showKeyboardDock) {
+            openKeyboardAndIme()
+        } else {
+            closeKeyboardAndIme()
+        }
+    }
+    val toggleSystemImeOnly: () -> Unit = {
+        if (isSystemImeVisible || imeSoftKeyboardRequested) {
+            imeSoftKeyboardRequested = false
+            sawImeVisibleForRequest = false
+            imeComposingPreview = ""
+        } else {
+            showKeyboardDock = true
+            sawImeVisibleForRequest = false
+            imeSoftKeyboardRequested = true
+            imeRequestSeq++
+        }
+    }
 
     var zoom by remember(selectedWindowId) { mutableFloatStateOf(1f) }
     var pan by remember(selectedWindowId) { mutableStateOf(Offset.Zero) }
@@ -265,6 +343,49 @@ fun RemoteWorkspaceView(
     val dockTabStrip = !isImmersiveFullscreen || pinLandscapeTabBar
     val overlayTabStripVisible = isImmersiveFullscreen && !pinLandscapeTabBar && (tabStripAutoRevealed || manualTabStripRevealed)
 
+    val handleStepBack: () -> Unit = {
+        when {
+            showGestureGuide -> showGestureGuide = false
+            showLastWindowCloseSheet -> showLastWindowCloseSheet = false
+            showSessionSheet -> showSessionSheet = false
+            showAppLauncher && selectedWindowId != 0 -> viewModel.setShowAppLauncher(false)
+            overlayTabStripVisible -> {
+                manualTabStripRevealed = false
+                tabStripAutoRevealed = false
+            }
+            selectedWindowId != 0 && (isSystemImeVisible || imeSoftKeyboardRequested) -> {
+                imeSoftKeyboardRequested = false
+                sawImeVisibleForRequest = false
+                imeComposingPreview = ""
+            }
+            selectedWindowId != 0 && showKeyboardDock -> closeKeyboardAndIme()
+            selectedWindowId != 0 && activePopovers.isNotEmpty() -> {
+                viewModel.dismissActivePopoversViaEsc()
+                showGestureToast("已关闭右键菜单")
+            }
+            selectedWindowId != 0 && manualFullscreen -> {
+                viewModel.setManualFullscreen(false)
+                showGestureToast("已退出全屏")
+            }
+            selectedWindowId != 0 && zoom > 1.02f -> {
+                zoom = 1f
+                pan = Offset.Zero
+                showGestureToast("已恢复默认比例")
+            }
+            selectedWindowId != 0 && viewModel.canNavigateBackWindow() -> {
+                viewModel.navigateBackWindow()
+            }
+            selectedWindowId != 0 -> {
+                viewModel.enterAppLauncherPage()
+            }
+            else -> {
+                viewModel.selectTab(MainTab.CONNECT)
+            }
+        }
+    }
+
+    BackHandler(enabled = true, onBack = handleStepBack)
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -283,11 +404,18 @@ fun RemoteWorkspaceView(
                     touchMode = touchMode,
                     showKeyboardDock = showKeyboardDock,
                     rttText = rttPillText,
-                    onOpenApps = { viewModel.setShowAppLauncher(!showAppLauncher || selectedWindowId == 0) },
+                    onStepBack = handleStepBack,
+                    onOpenApps = {
+                        if (selectedWindowId == 0) {
+                            viewModel.refreshRemoteApps()
+                        } else {
+                            viewModel.setShowAppLauncher(!showAppLauncher)
+                        }
+                    },
                     onSelectWindow = { viewModel.selectRemoteWindow(it) },
                     onCloseWindow = handleCloseTab,
                     onToggleTouchMode = toggleTouch,
-                    onToggleKeyboard = { showKeyboardDock = !showKeyboardDock },
+                    onToggleKeyboard = toggleKeyboardDockAndIme,
                     onOpenSessionMenu = { showSessionSheet = true }
                 )
             }
@@ -306,6 +434,7 @@ fun RemoteWorkspaceView(
                         viewModel = viewModel,
                         activeWindowId = selectedWindowId,
                         activePopovers = activePopovers,
+                        popoverReadyIds = popoverReadyIds,
                         touchMode = touchMode,
                         videoFitMode = videoFitMode,
                         zoom = zoom,
@@ -319,8 +448,8 @@ fun RemoteWorkspaceView(
                         transientToast = transientToast,
                         onTransientToast = ::showGestureToast,
                         onThreeFingerTap = {
-                            showKeyboardDock = !showKeyboardDock
-                            showGestureToast(if (showKeyboardDock) "三指 · 已呼出键盘栏" else "三指 · 已收起键盘栏")
+                            toggleKeyboardDockAndIme()
+                            showGestureToast(if (showKeyboardDock) "三指 · 已呼出输入法与按键栏" else "三指 · 已收起键盘栏")
                         },
                         onThreeFingerVerticalSwipe = {
                             if (isImmersiveFullscreen && !pinLandscapeTabBar) {
@@ -334,6 +463,21 @@ fun RemoteWorkspaceView(
                         onViewportLogicalSizeChanged = { viewportLogicalSize = it }
                     )
                 }
+
+                if (selectedWindowId != 0 && showKeyboardDock) {
+                    DirectRemoteImeHost(
+                        imeRequested = imeSoftKeyboardRequested,
+                        imeRequestSeq = imeRequestSeq,
+                        onCommitText = { text -> viewModel.handleDirectImeInput(text) },
+                        onBackspace = { isRepeat -> viewModel.sendKeyTap(MacKeyCodes.DELETE, null, isRepeat) },
+                        onKeyTap = { keyCode, isRepeat -> viewModel.sendKeyTap(keyCode, null, isRepeat) },
+                        onComposingPreviewChanged = { imeComposingPreview = it },
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .size(1.dp)
+                            .graphicsLayer { alpha = 0.01f }
+                    )
+                }
             }
 
             AnimatedVisibility(
@@ -342,17 +486,13 @@ fun RemoteWorkspaceView(
                 exit = shrinkVertically()
             ) {
                 MacKeyboardAndImeDock(
-                    imeText = imeText,
-                    onImeTextChange = { imeText = it },
-                    onCommitImeText = {
-                        if (imeText.isNotEmpty()) {
-                            viewModel.sendTextCommit(imeText)
-                            imeText = ""
-                        }
-                    },
+                    isImeActive = isSystemImeVisible || imeSoftKeyboardRequested,
+                    composingPreview = imeComposingPreview,
                     stickyModifiers = stickyModifiers,
                     onToggleModifier = { viewModel.toggleStickyModifier(it) },
-                    onSendKeyTap = { code, mods -> viewModel.sendKeyTap(code, mods) }
+                    onSendKeyTap = { code, mods, isRepeat -> viewModel.sendKeyTap(code, mods, isRepeat) },
+                    onToggleIme = toggleSystemImeOnly,
+                    onCloseDock = closeKeyboardAndIme
                 )
             }
         }
@@ -376,6 +516,17 @@ fun RemoteWorkspaceView(
                     manualTabStripRevealed = false
                     tabStripAutoRevealed = false
                 },
+                onStepBack = {
+                    manualTabStripRevealed = false
+                    tabStripAutoRevealed = false
+                    if (selectedWindowId != 0 && viewModel.canNavigateBackWindow()) {
+                        viewModel.navigateBackWindow()
+                    } else if (selectedWindowId != 0) {
+                        viewModel.enterAppLauncherPage()
+                    } else {
+                        viewModel.selectTab(MainTab.CONNECT)
+                    }
+                },
                 onOpenApps = {
                     manualTabStripRevealed = false
                     viewModel.setShowAppLauncher(true)
@@ -383,7 +534,11 @@ fun RemoteWorkspaceView(
                 onSelectWindow = { viewModel.selectRemoteWindow(it) },
                 onCloseWindow = handleCloseTab,
                 onToggleTouchMode = toggleTouch,
-                onToggleKeyboard = { showKeyboardDock = !showKeyboardDock },
+                onToggleKeyboard = {
+                    manualTabStripRevealed = false
+                    tabStripAutoRevealed = false
+                    toggleKeyboardDockAndIme()
+                },
                 onOpenSessionMenu = {
                     manualTabStripRevealed = false
                     showSessionSheet = true
@@ -505,6 +660,8 @@ fun RemoteWorkspaceView(
             zoom = zoom,
             pinLandscapeTabBar = pinLandscapeTabBar,
             showDebugHud = showDebugHud,
+            remoteAudioEnabled = remoteAudioEnabled,
+            muteHostAudio = muteHostAudio,
             isLandscape = isLandscape,
             manualFullscreen = manualFullscreen,
             hasActiveWindow = selectedWindowId != 0,
@@ -520,6 +677,8 @@ fun RemoteWorkspaceView(
             },
             onZoomReset = { zoom = 1f; pan = Offset.Zero },
             onZoomIn = { zoom = (zoom + 0.5f).coerceIn(MIN_ZOOM, MAX_ZOOM) },
+            onToggleRemoteAudio = { viewModel.toggleRemoteAudio() },
+            onToggleMuteHostAudio = { viewModel.toggleMuteHostAudio() },
             onTogglePinLandscape = { viewModel.togglePinLandscapeTabBar() },
             onToggleManualFullscreen = { viewModel.toggleManualFullscreen() },
             onToggleDebugHud = { viewModel.toggleDebugHud() },
@@ -584,6 +743,7 @@ private fun WindowTabStrip(
     rttText: String,
     showCollapseBtn: Boolean = false,
     onCollapse: () -> Unit = {},
+    onStepBack: () -> Unit = {},
     onOpenApps: () -> Unit,
     onSelectWindow: (Int) -> Unit,
     onCloseWindow: (Int) -> Unit,
@@ -600,30 +760,49 @@ private fun WindowTabStrip(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            // Left [应用] pill
+            // Leading step-back button (previous window -> app launcher -> host list)
             Surface(
-                onClick = onOpenApps,
-                color = if (showAppLauncher) WsTextPrimary else WsElevatedBg,
+                onClick = onStepBack,
+                color = WsElevatedBg,
                 shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(0.5.dp, if (showAppLauncher) WsTextPrimary else WsBorder)
+                border = BorderStroke(0.5.dp, WsBorder)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                Box(modifier = Modifier.size(26.dp), contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Rounded.Apps,
-                        contentDescription = "应用",
-                        tint = if (showAppLauncher) WsBg else WsTextPrimary,
-                        modifier = Modifier.size(14.dp)
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "返回上一步",
+                        tint = WsTextPrimary,
+                        modifier = Modifier.size(15.dp)
                     )
-                    Text(
-                        text = "应用",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (showAppLauncher) WsBg else WsTextPrimary
-                    )
+                }
+            }
+
+            // [应用] switcher pill
+            if (selectedWindowId != 0) {
+                Surface(
+                    onClick = onOpenApps,
+                    color = if (showAppLauncher) WsTextPrimary else WsElevatedBg,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(0.5.dp, if (showAppLauncher) WsTextPrimary else WsBorder)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Apps,
+                            contentDescription = "应用",
+                            tint = if (showAppLauncher) WsBg else WsTextPrimary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "应用",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (showAppLauncher) WsBg else WsTextPrimary
+                        )
+                    }
                 }
             }
 
@@ -774,6 +953,8 @@ private fun SessionControlSheet(
     zoom: Float,
     pinLandscapeTabBar: Boolean,
     showDebugHud: Boolean,
+    remoteAudioEnabled: Boolean,
+    muteHostAudio: Boolean,
     isLandscape: Boolean,
     manualFullscreen: Boolean,
     hasActiveWindow: Boolean,
@@ -782,6 +963,8 @@ private fun SessionControlSheet(
     onZoomOut: () -> Unit,
     onZoomReset: () -> Unit,
     onZoomIn: () -> Unit,
+    onToggleRemoteAudio: () -> Unit,
+    onToggleMuteHostAudio: () -> Unit,
     onTogglePinLandscape: () -> Unit,
     onToggleManualFullscreen: () -> Unit,
     onToggleDebugHud: () -> Unit,
@@ -878,6 +1061,10 @@ private fun SessionControlSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column {
+                    SheetSwitchRow("接收远程电脑声音", remoteAudioEnabled, onToggleRemoteAudio)
+                    HorizontalDivider(thickness = 0.5.dp, color = WsDivider)
+                    SheetSwitchRow("远控时被控 Mac 静音", muteHostAudio, onToggleMuteHostAudio, enabled = remoteAudioEnabled)
+                    HorizontalDivider(thickness = 0.5.dp, color = WsDivider)
                     SheetSwitchRow("横屏固定顶部标签栏", pinLandscapeTabBar, onTogglePinLandscape)
                     HorizontalDivider(thickness = 0.5.dp, color = WsDivider)
                     if (!isLandscape && hasActiveWindow) {
@@ -935,17 +1122,17 @@ private fun SessionControlSheet(
 }
 
 @Composable
-private fun SheetSwitchRow(label: String, checked: Boolean, onToggle: () -> Unit) {
+private fun SheetSwitchRow(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .clickable(enabled = enabled, onClick = onToggle)
             .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, fontSize = 13.5.sp, color = WsTextPrimary)
-        Switch(checked = checked, onCheckedChange = { onToggle() })
+        Text(label, fontSize = 13.5.sp, color = if (enabled) WsTextPrimary else WsTextMuted)
+        Switch(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
     }
 }
 
@@ -1194,11 +1381,26 @@ private fun RemoteAppLauncherGrid(
     }
 }
 
+private data class PlacedPopoverVisual(
+    val item: WindowTopologyItem,
+    val leftPx: Float,
+    val topPx: Float,
+    val widthPx: Float,
+    val heightPx: Float,
+    val normLeft: Float,
+    val normTop: Float,
+    val normRight: Float,
+    val normBottom: Float,
+    val effRelX: Float,
+    val effRelY: Float
+)
+
 @Composable
 private fun RemoteVideoCanvas(
     viewModel: OpenUUViewModel,
     activeWindowId: Int,
     activePopovers: List<WindowTopologyItem>,
+    popoverReadyIds: Set<Int>,
     touchMode: TouchMode,
     videoFitMode: VideoFitMode,
     zoom: Float,
@@ -1264,11 +1466,43 @@ private fun RemoteVideoCanvas(
         }
         val effectiveScale = zoom * fillBaseScale
 
+        val (parentW, parentH) = viewModel.currentLogicalSize()
+        val safeParentW = parentW.coerceAtLeast(1f)
+        val safeParentH = parentH.coerceAtLeast(1f)
+
+        val placedPopovers = remember(activePopovers, fittedW, fittedH, containerW, containerH, safeParentW, safeParentH) {
+            activePopovers.mapNotNull { pop ->
+                if (pop.width <= 1f || pop.height <= 1f) return@mapNotNull null
+                val popWPx = ((pop.width / safeParentW) * fittedW).coerceIn(1f, containerW)
+                val popHPx = ((pop.height / safeParentH) * fittedH).coerceIn(1f, containerH)
+                val rawLeftPx = (pop.relX / safeParentW) * fittedW
+                val rawTopPx = (pop.relY / safeParentH) * fittedH
+                val clampedLeftPx = rawLeftPx.coerceIn(-offsetX, max(-offsetX, fittedW + offsetX - popWPx))
+                val clampedTopPx = rawTopPx.coerceIn(-offsetY, max(-offsetY, fittedH + offsetY - popHPx))
+                val safeFittedW = fittedW.coerceAtLeast(1f)
+                val safeFittedH = fittedH.coerceAtLeast(1f)
+                PlacedPopoverVisual(
+                    item = pop,
+                    leftPx = clampedLeftPx,
+                    topPx = clampedTopPx,
+                    widthPx = popWPx,
+                    heightPx = popHPx,
+                    normLeft = clampedLeftPx / safeFittedW,
+                    normTop = clampedTopPx / safeFittedH,
+                    normRight = (clampedLeftPx + popWPx) / safeFittedW,
+                    normBottom = (clampedTopPx + popHPx) / safeFittedH,
+                    effRelX = (clampedLeftPx / safeFittedW) * safeParentW,
+                    effRelY = (clampedTopPx / safeFittedH) * safeParentH
+                )
+            }
+        }
+
         val currentZoom by rememberUpdatedState(zoom)
         val currentPan by rememberUpdatedState(pan)
         val currentBaseRect by rememberUpdatedState(baseRect)
         val currentFillScale by rememberUpdatedState(fillBaseScale)
         val currentContainerSize by rememberUpdatedState(Size(containerW, containerH))
+        val currentPlacedPopovers by rememberUpdatedState(placedPopovers)
         val onZoomPanLatest by rememberUpdatedState(onZoomPanChanged)
         val onTransientToastLatest by rememberUpdatedState(onTransientToast)
         val onThreeFingerTapLatest by rememberUpdatedState(onThreeFingerTap)
@@ -1291,10 +1525,50 @@ private fun RemoteVideoCanvas(
             val cy = rect.center.y
             val ux = (pt.x - cx - currentPan.x) / eff + cx
             val uy = (pt.y - cy - currentPan.y) / eff + cy
-            return Offset(
-                ((ux - rect.left) / rect.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
-                ((uy - rect.top) / rect.height.coerceAtLeast(1f)).coerceIn(0f, 1f)
-            )
+            val rawNx = (ux - rect.left) / rect.width.coerceAtLeast(1f)
+            val rawNy = (uy - rect.top) / rect.height.coerceAtLeast(1f)
+            return if (currentPlacedPopovers.isNotEmpty()) {
+                Offset(rawNx, rawNy)
+            } else {
+                Offset(rawNx.coerceIn(0f, 1f), rawNy.coerceIn(0f, 1f))
+            }
+        }
+
+        fun dispatchMouseEvent(n: Offset, eventType: Int, button: Int, clickCount: Int) {
+            if (eventType == MOUSE_MOVE || eventType == MOUSE_DOWN) {
+                val hit = currentPlacedPopovers.asReversed().firstOrNull { p ->
+                    n.x >= p.normLeft && n.x <= p.normRight && n.y >= p.normTop && n.y <= p.normBottom
+                }
+                if (hit != null) {
+                    val lx = ((n.x - hit.normLeft) / (hit.normRight - hit.normLeft).coerceAtLeast(0.0001f)) * hit.item.width
+                    val ly = ((n.y - hit.normTop) / (hit.normBottom - hit.normTop).coerceAtLeast(0.0001f)) * hit.item.height
+                    viewModel.sendPopoverMouseDirect(
+                        popoverWindowId = hit.item.windowId,
+                        lx = lx,
+                        ly = ly,
+                        effectiveRelX = hit.effRelX,
+                        effectiveRelY = hit.effRelY,
+                        eventType = eventType,
+                        button = button,
+                        clickCount = clickCount
+                    )
+                    return
+                }
+            }
+            viewModel.sendMouseNormalized(n.x, n.y, eventType, button, clickCount)
+        }
+
+        fun dispatchScrollEvent(n: Offset, dx: Float, dy: Float) {
+            val hit = currentPlacedPopovers.asReversed().firstOrNull { p ->
+                n.x >= p.normLeft && n.x <= p.normRight && n.y >= p.normTop && n.y <= p.normBottom
+            }
+            if (hit != null) {
+                val lx = ((n.x - hit.normLeft) / (hit.normRight - hit.normLeft).coerceAtLeast(0.0001f)) * hit.item.width
+                val ly = ((n.y - hit.normTop) / (hit.normBottom - hit.normTop).coerceAtLeast(0.0001f)) * hit.item.height
+                viewModel.sendPopoverScrollDirect(hit.item.windowId, lx, ly, dx, dy)
+                return
+            }
+            viewModel.sendScrollNormalized(n.x, n.y, dx, dy)
         }
 
         fun autoPanForTrackpadCursor(nextCursor: Offset) {
@@ -1330,11 +1604,8 @@ private fun RemoteVideoCanvas(
 
         val fittedWDp = with(density) { fittedW.toDp() }
         val fittedHDp = with(density) { fittedH.toDp() }
-        val (parentW, parentH) = viewModel.currentLogicalSize()
-        val safeParentW = parentW.coerceAtLeast(1f)
-        val safeParentH = parentH.coerceAtLeast(1f)
 
-        // Main SurfaceView + Floating kind == 2 Right-Click Menu / Popover Video Overlays
+        // Main SurfaceView + Floating kind == 2 Right-Click Menu / Popover TextureView Overlays
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -1360,35 +1631,57 @@ private fun RemoteVideoCanvas(
                 }
             )
 
-            // Floating Popover / Context Menu SurfaceView overlays (kind == 2)
-            for (pop in activePopovers) {
-                if (pop.width <= 1f || pop.height <= 1f) continue
+            // Floating Popover / Context Menu GPU TextureView overlays (kind == 2).
+            // Using TextureView instead of a nested SurfaceView renders directly inside the Compose UI layer
+            // above the main SurfaceView (zero SurfaceFlinger Z-order punch-through holes!) and scales/pans cleanly.
+            for (placed in placedPopovers) {
+                val pop = placed.item
+                val isPopReady = pop.windowId in popoverReadyIds
                 key(pop.windowId) {
                     val popDecoder = remember(pop.windowId) { viewModel.getOrCreatePopoverDecoder(pop.windowId) }
                     DisposableEffect(pop.windowId) {
                         onDispose { popDecoder.attachSurface(null) }
                     }
-                    val popLeftDp = with(density) { ((pop.relX / safeParentW) * fittedW).toDp() }
-                    val popTopDp = with(density) { ((pop.relY / safeParentH) * fittedH).toDp() }
-                    val popWDp = with(density) { ((pop.width / safeParentW) * fittedW).coerceAtLeast(1f).toDp() }
-                    val popHDp = with(density) { ((pop.height / safeParentH) * fittedH).coerceAtLeast(1f).toDp() }
+                    val popLeftDp = with(density) { placed.leftPx.toDp() }
+                    val popTopDp = with(density) { placed.topPx.toDp() }
+                    val popWDp = with(density) { placed.widthPx.toDp() }
+                    val popHDp = with(density) { placed.heightPx.toDp() }
+                    val popShape = RoundedCornerShape(6.dp)
                     Box(
                         modifier = Modifier
                             .offset(x = popLeftDp, y = popTopDp)
                             .size(width = popWDp, height = popHDp)
-                            .border(1.dp, WsPopoverBorder)
+                            .graphicsLayer { alpha = if (isPopReady) 1f else 0f }
+                            .shadow(if (isPopReady) 8.dp else 0.dp, popShape)
+                            .clip(popShape)
+                            .border(0.75.dp, WsPopoverBorder, popShape)
                     ) {
                         AndroidView(
                             modifier = Modifier.fillMaxSize(),
                             factory = { ctx ->
-                                SurfaceView(ctx).apply {
-                                    setZOrderMediaOverlay(true)
-                                    holder.addCallback(object : SurfaceHolder.Callback {
-                                        override fun surfaceCreated(holder: SurfaceHolder) = popDecoder.attachSurface(holder.surface)
-                                        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
-                                            popDecoder.attachSurface(holder.surface)
-                                        override fun surfaceDestroyed(holder: SurfaceHolder) = popDecoder.attachSurface(null)
-                                    })
+                                TextureView(ctx).apply {
+                                    isOpaque = false
+                                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                        private var boundSurface: Surface? = null
+
+                                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                                            boundSurface?.release()
+                                            val s = Surface(st)
+                                            boundSurface = s
+                                            popDecoder.attachSurface(s)
+                                        }
+
+                                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) = Unit
+
+                                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                            popDecoder.attachSurface(null)
+                                            boundSurface?.release()
+                                            boundSurface = null
+                                            return true
+                                        }
+
+                                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+                                    }
                                 }
                             }
                         )
@@ -1419,26 +1712,26 @@ private fun RemoteVideoCanvas(
                             viewModel.updateCursorPos(next)
                             autoPanForTrackpadCursor(next)
                         },
-                        onMove = { n -> viewModel.sendMouseNormalized(n.x, n.y, MOUSE_MOVE, BUTTON_LEFT, 0) },
+                        onMove = { n -> dispatchMouseEvent(n, MOUSE_MOVE, BUTTON_LEFT, 0) },
                         onLeftClick = { n, clicks ->
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_MOVE, BUTTON_LEFT, 0)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_DOWN, BUTTON_LEFT, clicks)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_UP, BUTTON_LEFT, clicks)
+                            dispatchMouseEvent(n, MOUSE_MOVE, BUTTON_LEFT, 0)
+                            dispatchMouseEvent(n, MOUSE_DOWN, BUTTON_LEFT, clicks)
+                            dispatchMouseEvent(n, MOUSE_UP, BUTTON_LEFT, clicks)
                         },
                         onRightClick = { n ->
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_MOVE, BUTTON_RIGHT, 0)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_DOWN, BUTTON_RIGHT, 1)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_UP, BUTTON_RIGHT, 1)
+                            dispatchMouseEvent(n, MOUSE_MOVE, BUTTON_RIGHT, 0)
+                            dispatchMouseEvent(n, MOUSE_DOWN, BUTTON_RIGHT, 1)
+                            dispatchMouseEvent(n, MOUSE_UP, BUTTON_RIGHT, 1)
                             onTransientToastLatest("右键点击")
                         },
                         onDragStart = { n ->
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_MOVE, BUTTON_LEFT, 0)
-                            viewModel.sendMouseNormalized(n.x, n.y, MOUSE_DOWN, BUTTON_LEFT, 1)
+                            dispatchMouseEvent(n, MOUSE_MOVE, BUTTON_LEFT, 0)
+                            dispatchMouseEvent(n, MOUSE_DOWN, BUTTON_LEFT, 1)
                         },
-                        onDragMove = { n -> viewModel.sendMouseNormalized(n.x, n.y, MOUSE_DRAG, BUTTON_LEFT, 1) },
-                        onDragEnd = { n -> viewModel.sendMouseNormalized(n.x, n.y, MOUSE_UP, BUTTON_LEFT, 1) },
-                        onScroll = { n, dx, dy -> viewModel.sendScrollNormalized(n.x, n.y, dx, dy) },
+                        onDragMove = { n -> dispatchMouseEvent(n, MOUSE_DRAG, BUTTON_LEFT, 1) },
+                        onDragEnd = { n -> dispatchMouseEvent(n, MOUSE_UP, BUTTON_LEFT, 1) },
+                        onScroll = { n, dx, dy -> dispatchScrollEvent(n, dx, dy) },
                         onThreeFingerTap = { onThreeFingerTapLatest() },
                         onThreeFingerVerticalSwipe = { onThreeFingerSwipeLatest(it) },
                         onVisualStateChange = { gestureVisual = it }
@@ -1989,90 +2282,776 @@ private fun DebugTelemetryHud(
     }
 }
 
-private data class MacShortcutKey(val label: String, val keyCode: Int, val explicitModifiers: Int? = null)
+private const val IME_SENTINEL = "\u200B\u200B\u200B\u200B"
 
-private val MacShortcutKeys = listOf(
-    MacShortcutKey("Esc", MacKeyCodes.ESCAPE),
-    MacShortcutKey("Tab", MacKeyCodes.TAB),
-    MacShortcutKey("Space", MacKeyCodes.SPACE),
-    MacShortcutKey("⌫", MacKeyCodes.DELETE),
-    MacShortcutKey("⏎", MacKeyCodes.RETURN),
-    MacShortcutKey("←", MacKeyCodes.LEFT),
-    MacShortcutKey("↑", MacKeyCodes.UP),
-    MacShortcutKey("↓", MacKeyCodes.DOWN),
-    MacShortcutKey("→", MacKeyCodes.RIGHT),
-    MacShortcutKey("⌘C", MacKeyCodes.C, MacModifiers.COMMAND),
-    MacShortcutKey("⌘V", MacKeyCodes.V, MacModifiers.COMMAND),
-    MacShortcutKey("⌘W", MacKeyCodes.W, MacModifiers.COMMAND),
-    MacShortcutKey("⌘Space", MacKeyCodes.SPACE, MacModifiers.COMMAND),
-    MacShortcutKey("⌘Z", MacKeyCodes.Z, MacModifiers.COMMAND),
-    MacShortcutKey("⌘A", MacKeyCodes.A, MacModifiers.COMMAND)
+/**
+ * Invisible native EditText responder that connects directly to the system IME (Chinese Pinyin,
+ * English, Emoji, Swipe, Voice) without displaying any text input box:
+ * - Committed text is streamed immediately to the remote Mac.
+ * - Pressing Backspace (⌫) even with no pending text deletes characters directly on the remote Mac
+ *   by maintaining a 4-char zero-width-space sentinel buffer below any active IME composition.
+ */
+@Composable
+private fun DirectRemoteImeHost(
+    imeRequested: Boolean,
+    imeRequestSeq: Long,
+    onCommitText: (String) -> Unit,
+    onBackspace: (isRepeat: Boolean) -> Unit,
+    onKeyTap: (keyCode: Int, isRepeat: Boolean) -> Unit,
+    onComposingPreviewChanged: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnCommit by rememberUpdatedState(onCommitText)
+    val currentOnBackspace by rememberUpdatedState(onBackspace)
+    val currentOnKeyTap by rememberUpdatedState(onKeyTap)
+    val currentOnComposing by rememberUpdatedState(onComposingPreviewChanged)
+
+    var hostEditText by remember { mutableStateOf<DirectRemoteImeEditText?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            hostEditText?.let { et ->
+                val imm = et.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.hideSoftInputFromWindow(et.windowToken, 0)
+                et.clearFocus()
+            }
+            currentOnComposing("")
+        }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            DirectRemoteImeEditText(ctx).apply {
+                onCommitCallback = { currentOnCommit(it) }
+                onBackspaceCallback = { currentOnBackspace(it) }
+                onKeyTapCallback = { code, rep -> currentOnKeyTap(code, rep) }
+                onComposingCallback = { currentOnComposing(it) }
+                hostEditText = this
+            }
+        },
+        update = { et ->
+            et.onCommitCallback = { currentOnCommit(it) }
+            et.onBackspaceCallback = { currentOnBackspace(it) }
+            et.onKeyTapCallback = { code, rep -> currentOnKeyTap(code, rep) }
+            et.onComposingCallback = { currentOnComposing(it) }
+
+            if (imeRequested) {
+                if (et.lastShownSeq != imeRequestSeq) {
+                    et.lastShownSeq = imeRequestSeq
+                    et.wasRequested = true
+                    et.post {
+                        if (!et.hasFocus()) {
+                            et.requestFocus()
+                        }
+                        et.ensureCursorAtEndIfIdle()
+                        val imm = et.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                        imm?.showSoftInput(et, 0)
+                    }
+                }
+            } else if (et.wasRequested) {
+                et.wasRequested = false
+                et.post {
+                    val imm = et.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(et.windowToken, 0)
+                    et.clearFocus()
+                }
+            }
+        }
+    )
+}
+
+private class DirectRemoteImeEditText(context: Context) : EditText(context) {
+    var onCommitCallback: ((String) -> Unit)? = null
+    var onBackspaceCallback: ((Boolean) -> Unit)? = null
+    var onKeyTapCallback: ((Int, Boolean) -> Unit)? = null
+    var onComposingCallback: ((String) -> Unit)? = null
+
+    var lastShownSeq: Long = -1L
+    var wasRequested: Boolean = false
+    private var internalMutation: Boolean = false
+
+    init {
+        background = null
+        isCursorVisible = false
+        setPadding(0, 0, 0, 0)
+        textSize = 1f
+        setTextColor(android.graphics.Color.TRANSPARENT)
+        isFocusable = true
+        isFocusableInTouchMode = true
+        isSingleLine = false
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        resetToSentinel()
+
+        addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (internalMutation || s == null) return
+                val compStart = BaseInputConnection.getComposingSpanStart(s)
+                val compEnd = BaseInputConnection.getComposingSpanEnd(s)
+                if (compStart >= 0 && compEnd > compStart && compEnd <= s.length) {
+                    val preview = s.subSequence(compStart, compEnd).toString().replace("\u200B", "")
+                    onComposingCallback?.invoke(preview)
+                    return
+                }
+                onComposingCallback?.invoke("")
+
+                val raw = s.toString()
+                var sentinelCount = 0
+                val committed = StringBuilder()
+                for (ch in raw) {
+                    if (ch == '\u200B') sentinelCount++ else committed.append(ch)
+                }
+
+                if (committed.isNotEmpty()) {
+                    resetToSentinel()
+                    onCommitCallback?.invoke(committed.toString())
+                } else if (sentinelCount < IME_SENTINEL.length) {
+                    val deletes = (IME_SENTINEL.length - sentinelCount).coerceIn(1, 8)
+                    resetToSentinel()
+                    for (i in 0 until deletes) {
+                        onBackspaceCallback?.invoke(i > 0 || deletes > 1)
+                    }
+                } else if (raw != IME_SENTINEL) {
+                    resetToSentinel()
+                }
+            }
+        })
+    }
+
+    fun resetToSentinel() {
+        internalMutation = true
+        try {
+            setText(IME_SENTINEL)
+            setSelection(IME_SENTINEL.length)
+        } finally {
+            internalMutation = false
+        }
+    }
+
+    fun ensureCursorAtEndIfIdle() {
+        val s = text ?: return
+        val compStart = BaseInputConnection.getComposingSpanStart(s)
+        if (compStart < 0 && selectionStart != s.length) {
+            internalMutation = true
+            try {
+                setSelection(s.length)
+            } finally {
+                internalMutation = false
+            }
+        }
+    }
+
+    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        super.onSelectionChanged(selStart, selEnd)
+        if (internalMutation) return
+        val s = text ?: return
+        val compStart = BaseInputConnection.getComposingSpanStart(s)
+        if (compStart < 0 && (selStart != s.length || selEnd != s.length)) {
+            internalMutation = true
+            try {
+                setSelection(s.length)
+            } finally {
+                internalMutation = false
+            }
+        }
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        outAttrs.imeOptions = outAttrs.imeOptions or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        return object : InputConnectionWrapper(base, true) {
+            private fun isComposingNow(): Boolean {
+                val s = text ?: return false
+                val cs = BaseInputConnection.getComposingSpanStart(s)
+                val ce = BaseInputConnection.getComposingSpanEnd(s)
+                return cs >= 0 && ce > cs
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (!isComposingNow()) {
+                    val isRepeat = event.repeatCount > 0
+                    when (event.keyCode) {
+                        KeyEvent.KEYCODE_DEL -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                resetToSentinel()
+                                onBackspaceCallback?.invoke(isRepeat)
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_FORWARD_DEL -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                resetToSentinel()
+                                onKeyTapCallback?.invoke(MacKeyCodes.FORWARD_DELETE, isRepeat)
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                resetToSentinel()
+                                onKeyTapCallback?.invoke(MacKeyCodes.RETURN, false)
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_TAB -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                resetToSentinel()
+                                onKeyTapCallback?.invoke(MacKeyCodes.TAB, false)
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_ESCAPE -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                resetToSentinel()
+                                onKeyTapCallback?.invoke(MacKeyCodes.ESCAPE, false)
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.LEFT, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.RIGHT, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.UP, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.DOWN, isRepeat)
+                            return true
+                        }
+                    }
+                }
+                return super.sendKeyEvent(event)
+            }
+        }
+    }
+}
+
+private enum class SimKeyPage(val label: String) {
+    MAIN("常用按键"),
+    COMBOS("组合键"),
+    FKEYS("F1-F12")
+}
+
+private data class SimComboDef(
+    val keyHint: String,
+    val subtitle: String,
+    val keyCode: Int,
+    val modifiers: Int
+)
+
+private val SimComboRows: List<List<SimComboDef>> = listOf(
+    listOf(
+        SimComboDef("⌘A", "全选", MacKeyCodes.A, MacModifiers.COMMAND),
+        SimComboDef("⌘S", "保存", MacKeyCodes.S, MacModifiers.COMMAND),
+        SimComboDef("⌘F", "查找", MacKeyCodes.F, MacModifiers.COMMAND),
+        SimComboDef("⌘R", "刷新", MacKeyCodes.R, MacModifiers.COMMAND)
+    ),
+    listOf(
+        SimComboDef("⌘T", "新标签", MacKeyCodes.T, MacModifiers.COMMAND),
+        SimComboDef("⌘W", "关窗口", MacKeyCodes.W, MacModifiers.COMMAND),
+        SimComboDef("⌘N", "新建", MacKeyCodes.N, MacModifiers.COMMAND),
+        SimComboDef("⌘Space", "搜索", MacKeyCodes.SPACE, MacModifiers.COMMAND)
+    ),
+    listOf(
+        SimComboDef("⌘Tab", "切应用", MacKeyCodes.TAB, MacModifiers.COMMAND),
+        SimComboDef("⌃←", "左桌面", MacKeyCodes.LEFT, MacModifiers.CONTROL),
+        SimComboDef("⌃→", "右桌面", MacKeyCodes.RIGHT, MacModifiers.CONTROL),
+        SimComboDef("⌃↑", "调度中心", MacKeyCodes.UP, MacModifiers.CONTROL)
+    )
 )
 
 @Composable
 private fun MacKeyboardAndImeDock(
-    imeText: String,
-    onImeTextChange: (String) -> Unit,
-    onCommitImeText: () -> Unit,
+    isImeActive: Boolean,
+    composingPreview: String,
     stickyModifiers: Int,
     onToggleModifier: (Int) -> Unit,
-    onSendKeyTap: (Int, Int?) -> Unit
+    onSendKeyTap: (keyCode: Int, explicitModifiers: Int?, isRepeat: Boolean) -> Unit,
+    onToggleIme: () -> Unit,
+    onCloseDock: () -> Unit
 ) {
+    var isExpanded by rememberSaveable { mutableStateOf(true) }
+    var activePage by rememberSaveable { mutableStateOf(SimKeyPage.MAIN) }
+
     Column(modifier = Modifier.fillMaxWidth().background(WsBarBg)) {
         HorizontalDivider(thickness = 0.5.dp, color = WsDivider)
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = imeText,
-                    onValueChange = onImeTextChange,
-                    placeholder = { Text("输入中英文并发送至 Mac...", style = MaterialTheme.typography.bodySmall, color = WsTextMuted) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(9.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { onCommitImeText() }),
-                    modifier = Modifier.weight(1f),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = WsElevatedBg,
-                        unfocusedContainerColor = WsElevatedBg,
-                        focusedBorderColor = WsPopoverBorder,
-                        unfocusedBorderColor = WsBorder,
-                        focusedTextColor = WsTextPrimary,
-                        unfocusedTextColor = WsTextPrimary
-                    )
-                )
-                Button(
-                    onClick = onCommitImeText,
-                    enabled = imeText.isNotEmpty(),
-                    shape = RoundedCornerShape(9.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = WsTextPrimary,
-                        contentColor = WsBg,
-                        disabledContainerColor = WsKeycapBg,
-                        disabledContentColor = WsTextMuted
-                    ),
-                    contentPadding = PaddingValues(horizontal = 13.dp, vertical = 12.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "发送文本", modifier = Modifier.size(17.dp))
-                }
-            }
 
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+        // Optional live Pinyin composition preview pill when collapsed
+        if (!isExpanded && composingPreview.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val mods = listOf("⌘" to MacModifiers.COMMAND, "⌥" to MacModifiers.OPTION, "⌃" to MacModifiers.CONTROL, "⇧" to MacModifiers.SHIFT)
-                items(mods, key = { it.second }) { (symbol, bit) ->
-                    KeyCapChip(label = symbol, active = (stickyModifiers and bit) != 0, onClick = { onToggleModifier(bit) })
+                Text(
+                    text = "输入中: $composingPreview",
+                    fontSize = 11.5.sp,
+                    color = WsOnline,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (!isExpanded) {
+            // Collapsed compact 1-row quick bar (full-width, large tap targets, no scrolling needed)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SimKeyCap(
+                    label = "Esc",
+                    modifier = Modifier.weight(1.05f),
+                    height = 36.dp,
+                    onTrigger = { rep -> onSendKeyTap(MacKeyCodes.ESCAPE, null, rep) }
+                )
+                SimKeyCap(
+                    label = "Tab",
+                    modifier = Modifier.weight(1.05f),
+                    height = 36.dp,
+                    onTrigger = { rep -> onSendKeyTap(MacKeyCodes.TAB, null, rep) }
+                )
+                SimKeyCap(
+                    label = "⌘",
+                    active = (stickyModifiers and MacModifiers.COMMAND) != 0,
+                    modifier = Modifier.weight(0.95f),
+                    height = 36.dp,
+                    onTrigger = { onToggleModifier(MacModifiers.COMMAND) }
+                )
+                SimKeyCap(
+                    label = "⌃",
+                    active = (stickyModifiers and MacModifiers.CONTROL) != 0,
+                    modifier = Modifier.weight(0.95f),
+                    height = 36.dp,
+                    onTrigger = { onToggleModifier(MacModifiers.CONTROL) }
+                )
+                SimKeyCap(
+                    label = "⌥",
+                    active = (stickyModifiers and MacModifiers.OPTION) != 0,
+                    modifier = Modifier.weight(0.95f),
+                    height = 36.dp,
+                    onTrigger = { onToggleModifier(MacModifiers.OPTION) }
+                )
+                SimKeyCap(
+                    label = "⇧",
+                    active = (stickyModifiers and MacModifiers.SHIFT) != 0,
+                    modifier = Modifier.weight(0.95f),
+                    height = 36.dp,
+                    onTrigger = { onToggleModifier(MacModifiers.SHIFT) }
+                )
+                SimKeyCap(
+                    label = "⌫",
+                    repeatable = true,
+                    modifier = Modifier.weight(1.05f),
+                    height = 36.dp,
+                    onTrigger = { rep -> onSendKeyTap(MacKeyCodes.DELETE, null, rep) }
+                )
+                // Toggle system soft keyboard up/down
+                Surface(
+                    onClick = onToggleIme,
+                    color = if (isImeActive) WsTextPrimary else WsElevatedBg,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(0.5.dp, if (isImeActive) WsTextPrimary else WsPopoverBorder),
+                    modifier = Modifier.weight(1.05f).height(36.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isImeActive) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
+                            contentDescription = if (isImeActive) "收起输入法" else "唤起输入法",
+                            tint = if (isImeActive) WsBg else WsTextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
-                items(MacShortcutKeys, key = { it.label }) { item ->
-                    KeyCapChip(label = item.label, active = false, onClick = { onSendKeyTap(item.keyCode, item.explicitModifiers) })
+                // Expand to multi-row dock
+                Surface(
+                    onClick = { isExpanded = true },
+                    color = WsElevatedBg,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(0.5.dp, WsPopoverBorder),
+                    modifier = Modifier.weight(1.25f).height(36.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text("展开", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = WsTextPrimary)
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowUp,
+                            contentDescription = "展开多行按键",
+                            tint = WsTextMuted,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            // Expanded multi-row Mac auxiliary keyboard
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                // Header control bar: Page switcher + Pinyin preview + [输入法] + [收起] + [关闭]
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    SimKeyPage.entries.forEach { page ->
+                        val selected = (activePage == page)
+                        Surface(
+                            onClick = { activePage = page },
+                            color = if (selected) WsActiveTabBg else Color.Transparent,
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(0.5.dp, if (selected) WsPopoverBorder else WsBorder)
+                        ) {
+                            Text(
+                                text = page.label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selected) WsTextPrimary else WsTextMuted,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    if (composingPreview.isNotBlank()) {
+                        Text(
+                            text = composingPreview,
+                            fontSize = 11.sp,
+                            color = WsOnline,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+
+                    // System IME soft keyboard toggle
+                    Surface(
+                        onClick = onToggleIme,
+                        color = if (isImeActive) WsTextPrimary else WsElevatedBg,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.5.dp, if (isImeActive) WsTextPrimary else WsPopoverBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isImeActive) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
+                                contentDescription = null,
+                                tint = if (isImeActive) WsBg else WsTextPrimary,
+                                modifier = Modifier.size(13.5.dp)
+                            )
+                            Text(
+                                text = if (isImeActive) "收输入法" else "输入法",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isImeActive) WsBg else WsTextPrimary
+                            )
+                        }
+                    }
+
+                    // Collapse to 1-row
+                    Surface(
+                        onClick = { isExpanded = false },
+                        color = WsElevatedBg,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.5.dp, WsBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text("收起", fontSize = 11.sp, color = WsTextPrimary)
+                            Icon(
+                                imageVector = Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = "收起为单行",
+                                tint = WsTextMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+
+                    // Close entire dock
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onCloseDock),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "关闭按键栏",
+                            tint = WsTextMuted,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+
+                when (activePage) {
+                    SimKeyPage.MAIN -> {
+                        // Row 1: Esc | Tab | Space | ⌫ | ⌦ | ⏎
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            SimKeyCap(
+                                label = "Esc",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.ESCAPE, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "Tab",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.TAB, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "Space 空格",
+                                repeatable = true,
+                                modifier = Modifier.weight(1.85f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.SPACE, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "⌫",
+                                repeatable = true,
+                                modifier = Modifier.weight(1.1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.DELETE, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "⌦",
+                                repeatable = true,
+                                modifier = Modifier.weight(0.95f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.FORWARD_DELETE, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "⏎ 回车",
+                                emphasized = true,
+                                modifier = Modifier.weight(1.25f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.RETURN, null, rep) }
+                            )
+                        }
+
+                        // Row 2: ⌘ | ⌃ | ⌥ | ⇧ | Home | PgUp | ↑ | End (8 equal columns)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            SimKeyCap(
+                                label = "⌘",
+                                subtitle = "Cmd",
+                                active = (stickyModifiers and MacModifiers.COMMAND) != 0,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onToggleModifier(MacModifiers.COMMAND) }
+                            )
+                            SimKeyCap(
+                                label = "⌃",
+                                subtitle = "Ctrl",
+                                active = (stickyModifiers and MacModifiers.CONTROL) != 0,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onToggleModifier(MacModifiers.CONTROL) }
+                            )
+                            SimKeyCap(
+                                label = "⌥",
+                                subtitle = "Opt",
+                                active = (stickyModifiers and MacModifiers.OPTION) != 0,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onToggleModifier(MacModifiers.OPTION) }
+                            )
+                            SimKeyCap(
+                                label = "⇧",
+                                subtitle = "Shift",
+                                active = (stickyModifiers and MacModifiers.SHIFT) != 0,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onToggleModifier(MacModifiers.SHIFT) }
+                            )
+                            SimKeyCap(
+                                label = "Home",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.HOME, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "PgUp",
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.PAGE_UP, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "↑",
+                                emphasized = true,
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.UP, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "End",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.END, null, rep) }
+                            )
+                        }
+
+                        // Row 3: ⌘C | ⌘V | ⌘X | ⌘Z | PgDn | ← | ↓ | → (Inverted-T arrow cluster aligned with ↑ above!)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            SimKeyCap(
+                                label = "⌘C",
+                                subtitle = "复制",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.C, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "⌘V",
+                                subtitle = "粘贴",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.V, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "⌘X",
+                                subtitle = "剪切",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.X, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "⌘Z",
+                                subtitle = "撤销",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.Z, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "PgDn",
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.PAGE_DOWN, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "←",
+                                emphasized = true,
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.LEFT, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "↓",
+                                emphasized = true,
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.DOWN, null, rep) }
+                            )
+                            SimKeyCap(
+                                label = "→",
+                                emphasized = true,
+                                repeatable = true,
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { rep -> onSendKeyTap(MacKeyCodes.RIGHT, null, rep) }
+                            )
+                        }
+                    }
+
+                    SimKeyPage.COMBOS -> {
+                        SimComboRows.forEach { rowItems ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                rowItems.forEach { item ->
+                                    SimKeyCap(
+                                        label = item.keyHint,
+                                        subtitle = item.subtitle,
+                                        modifier = Modifier.weight(1f),
+                                        onTrigger = { onSendKeyTap(item.keyCode, item.modifiers, false) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    SimKeyPage.FKEYS -> {
+                        val fRow1 = listOf(
+                            "F1" to MacKeyCodes.F1, "F2" to MacKeyCodes.F2, "F3" to MacKeyCodes.F3,
+                            "F4" to MacKeyCodes.F4, "F5" to MacKeyCodes.F5, "F6" to MacKeyCodes.F6
+                        )
+                        val fRow2 = listOf(
+                            "F7" to MacKeyCodes.F7, "F8" to MacKeyCodes.F8, "F9" to MacKeyCodes.F9,
+                            "F10" to MacKeyCodes.F10, "F11" to MacKeyCodes.F11, "F12" to MacKeyCodes.F12
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            fRow1.forEach { (lbl, code) ->
+                                SimKeyCap(
+                                    label = lbl,
+                                    modifier = Modifier.weight(1f),
+                                    onTrigger = { onSendKeyTap(code, null, false) }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            fRow2.forEach { (lbl, code) ->
+                                SimKeyCap(
+                                    label = lbl,
+                                    modifier = Modifier.weight(1f),
+                                    onTrigger = { onSendKeyTap(code, null, false) }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            SimKeyCap(
+                                label = "⌘[",
+                                subtitle = "后退",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.LEFT_BRACKET, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "⌘]",
+                                subtitle = "前进",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.RIGHT_BRACKET, MacModifiers.COMMAND, false) }
+                            )
+                            SimKeyCap(
+                                label = "⌘⇧Z",
+                                subtitle = "重做",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = {
+                                    onSendKeyTap(MacKeyCodes.Z, MacModifiers.COMMAND or MacModifiers.SHIFT, false)
+                                }
+                            )
+                            SimKeyCap(
+                                label = "⌘Q",
+                                subtitle = "退出应用",
+                                modifier = Modifier.weight(1f),
+                                onTrigger = { onSendKeyTap(MacKeyCodes.Q, MacModifiers.COMMAND, false) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -2080,20 +3059,99 @@ private fun MacKeyboardAndImeDock(
 }
 
 @Composable
-private fun KeyCapChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        color = if (active) WsTextPrimary else WsKeycapBg,
-        shape = RoundedCornerShape(7.dp),
-        border = BorderStroke(0.5.dp, if (active) WsTextPrimary else Color(0xFF32323A))
+private fun SimKeyCap(
+    label: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    active: Boolean = false,
+    emphasized: Boolean = false,
+    repeatable: Boolean = false,
+    height: androidx.compose.ui.unit.Dp = 39.dp,
+    onTrigger: (isRepeat: Boolean) -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val repeatScope = rememberCoroutineScope()
+    val currentOnTrigger by rememberUpdatedState(onTrigger)
+    var isPressed by remember { mutableStateOf(false) }
+
+    val bgColor = when {
+        active -> WsTextPrimary
+        isPressed -> Color(0xFF3A3A44)
+        emphasized -> WsElevatedBg
+        else -> WsKeycapBg
+    }
+    val borderColor = when {
+        active -> WsTextPrimary
+        isPressed -> WsTextMuted
+        emphasized -> WsPopoverBorder
+        else -> Color(0xFF32323A)
+    }
+    val fgColor = if (active) WsBg else WsTextPrimary
+    val subColor = if (active) WsBg.copy(alpha = 0.72f) else WsTextMuted
+
+    Box(
+        modifier = modifier
+            .height(height)
+            .clip(RoundedCornerShape(7.dp))
+            .background(bgColor)
+            .border(0.5.dp, borderColor, RoundedCornerShape(7.dp))
+            .pointerInput(repeatable) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    currentOnTrigger(false)
+                    val repeatJob = if (repeatable) {
+                        repeatScope.launch {
+                            delay(360L)
+                            while (true) {
+                                currentOnTrigger(true)
+                                delay(62L)
+                            }
+                        }
+                    } else {
+                        null
+                    }
+                    try {
+                        waitForUpOrCancellation()
+                    } finally {
+                        repeatJob?.cancel()
+                        isPressed = false
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (active) WsBg else WsTextPrimary,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        )
+        if (subtitle != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 11.5.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = fgColor,
+                    maxLines = 1
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    lineHeight = 10.sp,
+                    color = subColor,
+                    maxLines = 1
+                )
+            }
+        } else {
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = fgColor,
+                maxLines = 1
+            )
+        }
     }
 }
 
@@ -2110,7 +3168,8 @@ private fun GestureGuideDialog(onDismiss: () -> Unit) {
                     "长按或双击按住拖动" to "左键拖拽框选与移动窗口",
                     "双指轻点 / 一指按住+另一指轻点" to "鼠标右键菜单",
                     "双指捏合 / 双指滑动" to "1x–5x 画面缩放 / 平滑滚轮",
-                    "三指轻点 / 三指上下滑" to "呼出键盘栏 / 展开或收起顶部栏"
+                    "三指轻点 / 顶部键盘键" to "直接唤起手机输入法直输文字（支持退格删除）与多行模拟按键",
+                    "三指上下滑" to "展开或收起顶部窗口标签栏 / 切换全屏"
                 )
                 items.forEach { (gesture, desc) ->
                     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {

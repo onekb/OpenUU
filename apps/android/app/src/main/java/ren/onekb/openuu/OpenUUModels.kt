@@ -21,24 +21,132 @@ object MacModifiers {
 object MacKeyCodes {
     const val A = 0
     const val S = 1
+    const val D = 2
     const val F = 3
+    const val H = 4
+    const val G = 5
     const val Z = 6
     const val X = 7
     const val C = 8
     const val V = 9
+    const val B = 11
     const val Q = 12
     const val W = 13
+    const val E = 14
     const val R = 15
+    const val Y = 16
     const val T = 17
+    const val NUM_1 = 18
+    const val NUM_2 = 19
+    const val NUM_3 = 20
+    const val NUM_4 = 21
+    const val NUM_6 = 22
+    const val NUM_5 = 23
+    const val EQUAL = 24
+    const val NUM_9 = 25
+    const val NUM_7 = 26
+    const val MINUS = 27
+    const val NUM_8 = 28
+    const val NUM_0 = 29
+    const val RIGHT_BRACKET = 30
+    const val O = 31
+    const val U = 32
+    const val LEFT_BRACKET = 33
+    const val I = 34
+    const val P = 35
     const val RETURN = 36
+    const val L = 37
+    const val J = 38
+    const val QUOTE = 39
+    const val K = 40
+    const val SEMICOLON = 41
+    const val BACKSLASH = 42
+    const val COMMA = 43
+    const val SLASH = 44
+    const val N = 45
+    const val M = 46
+    const val PERIOD = 47
     const val TAB = 48
     const val SPACE = 49
+    const val GRAVE = 50
     const val DELETE = 51
     const val ESCAPE = 53
+    const val F5 = 96
+    const val F6 = 97
+    const val F7 = 98
+    const val F3 = 99
+    const val F8 = 100
+    const val F9 = 101
+    const val F11 = 103
+    const val F10 = 109
+    const val F12 = 111
+    const val HOME = 115
+    const val PAGE_UP = 116
+    const val FORWARD_DELETE = 117
+    const val F4 = 118
+    const val END = 119
+    const val F2 = 120
+    const val PAGE_DOWN = 121
+    const val F1 = 122
     const val LEFT = 123
     const val RIGHT = 124
     const val DOWN = 125
     const val UP = 126
+
+    /** Maps a single ASCII character to `(keyCode, extraShiftModifier)` when sticky modifiers are active. */
+    fun asciiToKeyAndShift(ch: Char): Pair<Int, Int>? {
+        return when (ch) {
+            'a' -> A to 0; 'A' -> A to MacModifiers.SHIFT
+            'b' -> B to 0; 'B' -> B to MacModifiers.SHIFT
+            'c' -> C to 0; 'C' -> C to MacModifiers.SHIFT
+            'd' -> D to 0; 'D' -> D to MacModifiers.SHIFT
+            'e' -> E to 0; 'E' -> E to MacModifiers.SHIFT
+            'f' -> F to 0; 'F' -> F to MacModifiers.SHIFT
+            'g' -> G to 0; 'G' -> G to MacModifiers.SHIFT
+            'h' -> H to 0; 'H' -> H to MacModifiers.SHIFT
+            'i' -> I to 0; 'I' -> I to MacModifiers.SHIFT
+            'j' -> J to 0; 'J' -> J to MacModifiers.SHIFT
+            'k' -> K to 0; 'K' -> K to MacModifiers.SHIFT
+            'l' -> L to 0; 'L' -> L to MacModifiers.SHIFT
+            'm' -> M to 0; 'M' -> M to MacModifiers.SHIFT
+            'n' -> N to 0; 'N' -> N to MacModifiers.SHIFT
+            'o' -> O to 0; 'O' -> O to MacModifiers.SHIFT
+            'p' -> P to 0; 'P' -> P to MacModifiers.SHIFT
+            'q' -> Q to 0; 'Q' -> Q to MacModifiers.SHIFT
+            'r' -> R to 0; 'R' -> R to MacModifiers.SHIFT
+            's' -> S to 0; 'S' -> S to MacModifiers.SHIFT
+            't' -> T to 0; 'T' -> T to MacModifiers.SHIFT
+            'u' -> U to 0; 'U' -> U to MacModifiers.SHIFT
+            'v' -> V to 0; 'V' -> V to MacModifiers.SHIFT
+            'w' -> W to 0; 'W' -> W to MacModifiers.SHIFT
+            'x' -> X to 0; 'X' -> X to MacModifiers.SHIFT
+            'y' -> Y to 0; 'Y' -> Y to MacModifiers.SHIFT
+            'z' -> Z to 0; 'Z' -> Z to MacModifiers.SHIFT
+            '0' -> NUM_0 to 0; ')' -> NUM_0 to MacModifiers.SHIFT
+            '1' -> NUM_1 to 0; '!' -> NUM_1 to MacModifiers.SHIFT
+            '2' -> NUM_2 to 0; '@' -> NUM_2 to MacModifiers.SHIFT
+            '3' -> NUM_3 to 0; '#' -> NUM_3 to MacModifiers.SHIFT
+            '4' -> NUM_4 to 0; '$' -> NUM_4 to MacModifiers.SHIFT
+            '5' -> NUM_5 to 0; '%' -> NUM_5 to MacModifiers.SHIFT
+            '6' -> NUM_6 to 0; '^' -> NUM_6 to MacModifiers.SHIFT
+            '7' -> NUM_7 to 0; '&' -> NUM_7 to MacModifiers.SHIFT
+            '8' -> NUM_8 to 0; '*' -> NUM_8 to MacModifiers.SHIFT
+            '9' -> NUM_9 to 0; '(' -> NUM_9 to MacModifiers.SHIFT
+            '-' -> MINUS to 0; '_' -> MINUS to MacModifiers.SHIFT
+            '=' -> EQUAL to 0; '+' -> EQUAL to MacModifiers.SHIFT
+            '[' -> LEFT_BRACKET to 0; '{' -> LEFT_BRACKET to MacModifiers.SHIFT
+            ']' -> RIGHT_BRACKET to 0; '}' -> RIGHT_BRACKET to MacModifiers.SHIFT
+            '\\' -> BACKSLASH to 0; '|' -> BACKSLASH to MacModifiers.SHIFT
+            ';' -> SEMICOLON to 0; ':' -> SEMICOLON to MacModifiers.SHIFT
+            '\'' -> QUOTE to 0; '"' -> QUOTE to MacModifiers.SHIFT
+            ',' -> COMMA to 0; '<' -> COMMA to MacModifiers.SHIFT
+            '.' -> PERIOD to 0; '>' -> PERIOD to MacModifiers.SHIFT
+            '/' -> SLASH to 0; '?' -> SLASH to MacModifiers.SHIFT
+            '`' -> GRAVE to 0; '~' -> GRAVE to MacModifiers.SHIFT
+            ' ' -> SPACE to 0
+            else -> null
+        }
+    }
 }
 
 enum class TouchMode(val label: String) {

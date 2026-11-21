@@ -1,5 +1,8 @@
 package ren.onekb.openuu
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -67,6 +70,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +81,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -161,7 +166,7 @@ fun MainScreen(
                     onClick = {
                         viewModel.dismissNotificationBanner()
                         if (connectionPhase.isConnected) {
-                            viewModel.selectTab(MainTab.REMOTE)
+                            viewModel.enterRemoteWorkspace()
                         }
                     },
                     onDismiss = { viewModel.dismissNotificationBanner() }
@@ -229,6 +234,7 @@ private fun RemoteNotificationCard(
 
 @Composable
 private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
+    val context = LocalContext.current
     val connectionPhase by viewModel.connectionPhase.collectAsState()
     val linkBadge by viewModel.linkBadge.collectAsState()
     val discoveredPeers by viewModel.discoveredPeers.collectAsState()
@@ -241,9 +247,28 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
     var showEditDialog by remember { mutableStateOf(false) }
     var pinPromptHost by remember { mutableStateOf<HostRowItem?>(null) }
     var copiedLocalCode by remember { mutableStateOf(false) }
+    var lastRootBackPressMs by remember { mutableLongStateOf(0L) }
 
     var targetField by remember { mutableStateOf(TextFieldValue("")) }
     var manualPin by remember { mutableStateOf("") }
+
+    BackHandler(enabled = true) {
+        when {
+            pinPromptHost != null -> pinPromptHost = null
+            showEditDialog -> showEditDialog = false
+            showSettingsSheet -> showSettingsSheet = false
+            connectionPhase is ConnectionPhase.Connecting -> viewModel.disconnect()
+            else -> {
+                val now = System.currentTimeMillis()
+                if (now - lastRootBackPressMs <= 2000L) {
+                    (context as? Activity)?.moveTaskToBack(true)
+                } else {
+                    lastRootBackPressMs = now
+                    Toast.makeText(context, "再按一次返回退到后台", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.probeDeviceBookOnline()
@@ -356,7 +381,7 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
                 SessionStatusBanner(
                     phase = connectionPhase,
                     linkBadge = linkBadge,
-                    onEnterRemote = { viewModel.selectTab(MainTab.REMOTE) },
+                    onEnterRemote = { viewModel.enterRemoteWorkspace() },
                     onDisconnect = { viewModel.disconnect() },
                     onDismissError = { viewModel.clearConnectionError() }
                 )

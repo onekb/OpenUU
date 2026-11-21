@@ -27,6 +27,7 @@ struct RuntimeEntry {
     jobject listener_global = nullptr;
     jmethodID mid_on_control = nullptr;
     jmethodID mid_on_video = nullptr;
+    jmethodID mid_on_audio = nullptr;
     jmethodID mid_on_status = nullptr;
     jmethodID mid_on_probe_result = nullptr;
 };
@@ -169,6 +170,51 @@ void cb_on_video(
     env->DeleteLocalRef(listener_local);
 }
 
+void cb_on_audio(
+    void *user_ctx,
+    uint8_t codec,
+    uint8_t flags,
+    uint8_t channels,
+    uint32_t sample_rate,
+    uint64_t timestamp_us,
+    const uint8_t *data,
+    size_t data_len
+) {
+    if (!data || data_len == 0) return;
+    const uint64_t id = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(user_ctx));
+    auto entry = lookup_entry(id);
+    if (!entry || !entry->listener_global || !entry->mid_on_audio) return;
+
+    JNIEnv *env = get_jni_env();
+    if (!env) return;
+
+    jobject listener_local = env->NewLocalRef(entry->listener_global);
+    if (!listener_local) return;
+
+    jbyteArray jbytes = env->NewByteArray(static_cast<jsize>(data_len));
+    if (jbytes) {
+        env->SetByteArrayRegion(
+            jbytes,
+            0,
+            static_cast<jsize>(data_len),
+            reinterpret_cast<const jbyte *>(data)
+        );
+        env->CallVoidMethod(
+            listener_local,
+            entry->mid_on_audio,
+            static_cast<jint>(codec),
+            static_cast<jint>(flags),
+            static_cast<jint>(channels),
+            static_cast<jint>(sample_rate),
+            static_cast<jlong>(timestamp_us),
+            jbytes
+        );
+        clear_if_exception(env);
+        env->DeleteLocalRef(jbytes);
+    }
+    env->DeleteLocalRef(listener_local);
+}
+
 void cb_on_status(void *user_ctx, const char *status) {
     const uint64_t id = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(user_ctx));
     auto entry = lookup_entry(id);
@@ -284,6 +330,7 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeCreateRuntime(
         if (cls) {
             entry->mid_on_control = env->GetMethodID(cls, "onControl", "(Ljava/lang/String;)V");
             entry->mid_on_video = env->GetMethodID(cls, "onVideo", "(IIIJII[B)V");
+            entry->mid_on_audio = env->GetMethodID(cls, "onAudio", "(IIIIJ[B)V");
             entry->mid_on_status = env->GetMethodID(cls, "onStatus", "(Ljava/lang/String;)V");
             entry->mid_on_probe_result = env->GetMethodID(cls, "onProbeResult", "(Ljava/lang/String;)V");
             env->DeleteLocalRef(cls);
@@ -295,6 +342,9 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeCreateRuntime(
         std::lock_guard<std::mutex> lock(g_registry_mu);
         g_registry[entry->id] = entry;
     }
+
+    void *ctx = reinterpret_cast<void *>(static_cast<uintptr_t>(entry->id));
+    openuu_set_audio_callback(rt, cb_on_audio, ctx);
 
     return static_cast<jlong>(entry->id);
 }
@@ -317,6 +367,7 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeDestroyRuntime(
     }
     if (!entry) return;
     if (entry->rt) {
+        openuu_set_audio_callback(entry->rt, nullptr, nullptr);
         openuu_disconnect(entry->rt);
         openuu_runtime_destroy(entry->rt);
         entry->rt = nullptr;
@@ -609,6 +660,19 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeRequestKeyframe(
     auto entry = lookup_entry(static_cast<uint64_t>(handle));
     if (!entry || !entry->rt) return -1;
     return openuu_request_keyframe(entry->rt, static_cast<uint32_t>(window_id));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendAudioControl(
+    JNIEnv * /*env*/,
+    jclass /*clazz*/,
+    jlong handle,
+    jboolean enabled,
+    jboolean mute_host
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) return -1;
+    return openuu_send_audio_control(entry->rt, enabled == JNI_TRUE, mute_host == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jint JNICALL
