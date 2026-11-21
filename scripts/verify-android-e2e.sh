@@ -7,7 +7,8 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$HOME/.cargo/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:/opt/homebrew/bin:$PATH"
 
-AVD_NAME="${AVD_NAME:-openuu_test_api35}"
+DEFAULT_AVD="$("$ANDROID_HOME/emulator/emulator" -list-avds 2>/dev/null | head -n 1)"
+AVD_NAME="${AVD_NAME:-${DEFAULT_AVD:-chameye_test_api35}}"
 APK_PATH="${APK_PATH:-$ROOT_DIR/build/OpenUU-Android.apk}"
 MOCK_BIN="${MOCK_BIN:-$ROOT_DIR/target/release/openuu-cli}"
 MOCK_PORT="${MOCK_PORT:-39481}"
@@ -30,8 +31,6 @@ cleanup() {
   echo "==> Cleaning up emulator and mock-host..."
   if [ -n "$EMU_SERIAL" ]; then
     adb -s "$EMU_SERIAL" emu kill >/dev/null 2>&1 || true
-  else
-    adb emu kill >/dev/null 2>&1 || true
   fi
   if [ -n "$EMU_PID" ]; then
     for _ in $(seq 1 10); do
@@ -49,7 +48,6 @@ cleanup() {
     kill -9 "$MOCK_PID" 2>/dev/null || true
   fi
   pkill -f "openuu-cli mock-host" >/dev/null 2>&1 || true
-  adb kill-server >/dev/null 2>&1 || true
   exit "$rc"
 }
 trap cleanup EXIT INT TERM
@@ -245,8 +243,8 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-# Capture streaming screenshot regardless of whether assertions passed (helpful for debugging)
-sleep 1
+# Give welcome banner time to auto-dismiss & popover SurfaceView (window_id=201) to composite frame
+sleep 3.8
 adb -s "$EMU_SERIAL" exec-out screencap -p > "$ARTIFACT_DIR/android_02_remote_stream.png"
 echo "    Saved screenshot: $ARTIFACT_DIR/android_02_remote_stream.png ($(wc -c < "$ARTIFACT_DIR/android_02_remote_stream.png") bytes)"
 
@@ -269,6 +267,7 @@ check_cond "Client connected (connected to host)" grep -q "connected to host" "$
 check_cond "App list received (list_apps_resp)" grep -q "list_apps_resp" "$LOGCAT_DUMP"
 check_cond "start_session received by mock-host" grep -q '"type":"start_session"' "$MOCK_LOG"
 check_cond "window_topology received (101, 102)" grep -Eq "window_topology.*101.*102" "$LOGCAT_DUMP"
+check_cond "right-click popover topology received (201)" grep -Eq "window_topology.*201" "$LOGCAT_DUMP"
 check_cond "MediaCodec decoded_frames >= 5" grep -Eq "decoded_frames=([5-9]|[1-9][0-9]+)" "$LOGCAT_DUMP"
 check_cond "E2E_ALL_SENT logged" grep -q "E2E_ALL_SENT" "$LOGCAT_DUMP"
 check_cond "mock-host MOCK_EVENT mouse" grep -q 'MOCK_EVENT.*"type":"mouse"' "$MOCK_LOG"

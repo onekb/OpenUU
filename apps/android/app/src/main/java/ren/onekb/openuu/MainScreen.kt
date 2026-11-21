@@ -1,8 +1,5 @@
 package ren.onekb.openuu
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,70 +15,54 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.DesktopMac
-import androidx.compose.material.icons.rounded.Devices
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.LaptopMac
-import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.StarBorder
-import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.VerifiedUser
-import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -92,22 +73,49 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import java.util.UUID
+
+private val BgObsidian = Color(0xFF09090B)
+private val SurfaceCard = Color(0xFF121215)
+private val SurfaceElevated = Color(0xFF16161A)
+private val SurfaceInput = Color(0xFF1A1A20)
+private val BorderHairline = Color(0xFF27272E)
+private val DividerHairline = Color(0xFF232329)
+private val TextPrimary = Color(0xFFF4F4F6)
+private val TextSecondary = Color(0xFF8E8E98)
+private val TextMuted = Color(0xFF63636E)
+private val StatusOnline = Color(0xFF30D158)
+private val StatusOffline = Color(0xFF52525B)
+private val StatusDanger = Color(0xFFFF453A)
+
+private data class HostRowItem(
+    val key: String,
+    val name: String,
+    val subtitle: String,
+    val isOnline: Boolean,
+    val isTrusted: Boolean,
+    val isFavorite: Boolean,
+    val savedPin: String,
+    val bookEntry: DeviceBookEntry?,
+    val trustedPeer: TrustedPeer?,
+    val lanPeer: DiscoveredPeer?,
+    val connectAction: (String) -> Unit
+)
 
 @Composable
 fun MainScreen(
@@ -117,47 +125,27 @@ fun MainScreen(
     onPickFile: () -> Unit
 ) {
     val selectedTab by viewModel.selectedTab.collectAsState()
-    val notificationBanner by viewModel.notificationBanner.collectAsState()
     val connectionPhase by viewModel.connectionPhase.collectAsState()
+    val notificationBanner by viewModel.notificationBanner.collectAsState()
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            containerColor = if (isImmersiveFullscreen) Color.Black else MaterialTheme.colorScheme.background,
-            contentWindowInsets = if (isImmersiveFullscreen) {
-                WindowInsets(0, 0, 0, 0)
-            } else {
-                ScaffoldDefaults.contentWindowInsets
-            },
-            bottomBar = {
-                if (!isImmersiveFullscreen) {
-                    OpenUUBottomNav(
-                        selectedTab = selectedTab,
-                        isConnected = connectionPhase.isConnected,
-                        onSelectTab = { viewModel.selectTab(it) }
-                    )
-                }
-            }
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(if (isImmersiveFullscreen) PaddingValues(0.dp) else innerPadding)
-            ) {
-                when (selectedTab) {
-                    MainTab.CONNECT -> ConnectTabView(viewModel = viewModel)
-                    MainTab.DEVICES -> DeviceBookTabView(viewModel = viewModel)
-                    MainTab.REMOTE -> RemoteWorkspaceView(
-                        viewModel = viewModel,
-                        isImmersiveFullscreen = isImmersiveFullscreen,
-                        isLandscape = isLandscape,
-                        onPickFile = onPickFile
-                    )
-                    MainTab.SETTINGS -> SettingsAndLogsTabView(viewModel = viewModel)
-                }
-            }
+    val showRemote = selectedTab == MainTab.REMOTE && connectionPhase.isConnected
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(if (isImmersiveFullscreen) Color.Black else BgObsidian)
+    ) {
+        if (showRemote) {
+            RemoteWorkspaceView(
+                viewModel = viewModel,
+                isImmersiveFullscreen = isImmersiveFullscreen,
+                isLandscape = isLandscape,
+                onPickFile = onPickFile
+            )
+        } else {
+            HostsHomeScreen(viewModel = viewModel)
         }
 
-        // Top Remote Notification Banner Overlay
         AnimatedVisibility(
             visible = notificationBanner != null,
             enter = slideInVertically { -it } + fadeIn(),
@@ -168,11 +156,13 @@ fun MainScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             notificationBanner?.let { banner ->
-                RemoteNotificationOverlayCard(
+                RemoteNotificationCard(
                     banner = banner,
                     onClick = {
                         viewModel.dismissNotificationBanner()
-                        viewModel.selectTab(MainTab.REMOTE)
+                        if (connectionPhase.isConnected) {
+                            viewModel.selectTab(MainTab.REMOTE)
+                        }
                     },
                     onDismiss = { viewModel.dismissNotificationBanner() }
                 )
@@ -182,125 +172,54 @@ fun MainScreen(
 }
 
 @Composable
-private fun OpenUUBottomNav(
-    selectedTab: MainTab,
-    isConnected: Boolean,
-    onSelectTab: (MainTab) -> Unit
-) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp
-    ) {
-        val items = listOf(
-            Triple(MainTab.CONNECT, Icons.Rounded.Link, MainTab.CONNECT.label),
-            Triple(MainTab.DEVICES, Icons.Rounded.Devices, MainTab.DEVICES.label),
-            Triple(MainTab.REMOTE, Icons.Rounded.DesktopMac, MainTab.REMOTE.label),
-            Triple(MainTab.SETTINGS, Icons.Rounded.Settings, MainTab.SETTINGS.label)
-        )
-        items.forEach { (tab, icon, label) ->
-            val selected = selectedTab == tab
-            NavigationBarItem(
-                selected = selected,
-                onClick = { onSelectTab(tab) },
-                icon = {
-                    Box {
-                        Icon(imageVector = icon, contentDescription = label)
-                        if (tab == MainTab.REMOTE && isConnected) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .align(Alignment.TopEnd)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                        }
-                    }
-                },
-                label = {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
-                    )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-        }
-    }
-}
-
-@Composable
-private fun RemoteNotificationOverlayCard(
+private fun RemoteNotificationCard(
     banner: RemoteNotificationBanner,
     onClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    Card(
+    Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = SurfaceElevated,
+        border = BorderStroke(0.5.dp, BorderHairline),
+        shadowElevation = 6.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Notifications,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Icon(
+                imageVector = Icons.Rounded.Notifications,
+                contentDescription = null,
+                tint = TextPrimary,
+                modifier = Modifier.size(18.dp)
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = banner.title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (banner.subtitle.isNotBlank()) {
+                val detail = listOf(banner.subtitle, banner.body).filter { it.isNotBlank() }.joinToString(" · ")
+                if (detail.isNotEmpty()) {
                     Text(
-                        text = banner.subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (banner.body.isNotBlank()) {
-                    Text(
-                        text = banner.body,
+                        text = detail,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = TextSecondary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
-            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(26.dp)) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
                     contentDescription = "关闭通知",
+                    tint = TextSecondary,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -308,29 +227,55 @@ private fun RemoteNotificationOverlayCard(
     }
 }
 
-// =========================================================================
-// TAB 1: CONNECT (Smart Connect, LAN mDNS Discovery, Trusted Peers)
-// =========================================================================
-
 @Composable
-private fun ConnectTabView(viewModel: OpenUUViewModel) {
+private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
     val connectionPhase by viewModel.connectionPhase.collectAsState()
     val linkBadge by viewModel.linkBadge.collectAsState()
     val discoveredPeers by viewModel.discoveredPeers.collectAsState()
     val identity by viewModel.identity.collectAsState()
+    val deviceBook by viewModel.deviceBook.collectAsState()
+    val probeResults by viewModel.probeResults.collectAsState()
+
+    var showSettingsSheet by remember { mutableStateOf(false) }
+    var editingEntry by remember { mutableStateOf<DeviceBookEntry?>(null) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var pinPromptHost by remember { mutableStateOf<HostRowItem?>(null) }
+    var copiedLocalCode by remember { mutableStateOf(false) }
 
     var targetField by remember { mutableStateOf(TextFieldValue("")) }
-    val targetInput = targetField.text
-    var pinInput by remember { mutableStateOf("") }
+    var manualPin by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        viewModel.probeDeviceBookOnline()
+    }
+
+    LaunchedEffect(copiedLocalCode) {
+        if (copiedLocalCode) {
+            delay(1400L)
+            copiedLocalCode = false
+        }
+    }
+
+    val hostRows = remember(discoveredPeers, deviceBook, identity.trustedPeers, probeResults) {
+        buildUnifiedHostRows(
+            lanPeers = discoveredPeers,
+            deviceBook = deviceBook,
+            trustedPeers = identity.trustedPeers,
+            probeResults = probeResults,
+            viewModel = viewModel
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Brand Header
+        // 1. Industrial Top Bar
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -339,747 +284,818 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.openuu_brand_icon),
                         contentDescription = "OpenUU",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(7.dp))
                     )
-                    Column {
-                        Text(
-                            text = "OpenUU",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "工作伴侣，永久免费。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "OpenUU",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = (-0.4).sp,
+                        color = TextPrimary
+                    )
                 }
-                if (identity.formattedCode.isNotBlank()) {
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val codeText = identity.formattedCode.ifBlank { identity.deviceCode }
+                    if (codeText.isNotBlank()) {
+                        Surface(
+                            onClick = {
+                                viewModel.copyToLocalClipboard("本机设备码", codeText)
+                                copiedLocalCode = true
+                            },
+                            color = SurfaceElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(0.5.dp, BorderHairline)
+                        ) {
+                            Text(
+                                text = if (copiedLocalCode) "已复制 $codeText" else "本机 $codeText",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.5.sp,
+                                color = if (copiedLocalCode) StatusOnline else TextPrimary,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        onClick = { showSettingsSheet = true },
+                        color = SurfaceElevated,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.5.dp, BorderHairline)
                     ) {
-                        Text(
-                            text = "本机 ${identity.formattedCode}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
+                        Box(
+                            modifier = Modifier.size(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = "设置与日志",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Connection Status Banner
+        // 2. Active Session / Connecting / Error Banner
         if (connectionPhase !is ConnectionPhase.Idle) {
             item {
-                ConnectionStatusBanner(
+                SessionStatusBanner(
                     phase = connectionPhase,
                     linkBadge = linkBadge,
                     onEnterRemote = { viewModel.selectTab(MainTab.REMOTE) },
-                    onDisconnect = { viewModel.disconnect() }
+                    onDisconnect = { viewModel.disconnect() },
+                    onDismissError = { viewModel.clearConnectionError() }
                 )
             }
         }
 
-        // Smart Connect Card
+        // 3. Available Hosts Unified Grouped List
         item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    Text(
+                        text = "可用主机",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(start = 2.dp)
+                    )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            text = "智能连接",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        FilledTonalButton(
-                            onClick = {
-                                val pasted = DeviceBookRepository.formatTargetInput(viewModel.readLocalClipboardText().trim())
-                                if (pasted.isNotEmpty()) {
-                                    targetField = TextFieldValue(pasted, selection = TextRange(pasted.length))
-                                }
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(10.dp)
+                        IconButton(
+                            onClick = { viewModel.probeDeviceBookOnline() },
+                            modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.ContentPaste,
-                                contentDescription = null,
-                                modifier = Modifier.size(15.dp)
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "探测在线状态",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("一键粘贴", style = MaterialTheme.typography.labelMedium)
+                        }
+                        Surface(
+                            onClick = {
+                                editingEntry = null
+                                showEditDialog = true
+                            },
+                            color = SurfaceElevated,
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(0.5.dp, BorderHairline)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "添加",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = TextPrimary
+                                )
+                            }
                         }
                     }
+                }
 
-                    OutlinedTextField(
-                        value = targetField,
-                        onValueChange = { targetField = formatTargetTextFieldValue(it, targetField.text) },
-                        label = { Text("9 位设备码 / openuu:// 连接串 / IP:Port") },
-                        placeholder = { Text("例如 839 201 475 或 192.168.1.10") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            if (targetInput.isNotEmpty()) {
-                                IconButton(onClick = { targetField = TextFieldValue("") }) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "清除", modifier = Modifier.size(18.dp))
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (hostRows.isEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(15.dp),
+                                strokeWidth = 1.6.dp,
+                                color = TextSecondary
+                            )
+                            Text(
+                                text = "正在扫描局域网 Mac，或点击右上角添加常用主机",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    } else {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            hostRows.forEachIndexed { idx, row ->
+                                HostListRow(
+                                    item = row,
+                                    onTap = {
+                                        if (row.isTrusted || row.savedPin.isNotBlank()) {
+                                            row.connectAction(if (row.isTrusted) "" else row.savedPin)
+                                        } else {
+                                            pinPromptHost = row
+                                        }
+                                    },
+                                    onToggleFavorite = row.bookEntry?.let { entry ->
+                                        { viewModel.toggleDeviceFavorite(entry.id) }
+                                    },
+                                    onEdit = row.bookEntry?.let { entry ->
+                                        {
+                                            editingEntry = entry
+                                            showEditDialog = true
+                                        }
+                                    },
+                                    onSaveLanPeer = if (row.bookEntry == null && row.lanPeer != null) {
+                                        {
+                                            val lp = row.lanPeer
+                                            val tgt = lp.deviceCode.takeIf { it.length == 9 } ?: lp.primaryAddress
+                                            viewModel.upsertDeviceBookEntry(
+                                                DeviceBookEntry(
+                                                    id = UUID.randomUUID().toString(),
+                                                    alias = lp.deviceName,
+                                                    target = tgt,
+                                                    port = lp.port,
+                                                    remoteDeviceId = lp.deviceId,
+                                                    deviceCode = lp.deviceCode
+                                                )
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    onRevokeTrust = row.trustedPeer?.let { tp ->
+                                        { viewModel.removeTrustedPeer(tp.deviceId) }
+                                    },
+                                    onDelete = row.bookEntry?.let { entry ->
+                                        { viewModel.deleteDeviceBookEntry(entry.id) }
+                                    }
+                                )
+                                if (idx < hostRows.lastIndex) {
+                                    HorizontalDivider(
+                                        thickness = 0.5.dp,
+                                        color = DividerHairline,
+                                        modifier = Modifier.padding(start = 32.dp)
+                                    )
                                 }
                             }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                        )
-                    )
-
-                    OutlinedTextField(
-                        value = pinInput,
-                        onValueChange = { pinInput = it },
-                        label = { Text("配对码 / 访问密码（已信任设备可留空）") },
-                        placeholder = { Text("6 位数字或字母配对码") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                viewModel.connectSmart(
-                                    target = targetInput,
-                                    defaultPort = OpenUUConstants.DEFAULT_PORT,
-                                    pin = pinInput
-                                )
-                            },
-                            enabled = targetInput.isNotBlank() && !connectionPhase.isConnecting,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("立即连接")
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(targetInput)
-                                if (cleanTarget.isNotBlank()) {
-                                    viewModel.upsertDeviceBookEntry(
-                                        DeviceBookEntry(
-                                            id = UUID.randomUUID().toString(),
-                                            alias = cleanTarget.take(24),
-                                            target = cleanTarget,
-                                            port = OpenUUConstants.DEFAULT_PORT,
-                                            savedPin = pinInput.trim()
-                                        )
-                                    )
-                                }
-                            },
-                            enabled = DeviceBookRepository.sanitizeTargetForUse(targetInput).isNotBlank(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("收藏")
                         }
                     }
                 }
             }
         }
 
-        // LAN mDNS Discovered Macs Section
+        // 4. Manual Connect Card
         item {
-            SectionTitleRow(
-                icon = Icons.Rounded.Wifi,
-                title = "局域网发现 (mDNS)",
-                trailingText = "${discoveredPeers.size} 台"
-            )
-        }
-
-        if (discoveredPeers.isEmpty()) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "正在扫描同一 Wi-Fi 下的 Mac 主机...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        } else {
-            items(discoveredPeers, key = { it.deviceId.ifBlank { "${it.primaryAddress}:${it.port}" } }) { peer ->
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.LaptopMac,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = peer.deviceName,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = buildString {
-                                    append("${peer.primaryAddress}:${peer.port}")
-                                    if (peer.deviceCode.length == 9) {
-                                        append(" · ${peer.deviceCode}")
-                                    }
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        FilledTonalButton(
-                            onClick = {
-                                if (peer.primaryAddress.isNotBlank()) {
-                                    viewModel.connectDirect(peer.primaryAddress, peer.port, pinInput)
-                                } else {
-                                    viewModel.connectSmart(
-                                        peer.deviceCode.ifBlank { peer.deviceId },
-                                        peer.port,
-                                        pinInput
-                                    )
-                                }
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text("连接", style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Trusted Peers Section
-        item {
-            SectionTitleRow(
-                icon = Icons.Rounded.VerifiedUser,
-                title = "已信任主机（免密重连）",
-                trailingText = "${identity.trustedPeers.size} 台"
-            )
-        }
-
-        if (identity.trustedPeers.isEmpty()) {
-            item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "首次输入配对码连接成功后，主机将自动加入信任列表，后续可一键免密重连。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp)
+                    text = "手动连接",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(start = 2.dp)
                 )
-            }
-        } else {
-            items(identity.trustedPeers, key = { it.deviceId.ifBlank { it.endpointId } }) { peer ->
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.secondaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.VerifiedUser,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = peer.deviceName,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = peer.deviceCode.takeIf { it.length == 9 }
-                                    ?.let { "${it.substring(0, 3)} ${it.substring(3, 6)} ${it.substring(6, 9)}" }
-                                    ?: peer.deviceId.take(18),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                        Button(
-                            onClick = {
-                                viewModel.connectSmart(
-                                    target = peer.connectTarget,
-                                    defaultPort = OpenUUConstants.DEFAULT_PORT,
-                                    pin = ""
+                        OutlinedTextField(
+                            value = targetField,
+                            onValueChange = { targetField = formatTargetTextFieldValue(it, targetField.text) },
+                            placeholder = {
+                                Text(
+                                    text = "9 位设备码 / IP:Port / openuu://",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted
                                 )
                             },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            singleLine = true,
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(end = 6.dp)
+                                ) {
+                                    if (targetField.text.isNotEmpty()) {
+                                        IconButton(
+                                            onClick = { targetField = TextFieldValue("") },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Close,
+                                                contentDescription = "清除",
+                                                tint = TextSecondary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            val pasted = DeviceBookRepository.formatTargetInput(
+                                                viewModel.readLocalClipboardText().trim()
+                                            )
+                                            if (pasted.isNotEmpty()) {
+                                                targetField = TextFieldValue(pasted, TextRange(pasted.length))
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "粘贴",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                            },
+                            colors = industrialTextFieldColors()
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("重连", style = MaterialTheme.typography.labelMedium)
-                        }
-                        IconButton(
-                            onClick = { viewModel.removeTrustedPeer(peer.deviceId) },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = "撤销信任",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
+                            OutlinedTextField(
+                                value = manualPin,
+                                onValueChange = { manualPin = it },
+                                placeholder = {
+                                    Text(
+                                        text = "配对码（已信任可留空）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(9.dp),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(
+                                    onGo = {
+                                        if (targetField.text.isNotBlank() && !connectionPhase.isConnecting) {
+                                            viewModel.connectSmart(targetField.text, OpenUUConstants.DEFAULT_PORT, manualPin)
+                                        }
+                                    }
+                                ),
+                                modifier = Modifier.weight(1f),
+                                colors = industrialTextFieldColors()
                             )
+
+                            Button(
+                                onClick = {
+                                    viewModel.connectSmart(
+                                        target = targetField.text,
+                                        defaultPort = OpenUUConstants.DEFAULT_PORT,
+                                        pin = manualPin
+                                    )
+                                },
+                                enabled = targetField.text.isNotBlank() && !connectionPhase.isConnecting,
+                                shape = RoundedCornerShape(9.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = TextPrimary,
+                                    contentColor = BgObsidian,
+                                    disabledContainerColor = Color(0xFF27272F),
+                                    disabledContentColor = TextMuted
+                                ),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp)
+                            ) {
+                                Text("连接", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    pinPromptHost?.let { host ->
+        PinPromptDialog(
+            hostName = host.name,
+            onDismiss = { pinPromptHost = null },
+            onConfirm = { enteredPin ->
+                pinPromptHost = null
+                host.connectAction(enteredPin)
+            }
+        )
+    }
+
+    if (showEditDialog) {
+        DeviceBookEditDialog(
+            initial = editingEntry,
+            onDismiss = { showEditDialog = false },
+            onSave = { updated ->
+                viewModel.upsertDeviceBookEntry(updated)
+                showEditDialog = false
+            }
+        )
+    }
+
+    if (showSettingsSheet) {
+        SettingsAndLogsSheet(
+            viewModel = viewModel,
+            onDismiss = { showSettingsSheet = false }
+        )
     }
 }
 
 @Composable
-private fun ConnectionStatusBanner(
+private fun SessionStatusBanner(
     phase: ConnectionPhase,
     linkBadge: String,
     onEnterRemote: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onDismissError: () -> Unit
 ) {
-    val containerColor = when (phase) {
-        is ConnectionPhase.Connected -> Color(0xFF064E3B)
-        is ConnectionPhase.Connecting -> MaterialTheme.colorScheme.secondaryContainer
-        is ConnectionPhase.Error -> MaterialTheme.colorScheme.errorContainer
-        ConnectionPhase.Idle -> MaterialTheme.colorScheme.surfaceContainer
-    }
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor)
+    val isError = phase is ConnectionPhase.Error
+    Surface(
+        color = if (isError) Color(0xFF1F1214) else SurfaceElevated,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(0.5.dp, if (isError) Color(0xFF4C1D24) else BorderHairline),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             when (phase) {
-                is ConnectionPhase.Connecting -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                    Text(
-                        text = phase.detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = onDisconnect) {
-                        Text("取消", color = MaterialTheme.colorScheme.onSecondaryContainer)
-                    }
-                }
                 is ConnectionPhase.Connected -> {
-                    Icon(
-                        imageVector = Icons.Rounded.Check,
-                        contentDescription = null,
-                        tint = Color(0xFF6EE7B7)
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(StatusOnline)
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "已连接: ${phase.hostName}",
+                            text = "正在远控 ${phase.hostName}",
                             style = MaterialTheme.typography.titleSmall,
-                            color = Color.White
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         if (linkBadge.isNotBlank()) {
                             Text(
                                 text = linkBadge,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFFA7F3D0)
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                maxLines = 1
                             )
                         }
                     }
-                    FilledTonalButton(
+                    Button(
                         onClick = onEnterRemote,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TextPrimary,
+                            contentColor = BgObsidian
+                        ),
+                        contentPadding = PaddingValues(horizontal = 11.dp, vertical = 6.dp)
                     ) {
-                        Text("远控", style = MaterialTheme.typography.labelMedium)
+                        Text("进入画面", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    IconButton(onClick = onDisconnect, modifier = Modifier.size(30.dp)) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "断开",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.5.dp, BorderHairline),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text("断开", fontSize = 12.sp)
                     }
                 }
+
+                is ConnectionPhase.Connecting -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(15.dp),
+                        strokeWidth = 1.8.dp,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = phase.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = onDisconnect,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text("取消", fontSize = 12.sp, color = TextSecondary)
+                    }
+                }
+
                 is ConnectionPhase.Error -> {
                     Icon(
                         imageVector = Icons.Rounded.ErrorOutline,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onErrorContainer
+                        tint = StatusDanger,
+                        modifier = Modifier.size(18.dp)
                     )
                     Text(
                         text = phase.reason,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = Color(0xFFFF8A80),
                         modifier = Modifier.weight(1f)
                     )
+                    IconButton(onClick = onDismissError, modifier = Modifier.size(26.dp)) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "忽略",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
+
                 ConnectionPhase.Idle -> Unit
             }
         }
     }
 }
 
-// =========================================================================
-// TAB 2: DEVICE BOOK (Saved Devices, Online Probe, Add/Edit/Delete)
-// =========================================================================
-
 @Composable
-private fun DeviceBookTabView(viewModel: OpenUUViewModel) {
-    val devices by viewModel.deviceBook.collectAsState()
-    val probeResults by viewModel.probeResults.collectAsState()
+private fun HostListRow(
+    item: HostRowItem,
+    onTap: () -> Unit,
+    onToggleFavorite: (() -> Unit)?,
+    onEdit: (() -> Unit)?,
+    onSaveLanPeer: (() -> Unit)?,
+    onRevokeTrust: (() -> Unit)?,
+    onDelete: (() -> Unit)?
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val hasMenu = onEdit != null || onRevokeTrust != null || onDelete != null || onSaveLanPeer != null
 
-    var editingEntry by remember { mutableStateOf<DeviceBookEntry?>(null) }
-    var showAddDialog by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        viewModel.probeDeviceBookOnline()
-    }
-
-    LazyColumn(
+    Row(
         modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "设备簿",
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        text = "共 ${devices.size} 台常用 Mac",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(
-                        onClick = { viewModel.probeDeviceBookOnline() },
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("探测状态", style = MaterialTheme.typography.labelMedium)
-                    }
-                    Button(
-                        onClick = {
-                            editingEntry = null
-                            showAddDialog = true
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("添加", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-        }
-
-        if (devices.isEmpty()) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Devices,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(36.dp)
-                        )
-                        Text(
-                            text = "暂无保存的设备",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = "点击右上角「添加」手动录入 9 位设备码或局域网 IP，连接成功的主机也会自动同步到这里。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        } else {
-            items(devices, key = { it.id }) { entry ->
-                val probe = probeResults[entry.id]
-                DeviceBookCard(
-                    entry = entry,
-                    probe = probe,
-                    onConnect = {
-                        viewModel.connectSmart(entry.target, entry.port, entry.savedPin)
-                    },
-                    onToggleFavorite = { viewModel.toggleDeviceFavorite(entry.id) },
-                    onEdit = {
-                        editingEntry = entry
-                        showAddDialog = true
-                    },
-                    onDelete = { viewModel.deleteDeviceBookEntry(entry.id) }
-                )
-            }
-        }
-    }
-
-    if (showAddDialog) {
-        DeviceBookEditDialog(
-            initial = editingEntry,
-            onDismiss = { showAddDialog = false },
-            onSave = { updated ->
-                viewModel.upsertDeviceBookEntry(updated)
-                showAddDialog = false
-            }
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (item.isOnline) StatusOnline else StatusOffline)
         )
+
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (item.isFavorite) {
+                    Icon(
+                        imageVector = Icons.Rounded.Star,
+                        contentDescription = null,
+                        tint = Color(0xFFA1A1AA),
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+            }
+            Text(
+                text = item.subtitle,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.5.sp,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (hasMenu) {
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreHoriz,
+                        contentDescription = "更多操作",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    containerColor = SurfaceElevated
+                ) {
+                    onToggleFavorite?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text(if (item.isFavorite) "取消置顶" else "置顶主机", color = TextPrimary) },
+                            onClick = { menuExpanded = false; action() }
+                        )
+                    }
+                    onEdit?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("编辑主机", color = TextPrimary) },
+                            onClick = { menuExpanded = false; action() }
+                        )
+                    }
+                    onSaveLanPeer?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("保存到主机列表", color = TextPrimary) },
+                            onClick = { menuExpanded = false; action() }
+                        )
+                    }
+                    onRevokeTrust?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("撤销免密信任", color = StatusDanger) },
+                            onClick = { menuExpanded = false; action() }
+                        )
+                    }
+                    onDelete?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("删除主机", color = StatusDanger) },
+                            onClick = { menuExpanded = false; action() }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
-@Composable
-private fun DeviceBookCard(
-    entry: DeviceBookEntry,
-    probe: DeviceProbeResult?,
-    onConnect: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val badgeBg: Color
-    val badgeFg: Color
-    val badgeIcon: ImageVector
-    val badgeText: String
+private fun buildUnifiedHostRows(
+    lanPeers: List<DiscoveredPeer>,
+    deviceBook: List<DeviceBookEntry>,
+    trustedPeers: List<TrustedPeer>,
+    probeResults: Map<String, DeviceProbeResult>,
+    viewModel: OpenUUViewModel
+): List<HostRowItem> {
+    val rows = mutableListOf<HostRowItem>()
+    val consumedBookIds = mutableSetOf<String>()
+    val consumedTrustedIds = mutableSetOf<String>()
 
-    when (probe?.via) {
-        "lan" -> {
-            badgeBg = Color(0xFF064E3B)
-            badgeFg = Color(0xFF6EE7B7)
-            badgeIcon = Icons.Rounded.Wifi
-            badgeText = "局域网"
-        }
-        "wan" -> {
-            badgeBg = Color(0xFF312E81)
-            badgeFg = Color(0xFFC7D2FE)
-            badgeIcon = Icons.Rounded.Public
-            badgeText = "跨网在线"
-        }
-        else -> {
-            badgeBg = MaterialTheme.colorScheme.surfaceVariant
-            badgeFg = MaterialTheme.colorScheme.onSurfaceVariant
-            badgeIcon = Icons.Rounded.CloudOff
-            badgeText = "离线"
+    fun findTrusted(deviceId: String, deviceCode: String): TrustedPeer? {
+        val normCode = deviceCode.filter { it.isDigit() }
+        return trustedPeers.firstOrNull { tp ->
+            (deviceId.isNotBlank() && tp.deviceId == deviceId) ||
+                (normCode.length == 9 && tp.deviceCode.filter { it.isDigit() } == normCode)
         }
     }
 
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (entry.favorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
-                        contentDescription = "置顶收藏",
-                        tint = if (entry.favorite) Color(0xFFFBBF24) else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = entry.alias,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = entry.displayTarget,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Surface(
-                    color = badgeBg,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(badgeIcon, contentDescription = null, tint = badgeFg, modifier = Modifier.size(13.dp))
-                        Text(badgeText, style = MaterialTheme.typography.labelSmall, color = badgeFg)
+    fun findBookEntry(deviceId: String, deviceCode: String, ip: String): DeviceBookEntry? {
+        val normCode = deviceCode.filter { it.isDigit() }
+        return deviceBook.firstOrNull { d ->
+            (deviceId.isNotBlank() && d.remoteDeviceId == deviceId) ||
+                (normCode.length == 9 && d.deviceCode.filter { it.isDigit() } == normCode) ||
+                (ip.isNotBlank() && d.target == ip)
+        }
+    }
+
+    // 1. LAN Discovered Peers (always online, green dot)
+    for (peer in lanPeers) {
+        val trusted = findTrusted(peer.deviceId, peer.deviceCode)
+        val book = findBookEntry(peer.deviceId, peer.deviceCode, peer.primaryAddress)
+        trusted?.let { consumedTrustedIds.add(it.deviceId) }
+        book?.let { consumedBookIds.add(it.id) }
+
+        val subtitle = buildString {
+            append("局域网 · ")
+            append(peer.primaryAddress.ifBlank { peer.deviceCode.ifBlank { "在线" } })
+            if (trusted != null) append(" · 已信任 · 免密")
+        }
+        rows.add(
+            HostRowItem(
+                key = "lan_${peer.deviceId.ifBlank { "${peer.primaryAddress}:${peer.port}" }}",
+                name = book?.alias?.ifBlank { peer.deviceName } ?: peer.deviceName,
+                subtitle = subtitle,
+                isOnline = true,
+                isTrusted = trusted != null,
+                isFavorite = book?.favorite == true,
+                savedPin = book?.savedPin.orEmpty(),
+                bookEntry = book,
+                trustedPeer = trusted,
+                lanPeer = peer,
+                connectAction = { pin ->
+                    if (peer.primaryAddress.isNotBlank()) {
+                        viewModel.connectDirect(peer.primaryAddress, peer.port, pin)
+                    } else {
+                        viewModel.connectSmart(peer.deviceCode.ifBlank { peer.deviceId }, peer.port, pin)
                     }
                 }
-            }
+            )
+        )
+    }
 
-            if (entry.notes.isNotBlank()) {
+    // 2. Saved Device Book Entries
+    for (entry in deviceBook) {
+        if (entry.id in consumedBookIds) continue
+        val trusted = findTrusted(entry.remoteDeviceId, entry.deviceCode.ifBlank { entry.target })
+        trusted?.let { consumedTrustedIds.add(it.deviceId) }
+        val probe = probeResults[entry.id]
+
+        val subtitle = buildList {
+            add(entry.displayTarget)
+            if (trusted != null) {
+                add("已信任 · 免密")
+            }
+            if (probe != null && probe.online) {
+                add(probe.label)
+            }
+        }.joinToString(" · ")
+
+        rows.add(
+            HostRowItem(
+                key = "book_${entry.id}",
+                name = entry.alias,
+                subtitle = subtitle,
+                isOnline = probe?.online == true,
+                isTrusted = trusted != null,
+                isFavorite = entry.favorite,
+                savedPin = entry.savedPin,
+                bookEntry = entry,
+                trustedPeer = trusted,
+                lanPeer = null,
+                connectAction = { pin ->
+                    viewModel.connectSmart(entry.target, entry.port, pin)
+                }
+            )
+        )
+    }
+
+    // 3. Any Trusted Peers not already represented
+    for (tp in trustedPeers) {
+        if (tp.deviceId in consumedTrustedIds) continue
+        val codeLabel = tp.deviceCode.takeIf { it.length == 9 }
+            ?.let { "${it.substring(0, 3)} ${it.substring(3, 6)} ${it.substring(6, 9)}" }
+            ?: tp.deviceId.take(12)
+        rows.add(
+            HostRowItem(
+                key = "trusted_${tp.deviceId.ifBlank { tp.endpointId }}",
+                name = tp.deviceName,
+                subtitle = "$codeLabel · 已信任 · 免密",
+                isOnline = false,
+                isTrusted = true,
+                isFavorite = false,
+                savedPin = "",
+                bookEntry = null,
+                trustedPeer = tp,
+                lanPeer = null,
+                connectAction = { pin ->
+                    viewModel.connectSmart(tp.connectTarget, OpenUUConstants.DEFAULT_PORT, pin)
+                }
+            )
+        )
+    }
+
+    return rows
+}
+
+@Composable
+private fun PinPromptDialog(
+    hostName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(80L)
+        focusRequester.requestFocus()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceCard,
+        title = {
+            Text(
+                text = "连接至 $hostName",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = entry.notes,
+                    text = "首次连接需要输入 Mac 端显示的配对码，连接成功后将自动信任免密。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    color = TextSecondary
+                )
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it },
+                    placeholder = { Text("输入配对码 / 访问密码", color = TextMuted) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(9.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onConfirm(pin) }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    colors = industrialTextFieldColors()
                 )
             }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = TextSecondary)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(pin) },
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TextPrimary,
+                    contentColor = BgObsidian
+                )
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(34.dp)) {
-                        Icon(
-                            imageVector = Icons.Rounded.Edit,
-                            contentDescription = "编辑",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
-                        Icon(
-                            imageVector = Icons.Rounded.Delete,
-                            contentDescription = "删除",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-                Button(
-                    onClick = onConnect,
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("连接", style = MaterialTheme.typography.labelMedium)
-                }
+                Text("连接", fontWeight = FontWeight.SemiBold)
             }
         }
-    }
+    )
 }
 
 @Composable
@@ -1091,20 +1107,23 @@ private fun DeviceBookEditDialog(
     var alias by remember(initial) { mutableStateOf(initial?.alias.orEmpty()) }
     var targetField by remember(initial) {
         val formatted = DeviceBookRepository.formatTargetInput(initial?.target.orEmpty())
-        mutableStateOf(TextFieldValue(formatted, selection = TextRange(formatted.length)))
+        mutableStateOf(TextFieldValue(formatted, TextRange(formatted.length)))
     }
-    val target = targetField.text
     var portText by remember(initial) {
         mutableStateOf((initial?.port ?: OpenUUConstants.DEFAULT_PORT).toString())
     }
     var savedPin by remember(initial) { mutableStateOf(initial?.savedPin.orEmpty()) }
-    var notes by remember(initial) { mutableStateOf(initial?.notes.orEmpty()) }
     var favorite by remember(initial) { mutableStateOf(initial?.favorite ?: false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = SurfaceCard,
         title = {
-            Text(if (initial == null) "添加远程设备" else "编辑设备")
+            Text(
+                text = if (initial == null) "添加主机" else "编辑主机",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
         },
         text = {
             Column(
@@ -1114,521 +1133,333 @@ private fun DeviceBookEditDialog(
                 OutlinedTextField(
                     value = alias,
                     onValueChange = { alias = it },
-                    label = { Text("设备名称 / 备注别名") },
+                    label = { Text("名称 / 备注") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = industrialTextFieldColors()
                 )
                 OutlinedTextField(
                     value = targetField,
                     onValueChange = { targetField = formatTargetTextFieldValue(it, targetField.text) },
-                    label = { Text("9 位设备码 / openuu:// / IP") },
+                    label = { Text("9 位设备码 / IP / openuu://") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = industrialTextFieldColors()
                 )
-                OutlinedTextField(
-                    value = portText,
-                    onValueChange = { portText = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("默认端口") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = savedPin,
-                    onValueChange = { savedPin = it },
-                    label = { Text("访问密码 / PIN（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("备注（可选）") },
-                    maxLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = portText,
+                        onValueChange = { portText = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("端口") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.weight(0.9f),
+                        colors = industrialTextFieldColors()
+                    )
+                    OutlinedTextField(
+                        value = savedPin,
+                        onValueChange = { savedPin = it },
+                        label = { Text("配对码（可选）") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.weight(1.3f),
+                        colors = industrialTextFieldColors()
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("置顶收藏", style = MaterialTheme.typography.bodyMedium)
+                    Text("置顶显示", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                     Switch(checked = favorite, onCheckedChange = { favorite = it })
                 }
             }
         },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = TextSecondary)
+            }
+        },
         confirmButton = {
             Button(
-                enabled = DeviceBookRepository.sanitizeTargetForUse(target).isNotBlank(),
+                enabled = DeviceBookRepository.sanitizeTargetForUse(targetField.text).isNotBlank(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TextPrimary,
+                    contentColor = BgObsidian
+                ),
                 onClick = {
                     val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: OpenUUConstants.DEFAULT_PORT
-                    val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(target)
+                    val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(targetField.text)
                     onSave(
-                        (initial ?: DeviceBookEntry(
-                            id = UUID.randomUUID().toString(),
-                            alias = "",
-                            target = ""
-                        )).copy(
+                        (initial ?: DeviceBookEntry(UUID.randomUUID().toString(), "", "")).copy(
                             alias = alias.trim().ifBlank { cleanTarget },
                             target = cleanTarget,
                             port = port,
                             savedPin = savedPin.trim(),
-                            notes = notes.trim(),
                             favorite = favorite
                         )
                     )
                 }
             ) {
-                Text("保存")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text("保存", fontWeight = FontWeight.SemiBold)
             }
         }
     )
 }
 
-// =========================================================================
-// TAB 4: SETTINGS & LOGS (Local Identity, WAN Config, Scrollable Logs)
-// =========================================================================
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsAndLogsTabView(viewModel: OpenUUViewModel) {
+private fun SettingsAndLogsSheet(
+    viewModel: OpenUUViewModel,
+    onDismiss: () -> Unit
+) {
     val identity by viewModel.identity.collectAsState()
     val logs by viewModel.logs.collectAsState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var coordUrl by remember(identity.wanConfig) { mutableStateOf(identity.wanConfig.coordUrl) }
     var relayUrl by remember(identity.wanConfig) { mutableStateOf(identity.wanConfig.relayUrl) }
     var relayAuthToken by remember(identity.wanConfig) { mutableStateOf(identity.wanConfig.relayAuthToken) }
     var enablePublicFallback by remember(identity.wanConfig) { mutableStateOf(identity.wanConfig.enablePublicFallback) }
     var allowInsecureTls by remember(identity.wanConfig) { mutableStateOf(identity.wanConfig.allowInsecureTls) }
-    var savedBanner by remember { mutableStateOf(false) }
+    var savedFeedback by remember { mutableStateOf(false) }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SurfaceCard,
+        contentColor = TextPrimary
     ) {
-        item {
-            Text(
-                text = "设置与日志",
-                style = MaterialTheme.typography.headlineSmall
-            )
-        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("网络配置与运行日志", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                IconButton(
+                    onClick = { viewModel.refreshIdentityAndDeviceBook() },
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = "刷新",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
 
-        // Local Device Code & EndpointId Card
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+            // Local Identity block
+            Surface(
+                color = SurfaceElevated,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(0.5.dp, BorderHairline),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color(0xFF0F2928),
-                                    Color(0xFF151E30)
-                                )
-                            )
-                        )
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "本机身份标识",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White
-                        )
-                        IconButton(
-                            onClick = { viewModel.refreshIdentityAndDeviceBook() },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = "刷新身份",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
+                            Text("本机设备码", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                             Text(
-                                text = "9 位设备码",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = identity.formattedCode.ifBlank { identity.deviceCode.ifBlank { "初始化中..." } },
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
+                                text = identity.formattedCode.ifBlank { identity.deviceCode.ifBlank { "-" } },
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.primary
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
                             )
                         }
-                        FilledTonalButton(
+                        TextButton(
                             onClick = {
                                 val code = identity.formattedCode.ifBlank { identity.deviceCode }
                                 viewModel.copyToLocalClipboard("设备码", code)
                             },
-                            enabled = identity.deviceCode.isNotBlank(),
-                            shape = RoundedCornerShape(10.dp)
+                            enabled = identity.deviceCode.isNotBlank()
                         ) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("复制", style = MaterialTheme.typography.labelMedium)
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("复制", fontSize = 12.sp)
                         }
                     }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "EndpointId",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (identity.endpointId.isNotBlank()) {
-                                TextButton(
-                                    onClick = { viewModel.copyToLocalClipboard("EndpointId", identity.endpointId) },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                                ) {
-                                    Text("复制", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
+                    if (identity.endpointId.isNotBlank()) {
+                        HorizontalDivider(thickness = 0.5.dp, color = DividerHairline)
                         Text(
-                            text = identity.endpointId.ifBlank { "-" },
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "Endpoint: ${identity.endpointId}",
                             fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (identity.coordStatus.isNotBlank()) {
-                            Text(
-                                text = "协调服务状态: ${identity.coordStatus}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary
-                            )
-                        }
                     }
-                }
-            }
-        }
-
-        // WAN Configuration Card
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "跨网中继与协调服务 (WAN)",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-
-                    OutlinedTextField(
-                        value = coordUrl,
-                        onValueChange = { coordUrl = it; savedBanner = false },
-                        label = { Text("coord_url（设备码协调服务）") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    OutlinedTextField(
-                        value = relayUrl,
-                        onValueChange = { relayUrl = it; savedBanner = false },
-                        label = { Text("relay_url（自建中继节点）") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    OutlinedTextField(
-                        value = relayAuthToken,
-                        onValueChange = { relayAuthToken = it; savedBanner = false },
-                        label = { Text("relay_auth_token（鉴权令牌，可选）") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("enable_public_fallback", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "自建中继不可达时自动回退公共中继",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = enablePublicFallback,
-                            onCheckedChange = { enablePublicFallback = it; savedBanner = false }
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("allow_insecure_tls", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "允许自签名 HTTPS 证书（内网测试用）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = allowInsecureTls,
-                            onCheckedChange = { allowInsecureTls = it; savedBanner = false }
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            viewModel.saveWanConfig(
-                                WanConfig(
-                                    coordUrl = coordUrl.trim(),
-                                    relayUrl = relayUrl.trim(),
-                                    relayAuthToken = relayAuthToken.trim(),
-                                    enablePublicFallback = enablePublicFallback,
-                                    allowInsecureTls = allowInsecureTls
-                                )
-                            )
-                            savedBanner = true
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = if (savedBanner) Icons.Rounded.Check else Icons.Rounded.Save,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (savedBanner) "已保存 WAN 配置" else "保存 WAN 配置")
-                    }
-                }
-            }
-        }
-
-        // Self-Host AI Deployment Prompt Card
-        item {
-            val context = LocalContext.current
-            val uriHandler = LocalUriHandler.current
-            var promptCopied by remember { mutableStateOf(false) }
-            val githubRepoUrl = "https://github.com/onekb/OpenUU"
-            val selfHostAiPrompt = remember {
-                """
-                请帮我部署一套私有的 OpenUU 跨网寻址（Coord）与打洞中继（Relay）服务器。
-                开源仓库地址：https://github.com/onekb/OpenUU （请先拉取或阅读仓库下的 deploy/ 目录与 README.md）。
-
-                部署要求：
-                1. 云服务器方案请参考 `deploy/docker-compose.yml`、`deploy/Dockerfile.coord` 与 `deploy/Caddyfile`；零暴露公网 IP 方案请参考 `deploy/cloudflare-worker` 与 `deploy/cloudflare-relay-worker`（Cloudflare Workers + D1 + Tunnel）。
-                2. 先向我确认服务器 SSH 信息与解析好的 Coord / Relay 二级域名（或是否采用纯 IP 自签证书 / Cloudflare 方案）。
-                3. 自动完成容器构建启动、HTTPS 证书签发、端口放行（TCP 80/443，UDP 443/3478/7842）及中继鉴权 Bearer Token 配置，并验证 `/health` 接口返回正常。
-                4. 部署完成后，直接输出需要填入 OpenUU「网络与日志」页面的三项配置：设备码寻址 (Coord URL)、打洞与中继 (Relay URL)、中继鉴权 Token。
-                """.trimIndent()
-            }
-
-            fun copyPromptAndOpenGitHub(openWeb: Boolean) {
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                cm?.setPrimaryClip(ClipData.newPlainText("OpenUU Self-Host Prompt", selfHostAiPrompt))
-                promptCopied = true
-                if (openWeb) {
-                    runCatching { uriHandler.openUri(githubRepoUrl) }
-                }
-            }
-
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "自建专属机房 · AI 自动部署提示词",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "想独享满速带宽？点击下方提示词卡片即可自动复制并打开 GitHub 仓库，把提示词直接发给你的 AI 助手即可自动部署专属服务器：",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { copyPromptAndOpenGitHub(openWeb = true) }
-                    ) {
+                    if (identity.coordStatus.isNotBlank()) {
                         Text(
-                            text = selfHostAiPrompt,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.5.sp,
-                            lineHeight = 17.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(12.dp)
+                            text = "协调状态: ${identity.coordStatus}",
+                            fontSize = 11.sp,
+                            color = TextSecondary
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { copyPromptAndOpenGitHub(openWeb = false) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (promptCopied) "已复制" else "仅复制提示词")
-                        }
-                        Button(
-                            onClick = { copyPromptAndOpenGitHub(openWeb = true) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.3f)
-                        ) {
-                            Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("复制并打开 GitHub")
-                        }
                     }
                 }
             }
-        }
 
-        // Live Logs Section
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
+            // WAN Coord & Relay Config
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("跨网协调与中继 (WAN)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                OutlinedTextField(
+                    value = coordUrl,
+                    onValueChange = { coordUrl = it; savedFeedback = false },
+                    label = { Text("Coord URL") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = industrialTextFieldColors()
+                )
+                OutlinedTextField(
+                    value = relayUrl,
+                    onValueChange = { relayUrl = it; savedFeedback = false },
+                    label = { Text("Relay URL") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = industrialTextFieldColors()
+                )
+                OutlinedTextField(
+                    value = relayAuthToken,
+                    onValueChange = { relayAuthToken = it; savedFeedback = false },
+                    label = { Text("Relay Auth Token（可选）") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = industrialTextFieldColors()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("允许回退公共中继", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("自建节点不可达时自动回退", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = enablePublicFallback,
+                        onCheckedChange = { enablePublicFallback = it; savedFeedback = false }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("允许自签名 HTTPS 证书", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("仅用于内网自建节点测试", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = allowInsecureTls,
+                        onCheckedChange = { allowInsecureTls = it; savedFeedback = false }
+                    )
+                }
+                Button(
+                    onClick = {
+                        viewModel.saveWanConfig(
+                            WanConfig(
+                                coordUrl = coordUrl.trim(),
+                                relayUrl = relayUrl.trim(),
+                                relayAuthToken = relayAuthToken.trim(),
+                                enablePublicFallback = enablePublicFallback,
+                                allowInsecureTls = allowInsecureTls
+                            )
+                        )
+                        savedFeedback = true
+                    },
+                    shape = RoundedCornerShape(9.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TextPrimary, contentColor = BgObsidian),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (savedFeedback) {
+                        Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(if (savedFeedback) "已保存 WAN 配置" else "保存 WAN 配置", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            // Live Logs
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("实时日志 (${logs.size})", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = { viewModel.copyToLocalClipboard("运行日志", logs.joinToString("\n")) },
+                            enabled = logs.isNotEmpty()
+                        ) { Text("复制", fontSize = 12.sp, color = TextPrimary) }
+                        TextButton(
+                            onClick = { viewModel.clearLogs() },
+                            enabled = logs.isNotEmpty()
+                        ) { Text("清空", fontSize = 12.sp, color = TextSecondary) }
+                    }
+                }
+                Surface(
+                    color = BgObsidian,
+                    shape = RoundedCornerShape(9.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .heightIn(min = 140.dp, max = 240.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Terminal,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "运行日志 (${logs.size})",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TextButton(
-                                onClick = {
-                                    viewModel.copyToLocalClipboard("运行日志", logs.joinToString("\n"))
-                                },
-                                enabled = logs.isNotEmpty()
-                            ) {
-                                Text("复制", style = MaterialTheme.typography.labelMedium)
-                            }
-                            TextButton(
-                                onClick = { viewModel.clearLogs() },
-                                enabled = logs.isNotEmpty()
-                            ) {
-                                Text("清空", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 180.dp, max = 320.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF070A12))
-                            .padding(10.dp)
-                    ) {
-                        if (logs.isEmpty()) {
+                    if (logs.isEmpty()) {
+                        Box(modifier = Modifier.padding(12.dp)) {
                             Text(
                                 text = "暂无日志输出",
-                                style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontSize = 11.sp,
+                                color = TextMuted
                             )
-                        } else {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                logs.asReversed().forEach { line ->
-                                    Text(
-                                        text = line,
-                                        fontSize = 11.sp,
-                                        lineHeight = 15.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = when {
-                                            line.contains("ERROR", ignoreCase = true) || line.contains("失败") -> Color(0xFFFB7185)
-                                            line.contains("connected", ignoreCase = true) || line.contains("已就绪") -> Color(0xFF34D399)
-                                            else -> Color(0xFFCBD5E1)
-                                        }
-                                    )
-                                }
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            logs.asReversed().forEach { line ->
+                                Text(
+                                    text = line,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    color = when {
+                                        line.contains("ERROR", ignoreCase = true) || line.contains("失败") -> StatusDanger
+                                        line.contains("connected", ignoreCase = true) || line.contains("已就绪") -> StatusOnline
+                                        else -> Color(0xFFD4D4D8)
+                                    }
+                                )
                             }
                         }
                     }
@@ -1639,41 +1470,17 @@ private fun SettingsAndLogsTabView(viewModel: OpenUUViewModel) {
 }
 
 @Composable
-private fun SectionTitleRow(
-    icon: ImageVector,
-    title: String,
-    trailingText: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
-        Text(
-            text = trailingText,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
+private fun industrialTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = SurfaceInput,
+    unfocusedContainerColor = SurfaceInput,
+    focusedBorderColor = Color(0xFF52525B),
+    unfocusedBorderColor = BorderHairline,
+    focusedTextColor = TextPrimary,
+    unfocusedTextColor = TextPrimary,
+    focusedLabelColor = TextSecondary,
+    unfocusedLabelColor = TextSecondary,
+    cursorColor = TextPrimary
+)
 
 private fun formatTargetTextFieldValue(
     input: TextFieldValue,
@@ -1699,51 +1506,25 @@ private fun formatTargetTextFieldValue(
     }
 
     val formatted = DeviceBookRepository.formatTargetInput(raw)
-    if (formatted.isEmpty()) {
-        return TextFieldValue("", selection = TextRange(0))
-    }
+    if (formatted.isEmpty()) return TextFieldValue("", TextRange(0))
 
     val prefix = raw.substring(0, cursor.coerceAtMost(raw.length))
-    val newCursor = if (DeviceBookRepository.isDeviceCodeLike(formatted)) {
-        val digitsBefore = prefix.count { it in '0'..'9' }
-        if (digitsBefore == 0) {
-            0
-        } else {
-            var seen = 0
-            var pos = formatted.length
-            for (i in formatted.indices) {
-                if (formatted[i] in '0'..'9') {
-                    seen++
-                    if (seen == digitsBefore) {
-                        pos = i + 1
-                        break
-                    }
-                }
-            }
-            pos
-        }
+    val isCode = DeviceBookRepository.isDeviceCodeLike(formatted)
+    val countBefore = if (isCode) prefix.count { it in '0'..'9' } else prefix.count { !it.isWhitespace() }
+    val newCursor = if (countBefore == 0) {
+        0
     } else {
-        val nonSpaceBefore = prefix.count { !it.isWhitespace() }
-        if (nonSpaceBefore == 0) {
-            0
-        } else {
-            var seen = 0
-            var pos = formatted.length
-            for (i in formatted.indices) {
-                if (!formatted[i].isWhitespace()) {
-                    seen++
-                    if (seen == nonSpaceBefore) {
-                        pos = i + 1
-                        break
-                    }
-                }
+        var seen = 0
+        var pos = formatted.length
+        for (i in formatted.indices) {
+            val match = if (isCode) formatted[i] in '0'..'9' else !formatted[i].isWhitespace()
+            if (match && ++seen == countBefore) {
+                pos = i + 1
+                break
             }
-            pos
         }
+        pos
     }
 
-    return TextFieldValue(
-        text = formatted,
-        selection = TextRange(newCursor.coerceIn(0, formatted.length))
-    )
+    return TextFieldValue(formatted, TextRange(newCursor.coerceIn(0, formatted.length)))
 }
