@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenUU — 把另一台电脑上的软件，直接拉到眼前用</title>
+  <meta
+    name="description"
+    content="OpenUU 是完全免费的远程控制工具。不只是远程桌面，更能把家里或公司电脑上的某一个软件窗口单独拉到当前屏幕上并排使用，支持 Mac、iPhone、iPad 与安卓。"
+  />
+  <meta name="theme-color" content="#fbfbfd" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/assets/logo-192.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://openuu.1kb.ren/" />
+  <meta property="og:title" content="OpenUU — 把另一台电脑上的软件，直接拉到眼前用" />
+  <meta
+    property="og:description"
+    content="完全免费的远程控制软件：支持把远端电脑的单个窗口单独拉到桌面同屏使用，不限画质、不限速、无广告。"
+  />
+  <meta property="og:image" content="https://openuu.1kb.ren/assets/single-window-mode.webp" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- ========================================================================
+       NAVBAR
+       ======================================================================== -->
+  <header class="navbar">
+    <div class="container nav-inner">
+      <a href="#" class="brand">
+        <img src="/assets/logo.webp" alt="OpenUU" width="28" height="28" />
+        <span>OpenUU</span>
+      </a>
+
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="#why">好在哪</a>
+        <a href="#how">怎么用</a>
+        <a href="#download">免费下载</a>
+        <a href="#faq">常见问题</a>
+      </nav>
+
+      <div class="nav-cta">
+        <a href="#download" class="btn btn-sm btn-primary">下载</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ======================================================================
+         HERO + SUNLIT MAC DESKTOP DEMO
+         ====================================================================== -->
+    <section class="hero">
+      <div class="container">
+        <h1>把另一台电脑上的软件，<br />直接拉到眼前用。</h1>
+
+        <p class="hero-sub">
+          免费、顺手的远程控制工具。不只是远程整块屏幕——你可以只把家里或公司电脑上的<strong>某一个窗口</strong>（比如聊天、文件夹、浏览器）单独拉过来，和手头的软件摆在一起用。
+        </p>
+
+        <div class="hero-actions">
+          <a
+            id="hero-dl-btn"
+            data-dl-role="macos"
+            href="https://github.com/onekb/OpenUU/releases/download/v0.4.0/OpenUU-v0.4.0-macOS-arm64.dmg"
+            class="btn btn-lg btn-primary"
+          >
+            <span id="hero-dl-label">免费下载 Mac 版</span>
+          </a>
+          <a href="#download" class="link-more">查看手机与平板版 ›</a>
+        </div>
+
+        <div class="hero-reassure">
+          完全免费 · 无会员限速 · 无需注册账号 · 当前版本 <span data-ver>v0.4.0</span>
+        </div>
+
+        <!-- Mode Toggle + Live Story Progress Pills -->
+        <div class="stage-controls">
+          <div class="seg-switch" role="tablist" aria-label="使用效果对比">
+            <button type="button" class="seg-item active" data-mode="single">
+              OpenUU 单窗口同屏（自动演示中）
+            </button>
+            <button type="button" class="seg-item" data-mode="legacy">
+              传统远程桌面（对比痛点）
+            </button>
+          </div>
+
+          <div class="story-steps" id="story-steps-single">
+            <span class="story-pill active" data-step="0">1. 打开 OpenUU 输入代码连接</span>
+            <span class="story-pill" data-step="1">2. 点选「微信」单独拉出窗口</span>
+            <span class="story-pill" data-step="2">3. 从公司电脑直接拖照片进群发送</span>
+            <span class="story-pill" data-step="3">4. 顺手勾掉本机待办</span>
+          </div>
+
+          <div class="story-steps" id="story-steps-legacy" style="display: none;">
+            <span class="story-pill warn active" data-lstep="0">1. 整块大屏缩成 52%，小字模糊费眼</span>
+            <span class="story-pill warn" data-lstep="1">2. 上下两排程序坞重叠，极易点错</span>
+            <span class="story-pill warn" data-lstep="2">3. 大黑框挡住本地软件，无法对照</span>
+          </div>
+        </div>
+
+        <!-- Realistic MacBook Screen Preview + Live Choreographed Animation -->
+        <div class="mac-bezel">
+          <div class="mac-wallpaper" id="mac-wallpaper" data-mode="single">
+            <!-- Authentic macOS Top Menu Bar -->
+            <div class="mac-top-bar">
+              <div class="mac-bar-left">
+                <svg width="12" height="12" viewBox="0 0 170 170" fill="currentColor" aria-hidden="true">
+                  <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.35.13-9.13-1.9-14.34-6.08-3.69-3.03-7.61-7.82-11.77-14.37-5.81-9.11-10.58-19.65-14.31-31.62-3.73-11.97-5.59-23.16-5.59-33.58 0-12.71 3.18-23.16 9.54-31.34 6.36-8.18 14.37-12.42 24.03-12.71 4.81 0 10.37 1.48 16.68 4.42 6.31 2.95 10.37 4.47 12.18 4.58 1.45 0 5.95-1.76 13.5-5.27 7.55-3.51 13.89-4.99 19.03-4.43 14.2 1.15 24.88 6.74 32.04 16.78-12.75 7.74-19.02 18.57-18.81 32.49.21 10.83 4.24 19.83 12.09 27.01 5.48 5.05 11.97 8.15 19.47 9.31-1.56 4.79-3.3 9.47-5.2 14.02ZM119.22 31.01c0 8.49-3.1 16.43-9.3 23.82-7.47 8.73-16.52 13.78-26.37 12.99-.13-1.02-.2-2.12-.2-3.3 0-8.15 3.55-16.88 9.85-24.06 3.15-3.61 7.15-6.61 12-9.01 4.85-2.39 9.44-3.72 13.77-3.98.17 1.19.25 2.37.25 3.54Z"/>
+                </svg>
+                <span class="mac-active-name" id="mac-active-name">微信 — 家里电脑</span>
+                <span class="mac-menu-item">文件</span>
+                <span class="mac-menu-item">编辑</span>
+                <span class="mac-menu-item">显示</span>
+                <span class="mac-menu-item">窗口</span>
+                <span class="mac-menu-item">帮助</span>
+              </div>
+              <div class="mac-bar-right">
+                <span class="mac-connected-tag" id="mac-connected-tag">OpenUU 已连 1 台电脑</span>
+                <span class="bar-icons" aria-hidden="true">
+                  <!-- Wi-Fi icon -->
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                    <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/>
+                  </svg>
+                  <!-- Battery icon -->
+                  <svg width="17" height="12" viewBox="0 0 26 14" fill="none">
+                    <rect x="1" y="1" width="21" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/>
+                    <rect x="3" y="3" width="16" height="8" rx="1.5" fill="currentColor"/>
+                    <path d="M24 5v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  </svg>
+                </span>
+                <span>11月21日 周六 14:30</span>
+              </div>
+            </div>
+
+            <!-- Top-Right Native macOS Notification Banner (Animated) -->
+            <div class="mac-notif" id="mac-notif">
+              <div class="notif-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+              </div>
+              <div class="notif-body">
+                <div class="notif-top">
+                  <span>家人群 (5)</span>
+                  <span>来自 家里电脑 · 刚刚</span>
+                </div>
+                <div class="notif-text">老妈：三亚拍的全家福原图发群里呗？</div>
+              </div>
+            </div>
+
+            <!-- Floating Dragged File Ghost Card (Animated across windows) -->
+            <div class="drag-ghost" id="drag-ghost">
+              <span class="f-badge jpg">JPG</span>
+              <span>三亚海边全家福_原图.jpg</span>
+              <span style="color: #0071e3; font-size: 0.65rem;">6.8 MB</span>
+            </div>
+
+            <!-- Animated Realistic macOS Pointer Cursor -->
+            <div class="demo-cursor" id="demo-cursor" aria-hidden="true">
+              <span class="cursor-ripple"></span>
+              <svg width="22" height="26" viewBox="0 0 22 26" fill="none">
+                <path
+                  d="M2.2 1.8L18.6 14.2L11.2 15.3L14.8 22.8L11.7 24.3L8.1 16.8L2.2 21.4V1.8Z"
+                  fill="#111111"
+                  stroke="#FFFFFF"
+                  stroke-width="1.8"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+
+            <!-- ==============================================================
+                 MODE 1: OPENUU SEAMLESS SINGLE WINDOWS (3 REALISTIC APPS)
+                 ============================================================== -->
+            <div class="desk-area">
+              <!-- WINDOW 1: Local Apple Notes -->
+              <div class="app-win" data-win="notes" data-label="备忘录">
+                <div class="win-head">
+                  <span class="dots"><i></i><i></i><i></i></span>
+                  <span class="win-name">备忘录</span>
+                  <span class="from-pill local">当前电脑</span>
+                </div>
+                <div class="notes-subbar">
+                  <span>iCloud · 个人备忘</span>
+                  <span>已同步</span>
+                </div>
+                <div class="notes-paper">
+                  <div>
+                    <div class="notes-date">2026年11月21日 14:22</div>
+                    <div class="todo-title">周末收尾清单</div>
+                    <ul class="todo-items">
+                      <li class="completed-line">
+                        <span class="chk done"></span>
+                        <span>整理下周例会汇报提纲</span>
+                      </li>
+                      <li class="completed-line">
+                        <span class="chk done"></span>
+                        <span>核对公司电脑里的 11 月报销单</span>
+                      </li>
+                      <li id="todo-photo-line">
+                        <span class="chk" id="todo-photo-chk"></span>
+                        <span>把三亚全家福原图发到家人群</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div class="notes-callout">
+                    小贴士：照片在公司电脑备份盘里，直接从右边窗口拖进中间微信就能发。
+                  </div>
+                </div>
+              </div>
+
+              <!-- CENTER SLOT: OpenUU Client Launcher -> Smoothly Opens Remote WeChat Window -->
+              <div class="center-slot">
+                <!-- STEP 1 & 2: OpenUU Native Connection & Single-Window Picker -->
+                <div class="app-win is-focused" id="win-openuu" data-win="openuu" data-label="OpenUU">
+                  <div class="win-head">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="win-name">OpenUU — 远程控制</span>
+                    <span class="from-pill local">当前电脑</span>
+                  </div>
+
+                  <div class="ouu-body">
+                    <!-- Sub-pane A: Enter 9-Digit Code & Password -->
+                    <div class="ouu-pane" id="ouu-connect-pane">
+                      <div class="ouu-brand-row">
+                        <div class="ouu-brand-left">
+                          <img src="/assets/logo.webp" alt="" />
+                          <div>
+                            <div class="ouu-brand-title">连接远程电脑</div>
+                            <div class="ouu-brand-sub">输入对方电脑上的 9 位数字与密码</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="ouu-form">
+                        <div class="ouu-field">
+                          <label>设备代码（家里电脑）</label>
+                          <div class="ouu-input" id="ouu-code-box">
+                            <span id="ouu-code-text"><span class="ouu-placeholder">例如 996 007 886</span></span>
+                            <span class="ouu-caret" id="ouu-code-caret" style="display: none;"></span>
+                          </div>
+                        </div>
+
+                        <div class="ouu-field">
+                          <label>访问密码（首次配对后自动记住）</label>
+                          <div class="ouu-input" id="ouu-pwd-box">
+                            <span id="ouu-pwd-text"><span class="ouu-placeholder">输入访问密码</span></span>
+                            <span class="ouu-caret" id="ouu-pwd-caret" style="display: none;"></span>
+                          </div>
+                        </div>
+
+                        <div class="ouu-connect-btn" id="ouu-connect-btn">
+                          <span id="ouu-connect-label">连接设备</span>
+                        </div>
+                      </div>
+
+                      <div class="ouu-foot-tip">支持单独拉出某个软件窗口，也可进入整屏桌面</div>
+                    </div>
+
+                    <!-- Sub-pane B: Connected -> Pick a Single App Window to Pull Out -->
+                    <div class="ouu-pane hidden-pane" id="ouu-picker-pane">
+                      <div class="ouu-connected-banner">
+                        <span>● 已连上：家里电脑 (Mac mini)</span>
+                        <span>直连 · 9 ms</span>
+                      </div>
+
+                      <div class="ouu-picker-hint">不用开整块桌面，点选要拉过来的窗口：</div>
+
+                      <div class="ouu-app-list">
+                        <div class="ouu-app-row highlight-pick" id="ouu-pick-wx">
+                          <div class="ouu-app-info">
+                            <div class="ouu-app-ico" style="background: #28cd41;">微</div>
+                            <div>
+                              <div class="ouu-app-name">微信</div>
+                              <div class="ouu-app-sub">正在运行 · 应用窗口</div>
+                            </div>
+                          </div>
+                          <span class="ouu-pull-btn" id="ouu-pull-wx-btn">单独拉出窗口</span>
+                        </div>
+
+                        <div class="ouu-app-row">
+                          <div class="ouu-app-info">
+                            <div class="ouu-app-ico" style="background: #007aff;">浏</div>
+                            <div>
+                              <div class="ouu-app-name">Safari 浏览器</div>
+                              <div class="ouu-app-sub">正在运行 · 应用窗口</div>
+                            </div>
+                          </div>
+                          <span class="ouu-pull-btn subtle">单独拉出</span>
+                        </div>
+
+                        <div class="ouu-app-row">
+                          <div class="ouu-app-info">
+                            <div class="ouu-app-ico" style="background: #636366;">桌</div>
+                            <div>
+                              <div class="ouu-app-name">整屏远程桌面</div>
+                              <div class="ouu-app-sub">显示完整远端屏幕</div>
+                            </div>
+                          </div>
+                          <span class="ouu-pull-btn subtle">进入桌面</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- STEP 2–4: Pulled-Out Home Mac Two-Column Desktop WeChat -->
+                <div class="app-win win-unopened" id="win-chat" data-win="chat" data-label="微信 — 家里电脑">
+                  <div class="win-head">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="win-name">微信</span>
+                    <span class="from-pill">
+                      <img src="/assets/logo.webp" alt="" />
+                      来自 家里电脑
+                    </span>
+                  </div>
+
+                <div class="wechat-split">
+                  <!-- Left Session Column -->
+                  <div class="wx-sidebar">
+                    <div class="wx-search">搜索</div>
+                    <div class="wx-conv active">
+                      <div class="wx-avatar" style="background: #34c759;">家</div>
+                      <div class="wx-conv-meta">
+                        <div class="wx-conv-title">一家人 (5)</div>
+                        <div class="wx-conv-sub" id="wx-sidebar-preview">老妈: 原图发群里</div>
+                      </div>
+                    </div>
+                    <div class="wx-conv">
+                      <div class="wx-avatar" style="background: #007aff;">物</div>
+                      <div class="wx-conv-meta">
+                        <div class="wx-conv-title">管家小李</div>
+                        <div class="wx-conv-sub">快递放驿站啦</div>
+                      </div>
+                    </div>
+                    <div class="wx-conv">
+                      <div class="wx-avatar" style="background: #28cd41;">传</div>
+                      <div class="wx-conv-meta">
+                        <div class="wx-conv-title">文件传输助手</div>
+                        <div class="wx-conv-sub">[图片]</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Right Conversation Area -->
+                  <div class="wx-main" id="wx-drop-zone">
+                    <div class="wx-chat-header">
+                      <span>相亲相爱一家人 (5)</span>
+                      <span style="color: #8e8e93; font-weight: 400;">···</span>
+                    </div>
+                    <div class="wx-messages">
+                      <div class="wx-row">
+                        <div class="wx-mini-ava" style="background: #ff9500;">妈</div>
+                        <div class="wx-bubble">
+                          上次去三亚拍的全家福原图存哪啦？发群里我洗一张摆客厅～
+                        </div>
+                      </div>
+
+                      <!-- Revealed upon animated file drop -->
+                      <div class="wx-row me wx-photo-msg" id="wx-sent-photo">
+                        <div class="wx-mini-ava" style="background: #007aff;">我</div>
+                        <div class="photo-card-bubble">
+                          <div class="photo-thumb-art">三亚海边全家福</div>
+                          <div class="photo-card-meta">
+                            <span>原图.jpg</span>
+                            <span>6.8 MB · 已发送</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="wx-row me wx-followup-msg" id="wx-sent-text">
+                        <div class="wx-mini-ava" style="background: #007aff;">我</div>
+                        <div class="wx-bubble">刚直接拖进群里啦，原图超清楚！</div>
+                      </div>
+                    </div>
+
+                    <div class="wx-drop-mask" id="wx-drop-mask">
+                      松开即可发送至「家里电脑 · 微信」
+                    </div>
+
+                    <div class="wx-composer">
+                      <div class="wx-tools" aria-hidden="true">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                      </div>
+                      <div class="wx-input-line">
+                        <span id="wx-typing-line">直接用当前电脑输入法打字…</span>
+                        <span class="wx-send-btn">发送</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              </div>
+
+              <!-- WINDOW 3: Office Mac Finder with Sidebar + File Rows -->
+              <div class="app-win" id="win-files" data-win="files" data-label="访达 — 公司电脑">
+                <div class="win-head">
+                  <span class="dots"><i></i><i></i><i></i></span>
+                  <span class="win-name">资料与相册备份</span>
+                  <span class="from-pill">
+                    <img src="/assets/logo.webp" alt="" />
+                    来自 公司电脑
+                  </span>
+                </div>
+
+                <div class="finder-split">
+                  <div class="finder-side">
+                    <div class="finder-sec-label">个人收藏</div>
+                    <div class="finder-nav-item">桌面</div>
+                    <div class="finder-nav-item">下载</div>
+                    <div class="finder-nav-item active">备份盘</div>
+                    <div class="finder-sec-label" style="margin-top: 6px;">位置</div>
+                    <div class="finder-nav-item">公司电脑</div>
+                  </div>
+
+                  <div class="finder-table-wrap">
+                    <div>
+                      <div class="finder-thead">
+                        <span>名称</span>
+                        <span>大小</span>
+                      </div>
+                      <div class="finder-list">
+                        <div class="f-item selected" id="finder-photo-row">
+                          <div class="f-name-cell">
+                            <span class="f-badge jpg">JPG</span>
+                            <span>三亚海边全家福_原图.jpg</span>
+                          </div>
+                          <span class="f-meta">6.8 MB</span>
+                        </div>
+
+                        <div class="f-item">
+                          <div class="f-name-cell">
+                            <span class="f-badge xls">XLS</span>
+                            <span>11月费用报销单.xlsx</span>
+                          </div>
+                          <span class="f-meta">1.4 MB</span>
+                        </div>
+
+                        <div class="f-item">
+                          <div class="f-name-cell">
+                            <span class="f-badge pdf">PDF</span>
+                            <span>年度品牌方案终稿.pdf</span>
+                          </div>
+                          <span class="f-meta">8.2 MB</span>
+                        </div>
+
+                        <div class="f-item">
+                          <div class="f-name-cell">
+                            <span class="f-badge key">KEY</span>
+                            <span>周一汇报演示文稿.key</span>
+                          </div>
+                          <span class="f-meta">14 MB</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="finder-foot">
+                      <span>共 4 项 · 可直接跨窗口拖拽</span>
+                      <span>可用 412 GB</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ==============================================================
+                 MODE 2: REALISTIC TRADITIONAL NESTED REMOTE DESKTOP PAIN STAGE
+                 ============================================================== -->
+            <div class="legacy-area" id="legacy-area">
+              <!-- Local Notes stuck & covered behind the big black viewer -->
+              <div class="app-win legacy-blocked-local" id="legacy-local-notes">
+                <div class="win-head">
+                  <span class="dots"><i></i><i></i><i></i></span>
+                  <span class="win-name">备忘录（被大黑框遮挡）</span>
+                  <span class="from-pill local">当前电脑</span>
+                </div>
+                <div class="notes-paper">
+                  <div>
+                    <div class="todo-title">周末收尾清单</div>
+                    <p style="font-size: 0.75rem; color: #6e6e73; line-height: 1.6;">
+                      想一边看手头的清单、一边操作远端电脑？传统远程软件一个大窗口直接盖住大半个屏幕，只能来回最小化切换。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Clunky Traditional Remote Desktop Viewer Window -->
+              <div class="legacy-viewer-win" id="legacy-viewer">
+                <div class="legacy-viewer-bar">
+                  <span class="dots"><i style="background:#ff5f57;"></i><i style="background:#febc2e;"></i><i style="background:#28c840;"></i></span>
+                  <span>传统远程桌面 — 正在控制：家里电脑 (3840×2160 缩至 52%)</span>
+                  <span style="color: #ff6961; font-size: 0.66rem;">● 非会员标清限速</span>
+                </div>
+
+                <div class="legacy-floating-strip">
+                  <span>适应窗口 (52%)</span>
+                  <span>|</span>
+                  <span>画质：流畅 (受限)</span>
+                  <span>|</span>
+                  <span>整屏桌面套桌面</span>
+                </div>
+
+                <!-- Shrunken Second Mac Desktop inside Black Letterbox -->
+                <div class="legacy-letterbox">
+                  <div class="nested-menubar">
+                    <span> 微信 文件 编辑 窗口（第二层远端菜单栏）</span>
+                    <span>14:30</span>
+                  </div>
+
+                  <div class="nested-tiny-canvas" id="legacy-tiny-target">
+                    <div class="tiny-win">
+                      <div class="tiny-win-bar">家人群 (5) — 画面被缩小字发虚</div>
+                      <div>老妈：上次去三亚拍的全家福原图存哪啦？发群里我洗一张…</div>
+                      <div style="margin-top: 6px; color: #8e8e93;">（整块 4K 屏幕挤在小窗里，字小看不清）</div>
+                    </div>
+
+                    <div class="tiny-win">
+                      <div class="tiny-win-bar">远端桌面杂乱窗口</div>
+                      <div>所有没用的背景窗口和桌面图标全被一起传过来，无法只拿单个软件出来，也没法同时把公司电脑的文件直接拖进来。</div>
+                    </div>
+                  </div>
+
+                  <div class="nested-second-dock" id="legacy-second-dock" title="第二层远端程序坞">
+                    <i></i><i></i><i></i><i></i><i></i>
+                  </div>
+                </div>
+              </div>
+
+              <div class="legacy-pain-toast" id="legacy-pain-toast">
+                整块屏幕缩成 52%，文字发虚看不清
+              </div>
+            </div>
+
+            <!-- Authentic Frosted Glass macOS Dock -->
+            <div class="dock-wrap">
+              <div class="frosted-dock" id="real-mac-dock" aria-label="底部程序坞演示">
+                <button type="button" class="dock-app" data-win="notes" title="本机：备忘录">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ff9f0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="8" y1="13" x2="16" y2="13"/>
+                    <line x1="8" y1="17" x2="13" y2="17"/>
+                  </svg>
+                </button>
+
+                <button type="button" class="dock-app active" data-win="openuu" title="OpenUU" style="background: transparent; box-shadow: none;">
+                  <img src="/assets/logo.webp" alt="OpenUU" width="38" height="38" style="border-radius: 9px;" />
+                </button>
+
+                <div class="dock-remote-part">
+                  <div class="dock-sep"></div>
+
+                  <button type="button" class="dock-app dock-hidden" id="dock-wx-btn" data-win="chat" title="来自家里电脑：微信">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#28cd41" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span class="red-dot" id="dock-unread-dot">1</span>
+                    <img src="/assets/logo.webp" alt="" class="corner-logo" />
+                  </button>
+
+                  <button type="button" class="dock-app" data-win="files" title="来自公司电脑：访达">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0071e3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <img src="/assets/logo.webp" alt="" class="corner-logo" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================================
+         WHY PEOPLE LOVE IT
+         ====================================================================== -->
+    <section class="section" id="why">
+      <div class="container">
+        <div class="sec-head">
+          <h2>用起来就像自己的电脑一样自然</h2>
+          <p>不需要懂任何网络知识，装好就能连，所有贴心细节都替你想好了。</p>
+        </div>
+
+        <div class="cards-3">
+          <div class="soft-card">
+            <div class="icon-circle">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="3"/>
+                <path d="M9 3v18"/>
+              </svg>
+            </div>
+            <h3>只拉你要用的那个窗口</h3>
+            <p>
+              不用在公司电脑登录私人聊天账号，也不用把整块远端屏幕缩成小框。需要哪个软件就单独拉哪个过来，拖拉边缘就能调大小，底下程序坞还会同步新消息红点。
+            </p>
+          </div>
+
+          <div class="soft-card">
+            <div class="icon-circle">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+            </div>
+            <h3>真免费，不限画质不限速</h3>
+            <p>
+              没有“开会员才给高清流畅画面”的收费墙，也没有弹窗广告。不管是在同一个房间连 Wi-Fi，还是跨城市远程连接，都会自动走最快路线，画面清晰跟手。
+            </p>
+          </div>
+
+          <div class="soft-card">
+            <div class="icon-circle">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <h3>复制粘贴互通，隐私有保障</h3>
+            <p>
+              在这台电脑复制一段话、截一张图或拖一个文件，粘贴就能传到另一台电脑。全程加密传输，自己设备连过一次后自动记住，外人输错密码会自动锁定。
+            </p>
+          </div>
+        </div>
+
+        <!-- Phone & Tablet Card -->
+        <div class="mobile-showcase">
+          <div>
+            <h3 style="margin: 0 0 10px; font-size: 1.45rem; letter-spacing: -0.02em;">
+              出门没带电脑？手机和平板也能轻松操控
+            </h3>
+            <p style="margin: 0; color: var(--ink-secondary); font-size: 0.96rem;">
+              无论躺在沙发上拿 iPad，还是在路上只带了手机，随时都能连回你的 Mac 处理急事。
+            </p>
+            <ul class="mobile-points">
+              <li>横屏自动铺满整块屏幕，没有多余黑边遮挡视线</li>
+              <li>像浏览器标签页一样切换多个电脑窗口，不会误触断开连接</li>
+              <li>自带中文输入键盘与常用快捷键栏（复制、粘贴、撤回一键搞定）</li>
+              <li>手机相册里的照片和文档，点一下就能直接发到电脑上</li>
+            </ul>
+          </div>
+
+          <div class="pad-illustration" aria-label="手机与平板横屏操控示意">
+            <div class="pad-inner">
+              <div class="pad-tabs">
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <span class="pad-tab-pill">公司方案.docx</span>
+                  <span style="color: #86868b; padding: 0 6px;">聊天窗口</span>
+                </div>
+                <span style="color: #28cd41; font-weight: 600;">● 已连接</span>
+              </div>
+              <div class="pad-content">
+                <div>
+                  <div style="font-weight: 600; color: #1d1d1f; margin-bottom: 6px;">专为触屏优化的顺手手势</div>
+                  <div style="color: #6e6e73; font-size: 0.82rem;">
+                    既可以直接用手指点屏幕，也可以切换成笔记本一样的「虚拟触控板」精细移动鼠标指针。
+                  </div>
+                </div>
+                <div class="gesture-chips">
+                  <span class="g-chip">双指轻点 = 鼠标右键</span>
+                  <span class="g-chip">双指捏合 = 放大看清小字</span>
+                  <span class="g-chip">长按拖动 = 拖文件 / 选文字</span>
+                  <span class="g-chip">三指轻点 = 呼出中文键盘</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================================
+         HOW IT WORKS (3 SIMPLE STEPS)
+         ====================================================================== -->
+    <section class="section section-alt" id="how">
+      <div class="container">
+        <div class="sec-head">
+          <h2>怎么用？三步就连上</h2>
+          <p>不用注册繁琐的账号，两台设备装好软件就能直接配对。</p>
+        </div>
+
+        <div class="cards-3">
+          <div class="soft-card">
+            <div class="step-number">1</div>
+            <h3>在电脑上开启「允许控制」</h3>
+            <p>
+              在你想远程访问的那台 Mac 上打开 OpenUU，点一下开启按钮，屏幕上会自动显示本机的 <strong>9 位数字代码</strong>和访问密码。
+            </p>
+            <div class="code-demo">996 007 886</div>
+          </div>
+
+          <div class="soft-card">
+            <div class="step-number">2</div>
+            <h3>在另一台设备上输入代码</h3>
+            <p>
+              打开你手头的另一台 Mac、手机或平板：如果连着同一个 Wi-Fi，直接点列表里出现的电脑名字；如果出门在外，输入那 9 位数字和密码即可。
+            </p>
+          </div>
+
+          <div class="soft-card">
+            <div class="step-number">3</div>
+            <h3>挑选窗口或进入桌面</h3>
+            <p>
+              连上之后，想单独拉哪个软件出来用就点哪个，也可以一键进入完整桌面。第一次连过之后会自动存好，以后点一下直接秒连。
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================================
+         DOWNLOADS & FAQ
+         ====================================================================== -->
+    <section class="section" id="download">
+      <div class="container">
+        <div class="sec-head">
+          <h2>免费下载 OpenUU</h2>
+          <p>系统已自动为你标出适合当前设备的安装包（最新版本 <span data-ver>v0.4.0</span>）。</p>
+        </div>
+
+        <div class="dl-grid">
+          <!-- macOS -->
+          <div class="dl-box recommended" data-os="macos">
+            <div>
+              <div class="dl-top">
+                <span class="dl-title">Mac 电脑版</span>
+                <span class="rec-tag">适合当前设备</span>
+              </div>
+              <p class="dl-desc">
+                既能控制别的电脑，也能让别的设备连回来。适合 M1 / M2 / M3 / M4 系列芯片苹果电脑（macOS 14 及以上）。
+              </p>
+            </div>
+            <a
+              data-dl-link="macos"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.4.0/OpenUU-v0.4.0-macOS-arm64.dmg"
+              class="btn btn-primary"
+            >
+              下载 Mac 版 (.dmg)
+            </a>
+          </div>
+
+          <!-- Android -->
+          <div class="dl-box" data-os="android">
+            <div>
+              <div class="dl-top">
+                <span class="dl-title">安卓手机 / 平板</span>
+                <span class="rec-tag" hidden>适合当前设备</span>
+              </div>
+              <p class="dl-desc">
+                用安卓手机或平板随时随地远程控制你的 Mac 电脑（需要 Android 8.0 及以上系统）。
+              </p>
+            </div>
+            <a
+              data-dl-link="android"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.4.0/OpenUU-v0.4.0-Android-arm64.apk"
+              class="btn btn-secondary"
+            >
+              下载安卓版 (.apk)
+            </a>
+          </div>
+
+          <!-- iOS / iPadOS -->
+          <div class="dl-box" data-os="ios">
+            <div>
+              <div class="dl-top">
+                <span class="dl-title">iPhone / iPad</span>
+                <span class="rec-tag" hidden>适合当前设备</span>
+              </div>
+              <p class="dl-desc">
+                用 iPhone 或 iPad 远程控制 Mac。暂未上架应用商店，提供安装包供爱思助手 / AltStore / SideStore 安装。
+              </p>
+            </div>
+            <a
+              data-dl-link="ios"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.4.0/OpenUU-v0.4.0-iOS-unsigned.ipa"
+              class="btn btn-secondary"
+            >
+              下载安装包 (.ipa)
+            </a>
+          </div>
+
+          <!-- Windows -->
+          <div class="dl-box">
+            <div>
+              <div class="dl-top">
+                <span class="dl-title">Windows 电脑版</span>
+              </div>
+              <p class="dl-desc">
+                Windows 版本（支持控制与被控）正在加紧制作中，很快就会和大家见面。
+              </p>
+            </div>
+            <a
+              href="https://github.com/onekb/OpenUU"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn btn-secondary"
+            >
+              关注发布动态
+            </a>
+          </div>
+        </div>
+
+        <!-- Friendly Everyday FAQ -->
+        <div class="faq-wrap" id="faq">
+          <details class="faq-item" open>
+            <summary>
+              <span>Mac 第一次打开提示“无法验证开发者”或“已损坏”怎么办？</span>
+              <span class="faq-plus">+</span>
+            </summary>
+            <div class="faq-body">
+              这是因为 OpenUU 是个人免费开源作品，暂时没有每年向苹果付费购买商业企业证书，属于系统的正常首次提醒，软件本身完全安全。<br />
+              <strong>解决办法一（点鼠标就行）：</strong>在弹窗点「完成」，然后打开 Mac 的<strong>「系统设置 → 隐私与安全性」</strong>，滑到最底部点一下<strong>「仍要打开」</strong>即可。<br />
+              <strong>解决办法二（最快）：</strong>把 OpenUU 拖进「应用程序」文件夹后，打开「终端」粘贴下面这行命令回车，就能直接打开：
+              <div class="cmd-inline">
+                <code>xattr -cr /Applications/OpenUU.app</code>
+                <button type="button" class="btn btn-sm btn-secondary" id="copy-xattr">复制命令</button>
+              </div>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span>真的完全免费吗？以后会不会限速或收费？</span>
+              <span class="faq-plus">+</span>
+            </summary>
+            <div class="faq-body">
+              完全免费，没有VIP会员分级，也不会人为限制你的画面清晰度和帧率。只要两台设备网络条件允许，软件会自动让它们直接点对点传输，把你家宽带的速度跑满。而且全部源代码都在
+              <a href="https://github.com/onekb/OpenUU" target="_blank" rel="noopener noreferrer" style="color: var(--blue);">GitHub 公开</a>，任何人都可以监督。
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span>远程连接安全吗？别人会不会猜中我的 9 位数字连进来？</span>
+              <span class="faq-plus">+</span>
+            </summary>
+            <div class="faq-body">
+              非常安全。除了 9 位数字代码外，必须同时输入你电脑上的访问密码才能发起连接；如果有人连续输错密码，系统会自动暂时封锁尝试。并且所有画面和操作都是端到端加密的，中间任何服务器都无法偷看你的屏幕内容。
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span>进阶选项：我想自己搭建专属私有服务器，或者查看开源代码？</span>
+              <span class="faq-plus">+</span>
+            </summary>
+            <div class="faq-body">
+              OpenUU 默认装好就能直接跨网使用，普通用户无需折腾任何配置。如果你是技术爱好者、或者公司内部希望 100% 私有化部署，可以查看
+              <a href="https://github.com/onekb/OpenUU" target="_blank" rel="noopener noreferrer" style="color: var(--blue);">GitHub 开源仓库</a>，或者直接复制下方提示词发给 AI 助手帮你全自动部署：
+              <pre class="prompt-drawer" id="ai-prompt-box"></pre>
+              <button type="button" class="btn btn-sm btn-secondary" id="copy-prompt">复制一键部署提示词</button>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ========================================================================
+       FOOTER
+       ======================================================================== -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div>OpenUU · 免费开源的远程控制工具</div>
+      <div class="footer-links">
+        <a href="https://github.com/onekb/OpenUU" target="_blank" rel="noopener noreferrer">开源主页 (GitHub)</a>
+        <a href="https://github.com/onekb/OpenUU/releases/latest" target="_blank" rel="noopener noreferrer">历史版本下载</a>
+        <a href="https://github.com/onekb/OpenUU/issues" target="_blank" rel="noopener noreferrer">意见反馈</a>
+        <a href="/health" target="_blank" rel="noopener noreferrer" id="footer-health">连接服务状态</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

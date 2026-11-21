@@ -582,7 +582,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
-    if (request.method === "GET" && (path === "/" || path === "/health")) {
+    if (request.method === "GET" && path === "/health") {
       return handleHealth(env);
     }
 
@@ -602,6 +602,14 @@ export default {
     if (request.method === "GET" && path.startsWith("/v1/resolve/")) {
       const code = decodeURIComponent(path.slice("/v1/resolve/".length));
       return handleResolve(request, code, env);
+    }
+
+    if (!path.startsWith("/v1/") && env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
+    if (request.method === "GET" && path === "/") {
+      return handleHealth(env);
     }
 
     return jsonResponse({ error: "not found" }, 404);

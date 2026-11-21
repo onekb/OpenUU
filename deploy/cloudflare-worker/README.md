@@ -1,6 +1,7 @@
-# OpenUU 9位设备码寻址服务 —— Cloudflare Workers + D1 零成本部署
+# OpenUU 官网 & 9位设备码寻址服务 —— Cloudflare Workers + Static Assets + D1
 
-本目录提供 100% 兼容 `openuu-core` 的无服务器寻址后端，基于 **Cloudflare Workers + D1 (Serverless SQLite)**：
+本目录同时承载 **OpenUU 官方网站（`public/` 静态资源）** 与 **100% 兼容 `openuu-core` 的无服务器寻址后端（`src/index.js`）**，共用同一个域名（如 `https://openuu.1kb.ren`）：
+- **同域零冲突、静态访问零配额消耗**：通过 Cloudflare Workers Static Assets（`run_worker_first = ["/v1/*", "/health"]`），浏览器访问 `/` 官网页面与图片直接由 Cloudflare 边缘静态缓存响应（不消耗 Worker 请求额度）；而客户端 API（`/v1/*` 与 `/health`）直达 Worker 处理。
 - **为什么选 D1 而不是 KV**：Workers KV 免费版每天仅限 1,000 次写入且有 60 秒最终一致性延迟；而 **Cloudflare D1 免费版每天支持 100,000 次写入 + 5,000,000 次读取，且强一致零延迟**，首次请求自动建表，零手动 SQL 迁移。
 - **零第三方依赖**：纯原生 WebCrypto `Ed25519` 签名验签与 `SHA-256` 确定性 9 位设备码派生。
 

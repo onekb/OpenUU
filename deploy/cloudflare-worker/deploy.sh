@@ -18,11 +18,17 @@ if "$WRANGLER" whoami 2>&1 | grep -q "not authenticated"; then
   "$WRANGLER" login
 fi
 
-echo "==> 2/4 Ensuring D1 database 'openuu-coord-db' exists..."
+echo "==> 2/4 Ensuring D1 database exists..."
 DB_JSON="$("$WRANGLER" d1 list --json)"
 DB_ID="$(node -e '
+  const fs = require("fs");
   const list = JSON.parse(process.argv[1] || "[]");
-  const found = list.find(d => d.name === "openuu-coord-db");
+  const toml = fs.readFileSync("wrangler.toml", "utf8");
+  const curIdMatch = toml.match(/database_id\s*=\s*"([^"]+)"/);
+  const curId = curIdMatch ? curIdMatch[1] : "";
+  const byId = curId && list.find(d => d.uuid === curId);
+  const byName = list.find(d => d.name === "openuu-coord-db" || d.name === "chameye-coord-db");
+  const found = byId || byName;
   if (found && found.uuid) process.stdout.write(found.uuid);
 ' "$DB_JSON")"
 
