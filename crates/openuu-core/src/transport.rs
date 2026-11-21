@@ -18,8 +18,8 @@ use tracing::{debug, warn};
 use crate::error::{OpenUUError, Result};
 use crate::identity::{sha256_hex, DeviceIdentity};
 use crate::protocol::{
-    decode_control_payload, encode_control, pb, StreamType, VideoFrame, MAX_CONTROL_FRAME_LEN,
-    PROTOCOL_VERSION, VIDEO_HEADER_LEN,
+    decode_control_payload, encode_control, pb, AudioFrame, StreamType, VideoFrame,
+    AUDIO_FLAG_CONFIG, AUDIO_HEADER_LEN, MAX_CONTROL_FRAME_LEN, PROTOCOL_VERSION, VIDEO_HEADER_LEN,
 };
 use crate::wan::{
     inspect_iroh_connection, is_lan_or_private_ip, LinkMode, LinkTelemetry, PinRateLimiter,
@@ -328,6 +328,7 @@ pub struct PeerSession {
     backend: SessionBackend,
     control_in_tx: mpsc::Sender<Bytes>,
     video_in_tx: mpsc::Sender<Bytes>,
+    audio_in_tx: mpsc::Sender<Bytes>,
 }
 
 impl PeerSession {
@@ -374,6 +375,23 @@ impl PeerSession {
             .send(encoded)
             .await
             .map_err(|_| OpenUUError::Protocol("video send stream closed".into()))
+    }
+
+    /// Enqueue an encoded audio frame in strict FIFO order on the caller thread.
+    pub fn try_send_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
+        let encoded = frame.encode_frame()?;
+        self.audio_in_tx
+            .try_send(encoded)
+            .map_err(|_| OpenUUError::Protocol("audio send queue full or closed".into()))
+    }
+
+    /// Send an encoded audio frame over the dedicated unidirectional Audio Stream (`0x02`).
+    pub async fn send_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
+        let encoded = frame.encode_frame()?;
+        self.audio_in_tx
+            .send(encoded)
+            .await
+            .map_err(|_| OpenUUError::Protocol("audio send stream closed".into()))
     }
 
     /// Stream a local file over a dedicated unidirectional QUIC Blob Stream (`0x03`) without blocking video/control.
@@ -443,6 +461,7 @@ impl PeerSession {
 pub struct IncomingChannels {
     pub control_rx: mpsc::Receiver<pb::ControlEnvelope>,
     pub video_rx: mpsc::Receiver<VideoFrame>,
+    pub audio_rx: mpsc::Receiver<AudioFrame>,
 }
 
 /// Bind a QUIC Host server on `bind_addr`. When `0.0.0.0:port` is passed, automatically upgrades to a
@@ -865,8 +884,10 @@ fn spawn_session_loops(
 ) -> (Arc<PeerSession>, IncomingChannels) {
     let (ctrl_out_tx, ctrl_out_rx) = mpsc::channel::<pb::ControlEnvelope>(256);
     let (vid_out_tx, vid_out_rx) = mpsc::channel::<VideoFrame>(128);
+    let (aud_out_tx, aud_out_rx) = mpsc::channel::<AudioFrame>(96);
     let (ctrl_in_tx, mut ctrl_in_rx) = mpsc::channel::<Bytes>(512);
     let (vid_in_tx, mut vid_in_rx) = mpsc::channel::<Bytes>(128);
+    let (aud_in_tx, mut aud_in_rx) = mpsc::channel::<Bytes>(96);
 
     // Control stream writer (strict FIFO order, zero mutex contention across Tokio threads)
     tokio::spawn(async move {
@@ -939,6 +960,53 @@ fn spawn_session_loops(
         }
     });
 
+    // Audio stream writer: dedicated QUIC unidirectional stream (`0x02`) with burst congestion shedding
+    // so transient WAN stalls never accumulate multi-second audio latency behind live video.
+    let backend_audio_tx = backend.clone();
+    tokio::spawn(async move {
+        let mut audio_stream: Option<BackendSendStream> = None;
+        let mut batch: Vec<Bytes> = Vec::with_capacity(16);
+        while let Some(first) = aud_in_rx.recv().await {
+            batch.clear();
+            batch.push(first);
+            while let Ok(next) = aud_in_rx.try_recv() {
+                batch.push(next);
+            }
+            if batch.len() > 14 {
+                if let Some(mut old_stream) = audio_stream.take() {
+                    old_stream.reset_zero();
+                }
+                let keep_from = batch.len() - 8;
+                let mut trimmed: Vec<Bytes> = Vec::with_capacity(9);
+                for (idx, pkt) in batch.iter().enumerate() {
+                    let is_cfg = pkt.len() >= 2 && (pkt[1] & AUDIO_FLAG_CONFIG) != 0;
+                    if is_cfg || idx >= keep_from {
+                        trimmed.push(pkt.clone());
+                    }
+                }
+                batch = trimmed;
+            }
+            for frame_bytes in &batch {
+                if audio_stream.is_none() {
+                    match backend_audio_tx.open_uni().await {
+                        Ok(mut s) => {
+                            if s.write_all(&[StreamType::Audio as u8]).await.is_err() {
+                                break;
+                            }
+                            audio_stream = Some(s);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if let Some(s) = audio_stream.as_mut() {
+                    if s.write_all(frame_bytes).await.is_err() {
+                        audio_stream = None;
+                    }
+                }
+            }
+        }
+    });
+
     // Control stream reader
     let ctrl_out_tx_blob = ctrl_out_tx.clone();
     tokio::spawn(async move {
@@ -964,6 +1032,7 @@ fn spawn_session_loops(
             match backend_uni.accept_uni().await {
                 Ok(mut stream) => {
                     let vid_tx = vid_out_tx.clone();
+                    let aud_tx = aud_out_tx.clone();
                     let ctrl_tx_for_blob = ctrl_out_tx_blob.clone();
                     tokio::spawn(async move {
                         let mut tag = [0u8; 1];
@@ -975,7 +1044,7 @@ fn spawn_session_loops(
                                 read_video_stream_loop(&mut stream, &vid_tx).await;
                             }
                             Ok(StreamType::Audio) => {
-                                debug!("audio stream accepted (Phase 3)");
+                                read_audio_stream_loop(&mut stream, &aud_tx).await;
                             }
                             Ok(StreamType::Blob) => {
                                 read_blob_stream(&mut stream, &ctrl_tx_for_blob).await;
@@ -996,6 +1065,7 @@ fn spawn_session_loops(
         backend,
         control_in_tx: ctrl_in_tx,
         video_in_tx: vid_in_tx,
+        audio_in_tx: aud_in_tx,
     });
 
     (
@@ -1003,6 +1073,7 @@ fn spawn_session_loops(
         IncomingChannels {
             control_rx: ctrl_out_rx,
             video_rx: vid_out_rx,
+            audio_rx: aud_out_rx,
         },
     )
 }
@@ -1150,11 +1221,41 @@ async fn read_video_stream_loop(stream: &mut BackendRecvStream, tx: &mpsc::Sende
     }
 }
 
+async fn read_audio_stream_loop(stream: &mut BackendRecvStream, tx: &mpsc::Sender<AudioFrame>) {
+    let mut header = [0u8; AUDIO_HEADER_LEN];
+    loop {
+        if stream.read_exact(&mut header).await.is_err() {
+            break;
+        }
+        let Ok((codec, flags, channels, sample_rate, timestamp_us, payload_len)) =
+            AudioFrame::decode_header(&header)
+        else {
+            warn!("corrupt audio frame header");
+            break;
+        };
+        let mut payload = vec![0u8; payload_len];
+        if stream.read_exact(&mut payload).await.is_err() {
+            break;
+        }
+        let frame = AudioFrame {
+            codec,
+            flags,
+            channels,
+            sample_rate,
+            timestamp_us,
+            payload: Bytes::from(payload),
+        };
+        if tx.send(frame).await.is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::identity::TrustedPeer;
-    use crate::protocol::{VideoCodec, VIDEO_FLAG_KEYFRAME};
+    use crate::protocol::{AudioCodec, VideoCodec, VIDEO_FLAG_KEYFRAME};
     use crate::wan::{bind_iroh_endpoint, OpenUUTicket};
 
     #[tokio::test]
@@ -1205,6 +1306,18 @@ mod tests {
         host_session.send_video_frame(&sample_frame).await.unwrap();
         let received_frame = client_ch.video_rx.recv().await.unwrap();
         assert_eq!(received_frame, sample_frame);
+
+        let sample_audio = AudioFrame {
+            codec: AudioCodec::AacLc,
+            flags: 0,
+            channels: 2,
+            sample_rate: 48_000,
+            timestamp_us: 1_021_333,
+            payload: Bytes::from_static(&[0x21, 0x10, 0x04, 0x60]),
+        };
+        host_session.send_audio_frame(&sample_audio).await.unwrap();
+        let received_audio = client_ch.audio_rx.recv().await.unwrap();
+        assert_eq!(received_audio, sample_audio);
 
         client_session.close();
         host_session.close();

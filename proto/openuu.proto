@@ -20,6 +20,7 @@ message ControlEnvelope {
     ResizeWindowRequest resize_window = 21;
     FocusWindowRequest focus_window = 22;
     RequestKeyframe request_keyframe = 23;
+    AudioControlRequest audio_control = 24;
 
     // 3. Input Events & Local IME Text Commit
     MouseEvent mouse_event = 30;
@@ -126,6 +127,11 @@ message FocusWindowRequest {
 
 message RequestKeyframe {
   uint32 window_id = 1;
+}
+
+message AudioControlRequest {
+  bool enabled = 1;            // Whether Client wants Host to stream remote audio
+  bool mute_host = 2;          // Whether Host should mute its local speakers while streaming
 }
 
 message MouseEvent {

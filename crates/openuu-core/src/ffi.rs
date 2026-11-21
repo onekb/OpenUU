@@ -22,7 +22,7 @@ use crate::identity::{
     generate_pairing_pin, generate_strong_access_code, normalize_device_code, now_epoch_ms,
     DeviceIdentity, TrustedPeer, WanConfig,
 };
-use crate::protocol::{pb, VideoCodec, VideoFrame};
+use crate::protocol::{pb, AudioCodec, AudioFrame, VideoCodec, VideoFrame, MAX_AUDIO_FRAME_LEN};
 use crate::transport::{
     accept_client_session_guarded, accept_iroh_session, bind_host_endpoint, connect_to_host_pinned,
     connect_via_iroh, resolve_host_socket_addr, IncomingChannels, PeerSession,
@@ -47,6 +47,18 @@ pub type OpenUUVideoCallback = extern "C" fn(
     usize,
 );
 pub type OpenUUStatusCallback = extern "C" fn(*mut c_void, *const c_char);
+pub type OpenUUAudioCallback = extern "C" fn(
+    *mut c_void,
+    u8,
+    u8,
+    u8,
+    u32,
+    u64,
+    *const u8,
+    usize,
+);
+
+type AudioCbSlot = Arc<Mutex<Option<(OpenUUAudioCallback, SendPtr)>>>;
 
 #[derive(Clone, Copy)]
 struct SendPtr(usize);
@@ -114,6 +126,7 @@ pub struct OpenUURuntime {
     iroh_host_endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
     iroh_client_endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
     active_session: Arc<Mutex<Option<Arc<PeerSession>>>>,
+    audio_cb: AudioCbSlot,
     host_ticket: Arc<Mutex<String>>,
     coord_status: Arc<Mutex<String>>,
     host_running: Arc<AtomicBool>,
@@ -222,6 +235,10 @@ enum ControlEventJson {
     RequestKeyframe {
         window_id: u32,
     },
+    AudioControl {
+        audio_enabled: bool,
+        mute_host: bool,
+    },
     ResizeWindow {
         window_id: u32,
         width: f32,
@@ -329,6 +346,10 @@ fn envelope_to_json(env: &pb::ControlEnvelope) -> String {
                 window_id: r.window_id,
             }
         }
+        Some(pb::control_envelope::Payload::AudioControl(ac)) => ControlEventJson::AudioControl {
+            audio_enabled: ac.enabled,
+            mute_host: ac.mute_host,
+        },
         Some(pb::control_envelope::Payload::Notification(n)) => ControlEventJson::Notification {
             app_bundle_id: n.app_bundle_id.clone(),
             title: n.title.clone(),
@@ -418,6 +439,7 @@ fn attach_session_callbacks(
     session: Arc<PeerSession>,
     mut channels: IncomingChannels,
     active_session: Arc<Mutex<Option<Arc<PeerSession>>>>,
+    audio_cb_slot: AudioCbSlot,
     on_control: Option<OpenUUControlCallback>,
     on_video: Option<OpenUUVideoCallback>,
     on_status: Option<OpenUUStatusCallback>,
@@ -468,6 +490,24 @@ fn attach_session_callbacks(
                     frame.timestamp_us,
                     frame.width,
                     frame.height,
+                    frame.payload.as_ptr(),
+                    frame.payload.len(),
+                );
+            }
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(frame) = channels.audio_rx.recv().await {
+            let entry = audio_cb_slot.lock().ok().and_then(|g| *g);
+            if let Some((cb, audio_ctx)) = entry {
+                cb(
+                    audio_ctx.as_ptr(),
+                    frame.codec as u8,
+                    frame.flags,
+                    frame.channels,
+                    frame.sample_rate,
+                    frame.timestamp_us,
                     frame.payload.as_ptr(),
                     frame.payload.len(),
                 );
@@ -594,6 +634,7 @@ pub unsafe extern "C" fn openuu_runtime_create(device_name: *const c_char) -> *m
             iroh_host_endpoint: Arc::new(Mutex::new(None)),
             iroh_client_endpoint: Arc::new(Mutex::new(None)),
             active_session: Arc::new(Mutex::new(None)),
+            audio_cb: Arc::new(Mutex::new(None)),
             host_ticket: Arc::new(Mutex::new(String::new())),
             coord_status: Arc::new(Mutex::new("未启动".to_string())),
             host_running: Arc::new(AtomicBool::new(false)),
@@ -647,6 +688,7 @@ pub unsafe extern "C" fn openuu_runtime_create_with_dir(
             iroh_host_endpoint: Arc::new(Mutex::new(None)),
             iroh_client_endpoint: Arc::new(Mutex::new(None)),
             active_session: Arc::new(Mutex::new(None)),
+            audio_cb: Arc::new(Mutex::new(None)),
             host_ticket: Arc::new(Mutex::new(String::new())),
             coord_status: Arc::new(Mutex::new("未启动".to_string())),
             host_running: Arc::new(AtomicBool::new(false)),
@@ -1025,6 +1067,7 @@ pub unsafe extern "C" fn openuu_start_host(
     // 1. Spawn LAN / Dual-Stack IPv6 Quinn accept loop
     let identity_arc_lan = Arc::clone(&rt.identity);
     let active_session_lan = Arc::clone(&rt.active_session);
+    let audio_cb_lan = Arc::clone(&rt.audio_cb);
     let limiter_lan = rt.pin_limiter.clone();
     let pin_lan = pin.clone();
     rt.tokio_rt.spawn(async move {
@@ -1057,6 +1100,7 @@ pub unsafe extern "C" fn openuu_start_host(
                         session,
                         channels,
                         Arc::clone(&active_session_lan),
+                        Arc::clone(&audio_cb_lan),
                         on_control,
                         on_video,
                         on_status,
@@ -1082,6 +1126,7 @@ pub unsafe extern "C" fn openuu_start_host(
         let ticket_slot = Arc::clone(&rt.host_ticket);
         let coord_status_slot = Arc::clone(&rt.coord_status);
         let active_session_wan = Arc::clone(&rt.active_session);
+        let audio_cb_wan = Arc::clone(&rt.audio_cb);
         let host_running = Arc::clone(&rt.host_running);
         let stop_notify = Arc::clone(&rt.host_stop_notify);
         let limiter_wan = rt.pin_limiter.clone();
@@ -1255,6 +1300,7 @@ pub unsafe extern "C" fn openuu_start_host(
                             session,
                             channels,
                             Arc::clone(&active_session_wan),
+                            Arc::clone(&audio_cb_wan),
                             on_control,
                             on_video,
                             on_status,
@@ -1383,6 +1429,7 @@ unsafe fn openuu_connect_client_inner(
     let pin_owned = pin_str.trim().to_string();
     let identity_arc = Arc::clone(&rt_ref.identity);
     let active_session = Arc::clone(&rt_ref.active_session);
+    let audio_cb = Arc::clone(&rt_ref.audio_cb);
     let ctx = SendPtr::new(user_ctx);
 
     rt_ref.tokio_rt.spawn(async move {
@@ -1418,6 +1465,7 @@ unsafe fn openuu_connect_client_inner(
                     session,
                     channels,
                     active_session,
+                    audio_cb,
                     on_control,
                     on_video,
                     on_status,
@@ -1495,6 +1543,7 @@ unsafe fn openuu_connect_smart_inner(
     let discovery_arc = Arc::clone(&rt_ref.discovery);
     let iroh_client_slot = Arc::clone(&rt_ref.iroh_client_endpoint);
     let active_session = Arc::clone(&rt_ref.active_session);
+    let audio_cb = Arc::clone(&rt_ref.audio_cb);
     let ctx = SendPtr::new(user_ctx);
 
     rt_ref.tokio_rt.spawn(async move {
@@ -1574,6 +1623,7 @@ unsafe fn openuu_connect_smart_inner(
                         session,
                         channels,
                         active_session,
+                        audio_cb,
                         on_control,
                         on_video,
                         on_status,
@@ -1787,6 +1837,7 @@ unsafe fn openuu_connect_smart_inner(
                                 session,
                                 channels,
                                 active_session,
+                                audio_cb,
                                 on_control,
                                 on_video,
                                 on_status,
@@ -1842,6 +1893,7 @@ unsafe fn openuu_connect_smart_inner(
                             session,
                             channels,
                             active_session,
+                            audio_cb,
                             on_control,
                             on_video,
                             on_status,
@@ -2018,6 +2070,7 @@ unsafe fn openuu_connect_smart_inner(
                     session,
                     channels,
                     active_session,
+                    audio_cb,
                     on_control,
                     on_video,
                     on_status,
@@ -2164,6 +2217,80 @@ pub unsafe extern "C" fn openuu_send_video_frame(
         });
     }
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_set_audio_callback(
+    rt: *mut OpenUURuntime,
+    on_audio: Option<OpenUUAudioCallback>,
+    user_ctx: *mut c_void,
+) -> i32 {
+    if rt.is_null() {
+        return -1;
+    }
+    let rt = &*rt;
+    if let Ok(mut guard) = rt.audio_cb.lock() {
+        *guard = on_audio.map(|cb| (cb, SendPtr::new(user_ctx)));
+        0
+    } else {
+        -2
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_send_audio_frame(
+    rt: *mut OpenUURuntime,
+    codec: u8,
+    flags: u8,
+    channels: u8,
+    sample_rate: u32,
+    timestamp_us: u64,
+    data: *const u8,
+    data_len: usize,
+) -> i32 {
+    if rt.is_null() || data.is_null() || data_len == 0 || data_len > MAX_AUDIO_FRAME_LEN {
+        return -1;
+    }
+    let rt = &*rt;
+    let Ok(codec) = AudioCodec::try_from(codec) else {
+        return -2;
+    };
+    let Some(session) = rt.active_session.lock().ok().and_then(|g| g.clone()) else {
+        return -3;
+    };
+    let payload = Bytes::copy_from_slice(slice::from_raw_parts(data, data_len));
+    let frame = AudioFrame {
+        codec,
+        flags,
+        channels,
+        sample_rate,
+        timestamp_us,
+        payload,
+    };
+    if session.try_send_audio_frame(&frame).is_err() {
+        rt.tokio_rt.spawn(async move {
+            let _ = session.send_audio_frame(&frame).await;
+        });
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_send_audio_control(
+    rt: *mut OpenUURuntime,
+    enabled: bool,
+    mute_host: bool,
+) -> i32 {
+    if rt.is_null() {
+        return -1;
+    }
+    send_control_async(
+        &*rt,
+        pb::control_envelope::Payload::AudioControl(pb::AudioControlRequest {
+            enabled,
+            mute_host,
+        }),
+    )
 }
 
 fn send_control_async(rt: &OpenUURuntime, payload: pb::control_envelope::Payload) -> i32 {
@@ -2664,6 +2791,23 @@ mod tests {
         }
     }
 
+    extern "C" fn test_audio_cb(
+        ctx: *mut c_void,
+        codec: u8,
+        _flags: u8,
+        channels: u8,
+        sample_rate: u32,
+        timestamp_us: u64,
+        data: *const u8,
+        data_len: usize,
+    ) {
+        unsafe {
+            let tx = &*(ctx as *const std_mpsc::Sender<(u8, u8, u32, u64, Vec<u8>)>);
+            let bytes = slice::from_raw_parts(data, data_len).to_vec();
+            let _ = tx.send((codec, channels, sample_rate, timestamp_us, bytes));
+        }
+    }
+
     #[test]
     fn ffi_app_dirs_and_runtime_create_with_dir() {
         let _guard = FFI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2803,6 +2947,49 @@ mod tests {
                 }
             }
             assert!(found_mouse, "host should receive mouse JSON");
+
+            let (aud_tx, aud_rx) = std_mpsc::channel::<(u8, u8, u32, u64, Vec<u8>)>();
+            let aud_tx_ptr = (&aud_tx as *const _) as *mut c_void;
+            assert_eq!(
+                openuu_set_audio_callback(client_rt, Some(test_audio_cb), aud_tx_ptr),
+                0
+            );
+            assert_eq!(openuu_send_audio_control(client_rt, true, true), 0);
+
+            let mut found_audio_ctrl = false;
+            for _ in 0..4 {
+                if let Ok(received) = rx.recv_timeout(Duration::from_secs(2)) {
+                    if received.contains("\"type\":\"audio_control\"") {
+                        assert!(received.contains("\"audio_enabled\":true"), "got: {received}");
+                        assert!(received.contains("\"mute_host\":true"), "got: {received}");
+                        found_audio_ctrl = true;
+                        break;
+                    }
+                }
+            }
+            assert!(found_audio_ctrl, "host should receive audio_control JSON");
+
+            let sample_aac = [0x21u8, 0x10, 0x04, 0x60, 0xAA, 0x55];
+            assert_eq!(
+                openuu_send_audio_frame(
+                    host_rt,
+                    3,
+                    0,
+                    2,
+                    48_000,
+                    321_000,
+                    sample_aac.as_ptr(),
+                    sample_aac.len(),
+                ),
+                0
+            );
+            let (got_codec, got_ch, got_sr, got_ts, got_bytes) =
+                aud_rx.recv_timeout(Duration::from_secs(2)).expect("client should receive audio frame");
+            assert_eq!(got_codec, 3);
+            assert_eq!(got_ch, 2);
+            assert_eq!(got_sr, 48_000);
+            assert_eq!(got_ts, 321_000);
+            assert_eq!(got_bytes, sample_aac);
 
             openuu_disconnect(client_rt);
             openuu_stop_host(host_rt);

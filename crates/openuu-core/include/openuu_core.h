@@ -31,6 +31,20 @@ typedef void (*OpenUUVideoCallback)(
 /// Callback invoked on connection state changes (UTF-8 status message).
 typedef void (*OpenUUStatusCallback)(void *user_ctx, const char *status);
 
+/// Callback invoked when an encoded audio frame arrives (`StreamType::Audio` = 0x02).
+/// `codec`: 1 = PCM S16LE, 2 = Opus, 3 = AAC-LC.
+/// Pointer `data` is only valid during the callback; copy immediately.
+typedef void (*OpenUUAudioCallback)(
+    void *user_ctx,
+    uint8_t codec,
+    uint8_t flags,
+    uint8_t channels,
+    uint32_t sample_rate,
+    uint64_t timestamp_us,
+    const uint8_t *data,
+    size_t data_len
+);
+
 /// Initialize Android TLS certificate verification (`rustls-platform-verifier`) with JNIEnv* and Android Context.
 /// Must be called before any TLS / HTTPS / Iroh WAN calls on Android. No-op (returns 0) on non-Android platforms.
 int32_t openuu_init_android_tls(void *jni_env, void *app_context);
@@ -132,6 +146,32 @@ int32_t openuu_send_video_frame(
     uint16_t height,
     const uint8_t *data,
     size_t data_len
+);
+
+/// Register (or clear with NULL) a callback for incoming audio frames (`StreamType::Audio`).
+int32_t openuu_set_audio_callback(
+    OpenUURuntime *rt,
+    OpenUUAudioCallback on_audio,
+    void *user_ctx
+);
+
+/// Send an encoded audio frame (Host -> Client). Returns 0 on success.
+int32_t openuu_send_audio_frame(
+    OpenUURuntime *rt,
+    uint8_t codec,
+    uint8_t flags,
+    uint8_t channels,
+    uint32_t sample_rate,
+    uint64_t timestamp_us,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/// Send remote audio enable & host-speaker-mute preference (Client -> Host).
+int32_t openuu_send_audio_control(
+    OpenUURuntime *rt,
+    bool enabled,
+    bool mute_host
 );
 
 /// Send a mouse event (Client -> Host). event_type: 0=Move, 1=Down, 2=Up, 3=Drag.
