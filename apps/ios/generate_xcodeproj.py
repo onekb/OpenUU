@@ -301,7 +301,7 @@ def generate() -> None:
 
     target_common = """\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 \t\t\t\tCODE_SIGN_STYLE = Automatic;
-\t\t\t\tCURRENT_PROJECT_VERSION = 1;
+\t\t\t\tCURRENT_PROJECT_VERSION = 4;
 \t\t\t\tENABLE_PREVIEWS = YES;
 \t\t\t\tFRAMEWORK_SEARCH_PATHS = (
 \t\t\t\t\t"$(inherited)",
@@ -314,7 +314,7 @@ def generate() -> None:
 \t\t\t\t\t"$(inherited)",
 \t\t\t\t\t"@executable_path/Frameworks",
 \t\t\t\t);
-\t\t\t\tMARKETING_VERSION = 0.1.0;
+\t\t\t\tMARKETING_VERSION = 0.4.0;
 \t\t\t\tOTHER_LDFLAGS = (
 \t\t\t\t\t"$(inherited)",
 \t\t\t\t\t"-lc++",
