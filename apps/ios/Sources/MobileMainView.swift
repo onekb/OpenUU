@@ -215,10 +215,16 @@ private struct ConnectTabView: View {
                 .frame(width: 50, height: 50)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("OpenUU 远控 · 移动客户端")
-                    .font(.headline)
-                    .foregroundStyle(OpenUUTheme.textPrimary)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("OpenUU")
+                        .font(.headline)
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                    Text("工作伴侣，永久免费。")
+                        .font(.caption)
+                        .foregroundStyle(OpenUUTheme.textSecondary)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 8) {
                     Circle()
                         .fill(statusDotColor)
@@ -292,6 +298,12 @@ private struct ConnectTabView: View {
                 TextField("例如 839 201 475 或 192.168.1.10", text: $viewModel.targetInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .onChange(of: viewModel.targetInput) { _, newVal in
+                        let formatted = DeviceCodeFormatter.formatInput(newVal)
+                        if formatted != newVal {
+                            viewModel.targetInput = formatted
+                        }
+                    }
                     .padding(10)
                     .background(OpenUUTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
                     .foregroundStyle(OpenUUTheme.textPrimary)
@@ -383,7 +395,7 @@ private struct ConnectTabView: View {
 
             HStack {
                 Button {
-                    let target = viewModel.targetInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let target = DeviceCodeFormatter.sanitizeForUse(viewModel.targetInput)
                     guard !target.isEmpty else { return }
                     let port = UInt16(viewModel.portInput) ?? OpenUUConstants.defaultPort
                     viewModel.deviceBook.addOrUpdateDevice(
@@ -553,9 +565,12 @@ private struct DeviceBookTabView: View {
     private var filteredDevices: [ManagedRemoteDevice] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return store.devices }
+        let qNoSpace = String(q.filter { !$0.isWhitespace })
         return store.devices.filter {
             $0.alias.lowercased().contains(q)
                 || $0.target.lowercased().contains(q)
+                || $0.target.lowercased().contains(qNoSpace)
+                || $0.formattedTarget.lowercased().contains(q)
                 || $0.notes.lowercased().contains(q)
         }
     }
@@ -680,7 +695,7 @@ private struct DeviceBookTabView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    viewModel.targetInput = dev.target
+                    viewModel.targetInput = DeviceCodeFormatter.formatInput(dev.target)
                     viewModel.portInput = "\(dev.port)"
                     viewModel.pinInput = dev.savedPassword
                     viewModel.connectSmart(target: dev.target, port: dev.port, pin: dev.savedPassword)
@@ -695,7 +710,7 @@ private struct DeviceBookTabView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    viewModel.targetInput = dev.target
+                    viewModel.targetInput = DeviceCodeFormatter.formatInput(dev.target)
                     viewModel.portInput = "\(dev.port)"
                     viewModel.pinInput = dev.savedPassword
                     viewModel.connectSmart(
@@ -759,7 +774,7 @@ private struct DeviceEditorSheet: View {
         self.existing = existing
         self.onSave = onSave
         _alias = State(initialValue: existing?.alias ?? "")
-        _target = State(initialValue: existing?.target ?? "")
+        _target = State(initialValue: DeviceCodeFormatter.formatInput(existing?.target ?? ""))
         _port = State(initialValue: "\(existing?.port ?? OpenUUConstants.defaultPort)")
         _password = State(initialValue: existing?.savedPassword ?? "")
         _isFavorite = State(initialValue: existing?.isFavorite ?? false)
@@ -774,6 +789,12 @@ private struct DeviceEditorSheet: View {
                     TextField("目标地址（9 位设备码 / IP / 域名）", text: $target)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .onChange(of: target) { _, newVal in
+                            let formatted = DeviceCodeFormatter.formatInput(newVal)
+                            if formatted != newVal {
+                                target = formatted
+                            }
+                        }
                     TextField("端口", text: $port)
                         .keyboardType(.numberPad)
                     SecureField("保存密码 / PIN（可选）", text: $password)
@@ -792,10 +813,10 @@ private struct DeviceEditorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
                         let p = UInt16(port) ?? OpenUUConstants.defaultPort
-                        onSave(alias, target, p, password, isFavorite, notes)
+                        onSave(alias, DeviceCodeFormatter.sanitizeForUse(target), p, password, isFavorite, notes)
                         dismiss()
                     }
-                    .disabled(target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(DeviceCodeFormatter.sanitizeForUse(target).isEmpty)
                 }
             }
         }

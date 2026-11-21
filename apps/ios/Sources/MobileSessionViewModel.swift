@@ -341,14 +341,14 @@ final class MobileSessionViewModel: ObservableObject {
     }
 
     func connectFromForm() {
-        let cleanTarget = targetInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(targetInput)
         guard !cleanTarget.isEmpty else { return }
         let port = UInt16(portInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? OpenUUConstants.defaultPort
         connectSmart(target: cleanTarget, port: port, pin: pinInput.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     func connectSmart(target: String, port: UInt16 = OpenUUConstants.defaultPort, pin: String = "", autoOpenDesktop: Bool = false) {
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
         guard !cleanTarget.isEmpty else { return }
         lastConnectedTarget = cleanTarget
         lastConnectedPort = port

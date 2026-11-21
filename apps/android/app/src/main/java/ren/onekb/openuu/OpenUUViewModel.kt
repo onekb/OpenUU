@@ -83,9 +83,24 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private var activeWindowIdAtomic: Int = 0
 
     @Volatile
+    private var dragTargetWindowId: Int = 0
+
+    @Volatile
+    private var dragTargetRelX: Float = 0f
+
+    @Volatile
+    private var dragTargetRelY: Float = 0f
+
+    @Volatile
     private var e2eConfig: E2EConfig? = null
 
     private var lastSyncedClipHash: String = ""
+
+    private val popoverDecoders = ConcurrentHashMap<Int, VideoDecoderSurface>()
+    private val knownNormalWindowIds = LinkedHashSet<Int>()
+    private var hadPriorTopology: Boolean = false
+    private val windowHistory = ArrayDeque<Int>()
+    private var windowNoticeSeq: Long = 0L
 
     private val _selectedTab = MutableStateFlow(MainTab.CONNECT)
     val selectedTab: StateFlow<MainTab> = _selectedTab.asStateFlow()
@@ -126,8 +141,23 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private val _remoteWindows = MutableStateFlow<List<WindowTopologyItem>>(emptyList())
     val remoteWindows: StateFlow<List<WindowTopologyItem>> = _remoteWindows.asStateFlow()
 
+    private val _normalWindows = MutableStateFlow<List<WindowTopologyItem>>(emptyList())
+    val normalWindows: StateFlow<List<WindowTopologyItem>> = _normalWindows.asStateFlow()
+
+    private val _activePopovers = MutableStateFlow<List<WindowTopologyItem>>(emptyList())
+    val activePopovers: StateFlow<List<WindowTopologyItem>> = _activePopovers.asStateFlow()
+
     private val _selectedWindowId = MutableStateFlow(0)
     val selectedWindowId: StateFlow<Int> = _selectedWindowId.asStateFlow()
+
+    private val _windowSwitchNotice = MutableStateFlow<String?>(null)
+    val windowSwitchNotice: StateFlow<String?> = _windowSwitchNotice.asStateFlow()
+
+    private val _proactiveTabRevealTick = MutableStateFlow(0L)
+    val proactiveTabRevealTick: StateFlow<Long> = _proactiveTabRevealTick.asStateFlow()
+
+    private val _pinLandscapeTabBar = MutableStateFlow(false)
+    val pinLandscapeTabBar: StateFlow<Boolean> = _pinLandscapeTabBar.asStateFlow()
 
     private val _showAppLauncher = MutableStateFlow(true)
     val showAppLauncher: StateFlow<Boolean> = _showAppLauncher.asStateFlow()
@@ -374,8 +404,9 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun connectSmart(target: String, defaultPort: Int = OpenUUConstants.DEFAULT_PORT, pin: String = "") {
-        val cleanTarget = target.trim()
+        val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(target)
         if (cleanTarget.isEmpty() || runtimeHandle == 0L) return
+        clearWindowTrackingState()
         _connectionPhase.value = ConnectionPhase.Connecting("正在连接 $cleanTarget...")
         _statusMessage.value = "正在连接 $cleanTarget..."
         _linkBadge.value = "握手中..."
@@ -390,6 +421,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     fun connectDirect(hostIp: String, port: Int, pin: String) {
         val cleanIp = hostIp.trim()
         if (cleanIp.isEmpty() || runtimeHandle == 0L) return
+        clearWindowTrackingState()
         _connectionPhase.value = ConnectionPhase.Connecting("正在连接 $cleanIp:$port...")
         _statusMessage.value = "正在连接 $cleanIp:$port..."
         _linkBadge.value = "直连握手中..."
@@ -397,6 +429,12 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         val rc = OpenUUNativeBridge.nativeConnectClient(runtimeHandle, cleanIp, port, pin.trim())
         if (rc != 0) {
             _connectionPhase.value = ConnectionPhase.Error("直连参数无效 (rc=$rc)")
+        }
+    }
+
+    fun clearConnectionError() {
+        if (_connectionPhase.value is ConnectionPhase.Error) {
+            _connectionPhase.value = ConnectionPhase.Idle
         }
     }
 
@@ -410,11 +448,72 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         appendLog("已主动断开连接")
     }
 
+    private fun clearWindowTrackingState() {
+        knownNormalWindowIds.clear()
+        hadPriorTopology = false
+        windowHistory.clear()
+        windowNoticeSeq++
+        _windowSwitchNotice.value = null
+        dragTargetWindowId = 0
+        dragTargetRelX = 0f
+        dragTargetRelY = 0f
+    }
+
+    private fun releaseAllPopoverDecoders() {
+        val keys = popoverDecoders.keys.toList()
+        for (id in keys) {
+            popoverDecoders.remove(id)?.release()
+        }
+    }
+
+    fun getOrCreatePopoverDecoder(windowId: Int): VideoDecoderSurface {
+        return popoverDecoders.computeIfAbsent(windowId) { popWinId ->
+            VideoDecoderSurface(
+                onTelemetry = { /* Popover surfaces do not overwrite main stream telemetry */ },
+                onRequestKeyframe = {
+                    val handle = runtimeHandle
+                    if (handle != 0L && popWinId != 0) {
+                        OpenUUNativeBridge.nativeRequestKeyframe(handle, popWinId)
+                    }
+                }
+            )
+        }
+    }
+
+    private fun recomputeWindowBuckets(allWindows: List<WindowTopologyItem>, selectedId: Int) {
+        val normals = allWindows.filter { it.kind != 2 }
+        _normalWindows.value = normals
+
+        val popovers = allWindows.filter { pop ->
+            pop.kind == 2 && (
+                pop.parentWindowId == selectedId ||
+                    pop.parentWindowId == 0 ||
+                    normals.size <= 1
+                )
+        }
+        _activePopovers.value = popovers
+
+        // Pre-create decoders for active popovers and release decoders for closed popovers
+        val activePopoverIds = popovers.map { it.windowId }.toSet()
+        for (pop in popovers) {
+            getOrCreatePopoverDecoder(pop.windowId)
+        }
+        for (existingId in popoverDecoders.keys.toList()) {
+            if (existingId !in activePopoverIds) {
+                popoverDecoders.remove(existingId)?.release()
+            }
+        }
+    }
+
     private fun resetSessionState() {
         activeWindowIdAtomic = 0
+        clearWindowTrackingState()
+        releaseAllPopoverDecoders()
         _selectedWindowId.value = 0
         _remoteApps.value = emptyList()
         _remoteWindows.value = emptyList()
+        _normalWindows.value = emptyList()
+        _activePopovers.value = emptyList()
         _showAppLauncher.value = true
         _manualFullscreen.value = false
         _linkMode.value = ""
@@ -433,43 +532,99 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         if (runtimeHandle == 0L) return
         appendLog("打开远程应用: $appName ($bundleId)")
         _showAppLauncher.value = false
-        videoDecoder.resetStream()
-        activeWindowIdAtomic = 0
-        _selectedWindowId.value = 0
+        val hadActive = activeWindowIdAtomic != 0
+        if (!hadActive) {
+            videoDecoder.resetStream()
+            activeWindowIdAtomic = 0
+            _selectedWindowId.value = 0
+        }
         OpenUUNativeBridge.nativeStartRemoteSession(runtimeHandle, bundleId, 0)
     }
 
     fun openFullDesktop() {
-        openRemoteApp(OpenUUConstants.FULL_DESKTOP_BUNDLE_ID, "整台桌面")
+        openRemoteApp(OpenUUConstants.FULL_DESKTOP_BUNDLE_ID, "Mac 整屏桌面")
     }
 
     fun selectRemoteWindow(windowId: Int) {
-        if (windowId == activeWindowIdAtomic && !_showAppLauncher.value) return
+        val prev = activeWindowIdAtomic
+        if (windowId == prev && !_showAppLauncher.value) {
+            recomputeWindowBuckets(_remoteWindows.value, windowId)
+            return
+        }
+        if (prev != 0 && prev != windowId && _normalWindows.value.any { it.windowId == prev }) {
+            windowHistory.remove(prev)
+            windowHistory.addLast(prev)
+        }
+        dragTargetWindowId = 0
         activeWindowIdAtomic = windowId
         _selectedWindowId.value = windowId
         _showAppLauncher.value = false
         videoDecoder.resetStream()
+        recomputeWindowBuckets(_remoteWindows.value, windowId)
         if (runtimeHandle != 0L && windowId != 0) {
             OpenUUNativeBridge.nativeRequestKeyframe(runtimeHandle, windowId)
         }
     }
 
+    fun closeRemoteWindowTab(windowId: Int) {
+        if (runtimeHandle == 0L || windowId == 0) return
+        OpenUUNativeBridge.nativeSendKeyEvent(
+            runtimeHandle,
+            windowId,
+            MacKeyCodes.W,
+            true,
+            false,
+            MacModifiers.COMMAND
+        )
+        OpenUUNativeBridge.nativeSendKeyEvent(
+            runtimeHandle,
+            windowId,
+            MacKeyCodes.W,
+            false,
+            false,
+            MacModifiers.COMMAND
+        )
+        stopRemoteWindow(windowId)
+    }
+
     fun stopRemoteWindow(windowId: Int) {
         if (runtimeHandle == 0L) return
         OpenUUNativeBridge.nativeStopRemoteSession(runtimeHandle, windowId)
-        val remaining = _remoteWindows.value.filterNot { it.windowId == windowId }
+        knownNormalWindowIds.remove(windowId)
+        windowHistory.remove(windowId)
+        val remaining = _remoteWindows.value.filterNot {
+            it.windowId == windowId || (it.kind == 2 && it.parentWindowId == windowId)
+        }
         _remoteWindows.value = remaining
+        val remainingNormals = remaining.filter { it.kind != 2 }
         if (activeWindowIdAtomic == windowId) {
-            val next = remaining.firstOrNull()?.windowId ?: 0
+            dragTargetWindowId = 0
+            var next = 0
+            while (windowHistory.isNotEmpty()) {
+                val candidate = windowHistory.removeLast()
+                if (remainingNormals.any { it.windowId == candidate }) {
+                    next = candidate
+                    break
+                }
+            }
+            if (next == 0) {
+                next = (remainingNormals.firstOrNull { it.kind == 0 } ?: remainingNormals.firstOrNull())?.windowId ?: 0
+            }
             activeWindowIdAtomic = next
             _selectedWindowId.value = next
+            videoDecoder.resetStream()
             if (next == 0) {
                 _showAppLauncher.value = true
-                videoDecoder.resetStream()
             } else {
+                _showAppLauncher.value = false
                 OpenUUNativeBridge.nativeRequestKeyframe(runtimeHandle, next)
             }
         }
+        recomputeWindowBuckets(remaining, _selectedWindowId.value)
+    }
+
+    fun togglePinLandscapeTabBar() {
+        _pinLandscapeTabBar.value = !_pinLandscapeTabBar.value
     }
 
     fun setShowAppLauncher(show: Boolean) {
@@ -546,10 +701,72 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         button: Int,
         clickCount: Int
     ) {
-        val (lw, lh) = currentLogicalSize()
-        val x = nx.coerceIn(0f, 1f) * lw
-        val y = ny.coerceIn(0f, 1f) * lh
-        sendMouseLogical(x, y, eventType, button, clickCount, _stickyModifiers.value)
+        if (runtimeHandle == 0L) return
+        val (parentW, parentH) = currentLogicalSize()
+        val px = nx.coerceIn(0f, 1f) * parentW
+        val py = ny.coerceIn(0f, 1f) * parentH
+        val mods = _stickyModifiers.value
+
+        // Keep MOUSE_DRAG (3) and MOUSE_UP (2) routed to the same target window that received MOUSE_DOWN (1)
+        if ((eventType == 3 || eventType == 2) && dragTargetWindowId != 0) {
+            val targetId = dragTargetWindowId
+            val pop = _activePopovers.value.firstOrNull { it.windowId == targetId }
+            val (lx, ly) = when {
+                pop != null -> (px - pop.relX) to (py - pop.relY)
+                targetId != activeWindowIdAtomic -> (px - dragTargetRelX) to (py - dragTargetRelY)
+                else -> px to py
+            }
+            if (eventType == 2) {
+                dragTargetWindowId = 0
+                dragTargetRelX = 0f
+                dragTargetRelY = 0f
+            }
+            OpenUUNativeBridge.nativeSendMouseEvent(
+                runtimeHandle,
+                targetId,
+                lx,
+                ly,
+                eventType,
+                button,
+                clickCount,
+                mods
+            )
+            return
+        }
+
+        // Hit-test topmost active popovers (kind == 2) first
+        val hitPopover = _activePopovers.value.asReversed().firstOrNull { pop ->
+            pop.width > 1f && pop.height > 1f &&
+                px >= pop.relX && px <= pop.relX + pop.width &&
+                py >= pop.relY && py <= pop.relY + pop.height
+        }
+        if (hitPopover != null) {
+            val lx = px - hitPopover.relX
+            val ly = py - hitPopover.relY
+            if (eventType == 1) {
+                dragTargetWindowId = hitPopover.windowId
+                dragTargetRelX = hitPopover.relX
+                dragTargetRelY = hitPopover.relY
+            }
+            OpenUUNativeBridge.nativeSendMouseEvent(
+                runtimeHandle,
+                hitPopover.windowId,
+                lx,
+                ly,
+                eventType,
+                button,
+                clickCount,
+                mods
+            )
+            return
+        }
+
+        if (eventType == 1) {
+            dragTargetWindowId = activeWindowIdAtomic
+            dragTargetRelX = 0f
+            dragTargetRelY = 0f
+        }
+        sendMouseLogical(px, py, eventType, button, clickCount, mods)
     }
 
     fun sendMouseLogical(
@@ -575,10 +792,32 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun sendScrollNormalized(nx: Float, ny: Float, deltaX: Float, deltaY: Float) {
-        val (lw, lh) = currentLogicalSize()
-        val x = nx.coerceIn(0f, 1f) * lw
-        val y = ny.coerceIn(0f, 1f) * lh
-        sendScrollLogical(x, y, deltaX, deltaY, true, _stickyModifiers.value)
+        if (runtimeHandle == 0L) return
+        val (parentW, parentH) = currentLogicalSize()
+        val px = nx.coerceIn(0f, 1f) * parentW
+        val py = ny.coerceIn(0f, 1f) * parentH
+        val mods = _stickyModifiers.value
+
+        val hitPopover = _activePopovers.value.asReversed().firstOrNull { pop ->
+            pop.width > 1f && pop.height > 1f &&
+                px >= pop.relX && px <= pop.relX + pop.width &&
+                py >= pop.relY && py <= pop.relY + pop.height
+        }
+        if (hitPopover != null) {
+            OpenUUNativeBridge.nativeSendScrollEvent(
+                runtimeHandle,
+                hitPopover.windowId,
+                px - hitPopover.relX,
+                py - hitPopover.relY,
+                deltaX,
+                deltaY,
+                true,
+                mods
+            )
+            return
+        }
+
+        sendScrollLogical(px, py, deltaX, deltaY, true, mods)
     }
 
     fun sendScrollLogical(
@@ -884,24 +1123,57 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                     }
                 }
                 is ControlEvent.WindowTopology -> {
-                    _remoteWindows.value = evt.windows
+                    val items = evt.windows
+                    _remoteWindows.value = items
                     Log.i(
                         E2E_TAG,
-                        "window_topology ids=${evt.windows.joinToString(",") { it.windowId.toString() }}"
+                        "window_topology ids=${items.joinToString(",") { it.windowId.toString() }}"
                     )
-                    if (evt.windows.isNotEmpty()) {
-                        val cur = activeWindowIdAtomic
-                        val stillPresent = evt.windows.any { it.windowId == cur }
-                        if (cur == 0 || !stillPresent) {
-                            val chosen = evt.windows.firstOrNull { it.kind == 0 } ?: evt.windows.first()
-                            activeWindowIdAtomic = chosen.windowId
-                            _selectedWindowId.value = chosen.windowId
-                            _showAppLauncher.value = false
-                            if (runtimeHandle != 0L) {
-                                OpenUUNativeBridge.nativeRequestKeyframe(runtimeHandle, chosen.windowId)
+                    val normals = items.filter { it.kind != 2 }
+                    val newlyOpened = normals.filter { it.windowId !in knownNormalWindowIds }
+                    val hadPrior = hadPriorTopology && knownNormalWindowIds.isNotEmpty()
+                    knownNormalWindowIds.clear()
+                    normals.forEach { knownNormalWindowIds.add(it.windowId) }
+                    if (normals.isNotEmpty()) {
+                        hadPriorTopology = true
+                    }
+
+                    val curSelected = _selectedWindowId.value
+                    if (hadPrior && newlyOpened.isNotEmpty()) {
+                        val targetNew = newlyOpened.last()
+                        if (curSelected != 0 && curSelected != targetNew.windowId && normals.any { it.windowId == curSelected }) {
+                            windowHistory.remove(curSelected)
+                            windowHistory.addLast(curSelected)
+                        }
+                        selectRemoteWindow(targetNew.windowId)
+                        val seq = ++windowNoticeSeq
+                        _windowSwitchNotice.value = "新窗口 · ${targetNew.displayTitle}"
+                        viewModelScope.launch {
+                            delay(2400L)
+                            if (windowNoticeSeq == seq) {
+                                _windowSwitchNotice.value = null
                             }
                         }
+                        _proactiveTabRevealTick.value = _proactiveTabRevealTick.value + 1L
+                    } else if (normals.isNotEmpty() && (curSelected == 0 || normals.none { it.windowId == curSelected })) {
+                        var fallback: WindowTopologyItem? = null
+                        while (windowHistory.isNotEmpty()) {
+                            val prevId = windowHistory.removeLast()
+                            val match = normals.firstOrNull { it.windowId == prevId }
+                            if (match != null) {
+                                fallback = match
+                                break
+                            }
+                        }
+                        val chosen = fallback ?: normals.firstOrNull { it.kind == 0 } ?: normals.first()
+                        selectRemoteWindow(chosen.windowId)
+                    } else if (normals.isEmpty() && curSelected != 0) {
+                        activeWindowIdAtomic = 0
+                        _selectedWindowId.value = 0
+                        _showAppLauncher.value = true
+                        videoDecoder.resetStream()
                     }
+                    recomputeWindowBuckets(items, _selectedWindowId.value)
                 }
                 is ControlEvent.Cursor -> {
                     _cursorKind.value = evt.kind.ifBlank { "arrow" }
@@ -951,16 +1223,21 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         data: ByteArray
     ) {
         var active = activeWindowIdAtomic
-        if (active == 0 && windowId != 0) {
+        val isPopover = popoverDecoders.containsKey(windowId) ||
+            _remoteWindows.value.any { it.windowId == windowId && it.kind == 2 }
+        if (active == 0 && windowId != 0 && !isPopover) {
             active = windowId
             activeWindowIdAtomic = windowId
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 _selectedWindowId.value = windowId
                 _showAppLauncher.value = false
+                recomputeWindowBuckets(_remoteWindows.value, windowId)
             }
         }
         if (windowId == active) {
             videoDecoder.submitFrame(codec, flags, timestampUs, width, height, data)
+        } else if (isPopover) {
+            getOrCreatePopoverDecoder(windowId).submitFrame(codec, flags, timestampUs, width, height, data)
         }
     }
 
@@ -1052,6 +1329,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             nsdDiscoveryListener = null
             nsdResolveQueue.close()
         }
+        releaseAllPopoverDecoders()
         videoDecoder.release()
         if (runtimeHandle != 0L) {
             val handle = runtimeHandle

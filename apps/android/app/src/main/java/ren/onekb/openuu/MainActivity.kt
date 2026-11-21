@@ -34,53 +34,55 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModelProvider
 
 private val OpenUUDarkColorScheme = darkColorScheme(
-    primary = Color(0xFF10B981),           // Emerald 500
-    onPrimary = Color(0xFF022C22),         // Emerald 950
-    primaryContainer = Color(0xFF064E3B),  // Emerald 900
-    onPrimaryContainer = Color(0xFFA7F3D0),// Emerald 200
-    secondary = Color(0xFF6366F1),         // Indigo 500
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFF312E81),// Indigo 900
-    onSecondaryContainer = Color(0xFFE0E7FF),
-    tertiary = Color(0xFF22D3EE),          // Cyan 400
-    onTertiary = Color(0xFF083344),
-    tertiaryContainer = Color(0xFF164E63),
-    onTertiaryContainer = Color(0xFFCFFAFE),
-    background = Color(0xFF0B0F19),        // Deep Slate-Indigo
-    onBackground = Color(0xFFF1F5F9),
-    surface = Color(0xFF111827),
-    onSurface = Color(0xFFF1F5F9),
-    surfaceVariant = Color(0xFF1E293B),
-    onSurfaceVariant = Color(0xFF94A3B8),
-    surfaceContainerLowest = Color(0xFF070A12),
-    surfaceContainerLow = Color(0xFF0F1624),
-    surfaceContainer = Color(0xFF151E30),
-    surfaceContainerHigh = Color(0xFF1C273D),
-    surfaceContainerHighest = Color(0xFF24324B),
-    outline = Color(0xFF334155),
-    outlineVariant = Color(0xFF1E293B),
-    error = Color(0xFFF43F5E),
+    primary = Color(0xFFF4F4F6),           // Solid crisp off-white
+    onPrimary = Color(0xFF09090B),         // Zinc 950
+    primaryContainer = Color(0xFF27272F),
+    onPrimaryContainer = Color(0xFFF4F4F6),
+    secondary = Color(0xFF27272F),
+    onSecondary = Color(0xFFE4E4E7),
+    secondaryContainer = Color(0xFF1E1E24),
+    onSecondaryContainer = Color(0xFFE4E4E7),
+    tertiary = Color(0xFFA1A1AA),
+    onTertiary = Color(0xFF09090B),
+    tertiaryContainer = Color(0xFF27272F),
+    onTertiaryContainer = Color(0xFFE4E4E7),
+    background = Color(0xFF09090B),        // Zinc 950 Obsidian
+    onBackground = Color(0xFFF4F4F6),
+    surface = Color(0xFF111114),
+    onSurface = Color(0xFFF4F4F6),
+    surfaceVariant = Color(0xFF1E1E24),
+    onSurfaceVariant = Color(0xFF8E8E98),
+    surfaceContainerLowest = Color(0xFF070709),
+    surfaceContainerLow = Color(0xFF121215),
+    surfaceContainer = Color(0xFF16161A),
+    surfaceContainerHigh = Color(0xFF1E1E24),
+    surfaceContainerHighest = Color(0xFF27272F),
+    outline = Color(0xFF27272E),
+    outlineVariant = Color(0xFF232329),
+    error = Color(0xFFFF453A),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFF881337),
-    onErrorContainer = Color(0xFFFFE4E6)
+    errorContainer = Color(0xFF2C1214),
+    onErrorContainer = Color(0xFFFF6961)
 )
 
 private val OpenUUTypography = Typography(
     headlineSmall = TextStyle(
-        fontWeight = FontWeight.Bold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = (-0.2).sp
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.4).sp
     ),
     titleMedium = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
-        lineHeight = 22.sp
+        lineHeight = 22.sp,
+        letterSpacing = (-0.2).sp
     ),
     titleSmall = TextStyle(
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
-        lineHeight = 20.sp
+        lineHeight = 20.sp,
+        letterSpacing = (-0.1).sp
     ),
     bodyMedium = TextStyle(
         fontWeight = FontWeight.Normal,
@@ -99,7 +101,7 @@ private val OpenUUTypography = Typography(
     ),
     labelSmall = TextStyle(
         fontWeight = FontWeight.Medium,
-        fontSize = 10.sp,
+        fontSize = 11.sp,
         lineHeight = 14.sp
     )
 )
@@ -151,7 +153,6 @@ class MainActivity : ComponentActivity() {
             OpenUUTheme {
                 val selectedTab by viewModel.selectedTab.collectAsState()
                 val connectionPhase by viewModel.connectionPhase.collectAsState()
-                val showAppLauncher by viewModel.showAppLauncher.collectAsState()
                 val selectedWindowId by viewModel.selectedWindowId.collectAsState()
                 val manualFullscreen by viewModel.manualFullscreen.collectAsState()
 
@@ -159,7 +160,6 @@ class MainActivity : ComponentActivity() {
                 val isImmersiveFullscreen = (
                     selectedTab == MainTab.REMOTE &&
                         connectionPhase.isConnected &&
-                        !showAppLauncher &&
                         selectedWindowId != 0
                     ) && (isLandscape || manualFullscreen)
 

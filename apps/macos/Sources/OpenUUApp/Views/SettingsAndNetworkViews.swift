@@ -77,13 +77,10 @@ struct SecurityAndQualityView: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
                         permissionRow(
-                            ok: state.hasScreenRecordingPermission,
+                            ok: state.hasEffectiveScreenRecordingPermission,
                             title: "屏幕录制权限（被控端捕获窗口画面必需）",
                             onGrant: {
-                                _ = CGRequestScreenCaptureAccess()
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                                    NSWorkspace.shared.open(url)
-                                }
+                                state.openScreenRecordingSettings()
                             }
                         )
                         Divider()
@@ -99,10 +96,7 @@ struct SecurityAndQualityView: View {
                             ok: state.hasAccessibilityPermission,
                             title: "辅助功能权限（被控端接收远程键鼠点击与中文输入法直通必需）",
                             onGrant: {
-                                _ = InputInjector.hasAccessibilityPermission(prompt: true)
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                                    NSWorkspace.shared.open(url)
-                                }
+                                state.openAccessibilitySettings()
                             }
                         )
                     }

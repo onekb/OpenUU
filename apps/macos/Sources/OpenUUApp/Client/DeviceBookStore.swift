@@ -1,5 +1,124 @@
 import Foundation
 
+enum DeviceCodeFormatter {
+    /// Returns true if the string only contains ASCII digits and whitespace (i.e. user is typing/pasting a device code).
+    static func isDeviceCodeLike(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.allSatisfy { ($0.isASCII && $0.isNumber) || $0.isWhitespace }
+    }
+
+    /// Formats pure-digit device code inputs by inserting a space every 3 digits (`"601550599"` -> `"601 550 599"`).
+    /// Non-device-code inputs (IP, domain, `openuu://` ticket) strip any stray spaces so transitioning
+    /// from digits to `10086.cn` or pasting URLs never leaves spaces inside addresses.
+    static func formatInput(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if trimmed.allSatisfy({ ($0.isASCII && $0.isNumber) || $0.isWhitespace }) {
+            let digits = Array(trimmed.filter { $0.isASCII && $0.isNumber })
+            guard !digits.isEmpty else { return "" }
+            return stride(from: 0, to: digits.count, by: 3).map { idx in
+                let end = min(idx + 3, digits.count)
+                return String(digits[idx..<end])
+            }.joined(separator: " ")
+        }
+
+        if raw.contains(where: \.isWhitespace) {
+            return String(raw.filter { !$0.isWhitespace })
+        }
+        return raw
+    }
+
+    /// Formats `raw` while computing the exact UTF-16 cursor offset so typing or backspacing never jumps the cursor.
+    static func formatInputWithCursor(
+        _ raw: String,
+        cursorUTF16Offset: Int,
+        previousFormatted: String? = nil
+    ) -> (text: String, cursorUTF16Offset: Int) {
+        let nsRaw = raw as NSString
+        let clampedCursor = min(max(0, cursorUTF16Offset), nsRaw.length)
+
+        // If the user pressed Backspace right after an auto-inserted space (e.g. "601 |550" -> "601550"),
+        // also delete the digit immediately preceding that space so middle-of-string backspace feels native.
+        var workingRaw = raw
+        var workingCursor = clampedCursor
+        if let prev = previousFormatted,
+           isDeviceCodeLike(prev),
+           isDeviceCodeLike(raw) {
+            let prevNS = prev as NSString
+            if nsRaw.length == prevNS.length - 1,
+               clampedCursor > 0,
+               clampedCursor < prevNS.length,
+               prevNS.substring(with: NSRange(location: clampedCursor, length: 1)) == " " {
+                let prevDigits = prev.filter { $0.isASCII && $0.isNumber }
+                let rawDigits = raw.filter { $0.isASCII && $0.isNumber }
+                if prevDigits == rawDigits {
+                    let mutable = NSMutableString(string: raw)
+                    mutable.deleteCharacters(in: NSRange(location: clampedCursor - 1, length: 1))
+                    workingRaw = mutable as String
+                    workingCursor = clampedCursor - 1
+                }
+            }
+        }
+
+        let formatted = formatInput(workingRaw)
+        if formatted.isEmpty {
+            return ("", 0)
+        }
+
+        let workingNS = workingRaw as NSString
+        let prefixStr = workingNS.substring(to: min(workingCursor, workingNS.length))
+
+        if isDeviceCodeLike(formatted) {
+            let digitsBefore = prefixStr.filter { $0.isASCII && $0.isNumber }.count
+            if digitsBefore == 0 {
+                return (formatted, 0)
+            }
+            var seenDigits = 0
+            var utf16Pos = 0
+            for ch in formatted {
+                utf16Pos += ch.utf16.count
+                if ch.isASCII && ch.isNumber {
+                    seenDigits += 1
+                    if seenDigits == digitsBefore {
+                        return (formatted, utf16Pos)
+                    }
+                }
+            }
+            return (formatted, (formatted as NSString).length)
+        } else {
+            let nonSpaceBefore = prefixStr.filter { !$0.isWhitespace }.count
+            if nonSpaceBefore == 0 {
+                return (formatted, 0)
+            }
+            var seen = 0
+            var utf16Pos = 0
+            for ch in formatted {
+                utf16Pos += ch.utf16.count
+                if !ch.isWhitespace {
+                    seen += 1
+                    if seen == nonSpaceBefore {
+                        return (formatted, utf16Pos)
+                    }
+                }
+            }
+            return (formatted, (formatted as NSString).length)
+        }
+    }
+
+    /// Strips all spaces from device codes (and stray whitespace from any target) right before use/connection/storage.
+    static func sanitizeForUse(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.allSatisfy({ ($0.isASCII && $0.isNumber) || $0.isWhitespace || $0 == "-" }) {
+            return String(trimmed.filter { $0.isASCII && $0.isNumber })
+        }
+        return String(trimmed.filter { !$0.isWhitespace })
+    }
+}
+
 enum DeviceOnlineState: String, Sendable {
     case lanOnline = "lan"
     case wanOnline = "wan"
@@ -32,18 +151,16 @@ struct ManagedRemoteDevice: Codable, Identifiable, Hashable, Sendable {
     var lastConnectedMs: UInt64
 
     var formattedTarget: String {
-        let digits = target.filter(\.isNumber)
         let clean = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        if digits.count == 9 && clean.allSatisfy({ $0.isNumber || $0 == " " || $0 == "-" }) {
-            let i3 = digits.index(digits.startIndex, offsetBy: 3)
-            let i6 = digits.index(digits.startIndex, offsetBy: 6)
-            return "\(digits[..<i3]) \(digits[i3..<i6]) \(digits[i6...])"
+        if !clean.isEmpty && clean.allSatisfy({ ($0.isASCII && $0.isNumber) || $0 == " " || $0 == "-" }) {
+            let digits = String(clean.filter { $0.isASCII && $0.isNumber })
+            if !digits.isEmpty {
+                return DeviceCodeFormatter.formatInput(digits)
+            }
         }
         if clean.hasPrefix("openuu://") {
             if !deviceCode.isEmpty, deviceCode.count == 9 {
-                let i3 = deviceCode.index(deviceCode.startIndex, offsetBy: 3)
-                let i6 = deviceCode.index(deviceCode.startIndex, offsetBy: 6)
-                return "\(deviceCode[..<i3]) \(deviceCode[i3..<i6]) \(deviceCode[i6...]) (直连串)"
+                return "\(DeviceCodeFormatter.formatInput(deviceCode)) (直连串)"
             }
             return "跨网直连串 (openuu://…)"
         }
@@ -165,7 +282,7 @@ final class DeviceBookStore: ObservableObject {
         isFavorite: Bool = false,
         notes: String = ""
     ) -> ManagedRemoteDevice {
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
         let normDigits = Self.extractNineDigitCode(cleanTarget)
         if let id, let idx = devices.firstIndex(where: { $0.id == id }) {
             devices[idx].alias = alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? devices[idx].alias : alias.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -185,11 +302,12 @@ final class DeviceBookStore: ObservableObject {
 
         // Check if target already exists
         if let idx = devices.firstIndex(where: {
-            $0.target == cleanTarget || (!normDigits.isEmpty && $0.deviceCode == normDigits)
+            DeviceCodeFormatter.sanitizeForUse($0.target) == cleanTarget || (!normDigits.isEmpty && $0.deviceCode == normDigits)
         }) {
             if !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 devices[idx].alias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
             }
+            devices[idx].target = cleanTarget
             devices[idx].port = port
             if !savedPassword.isEmpty {
                 devices[idx].savedPassword = savedPassword
@@ -233,17 +351,18 @@ final class DeviceBookStore: ObservableObject {
         passwordUsed: String
     ) -> ManagedRemoteDevice {
         let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
         let normCode = Self.extractNineDigitCode(cleanTarget)
 
         let idx = devices.firstIndex { d in
             (existingID != nil && d.id == existingID) ||
             (!remoteDeviceID.isEmpty && d.remoteDeviceID == remoteDeviceID) ||
             (!normCode.isEmpty && d.deviceCode == normCode) ||
-            d.target == cleanTarget
+            DeviceCodeFormatter.sanitizeForUse(d.target) == cleanTarget
         }
 
         if let idx {
+            devices[idx].target = cleanTarget
             if !remoteDeviceID.isEmpty {
                 devices[idx].remoteDeviceID = remoteDeviceID
             }
@@ -296,10 +415,11 @@ final class DeviceBookStore: ObservableObject {
     }
 
     func findMatchingDevice(forTarget rawTarget: String) -> ManagedRemoteDevice? {
-        let clean = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = DeviceCodeFormatter.sanitizeForUse(rawTarget)
+        guard !clean.isEmpty else { return nil }
         let norm = Self.extractNineDigitCode(clean)
         return devices.first { d in
-            d.target == clean || (!norm.isEmpty && d.deviceCode == norm)
+            DeviceCodeFormatter.sanitizeForUse(d.target) == clean || (!norm.isEmpty && d.deviceCode == norm)
         }
     }
 

@@ -418,6 +418,55 @@ fn run_mock_host(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    "mouse" => {
+                        let button = val.get("button").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let event_type = val.get("event_type").and_then(|v| v.as_i64()).unwrap_or(0);
+                        if button == 1 && event_type == 1 {
+                            let topology = serde_json::json!([
+                                {
+                                    "window_id": 101,
+                                    "parent_window_id": 0,
+                                    "kind": 0,
+                                    "rel_x": 0.0,
+                                    "rel_y": 0.0,
+                                    "width": 960.0,
+                                    "height": 600.0,
+                                    "title": "微信 - 聊天"
+                                },
+                                {
+                                    "window_id": 102,
+                                    "parent_window_id": 0,
+                                    "kind": 0,
+                                    "rel_x": 0.0,
+                                    "rel_y": 0.0,
+                                    "width": 960.0,
+                                    "height": 600.0,
+                                    "title": "Safari - OpenUU Docs"
+                                },
+                                {
+                                    "window_id": 201,
+                                    "parent_window_id": 101,
+                                    "kind": 2,
+                                    "rel_x": 240.0,
+                                    "rel_y": 160.0,
+                                    "width": 196.0,
+                                    "height": 240.0,
+                                    "title": "右键菜单"
+                                }
+                            ]);
+                            if let Ok(topo_c) = CString::new(topology.to_string()) {
+                                unsafe {
+                                    openuu_send_window_topology_json(rt, topo_c.as_ptr());
+                                }
+                            }
+                            if let Ok(mut st) = stream_state.lock() {
+                                if !st.active_windows.contains(&201) {
+                                    st.active_windows.push(201);
+                                }
+                                st.frame_idx = 0; // Send immediate SPS+PPS+IDR keyframe for popover 201
+                            }
+                        }
+                    }
                     "request_keyframe" => {
                         if let Ok(mut st) = stream_state.lock() {
                             st.frame_idx = 0;

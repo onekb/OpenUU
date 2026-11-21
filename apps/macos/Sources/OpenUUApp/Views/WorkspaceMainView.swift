@@ -113,6 +113,9 @@ private struct WorkspaceBodyView: View {
                 }
             )
         }
+        .sheet(isPresented: $state.showingPermissionGuideSheet) {
+            HostPermissionGuideSheet(state: state)
+        }
     }
 
     // MARK: - Left Sidebar Navigation Rail (ToDesk / UU远程 Style)
@@ -132,9 +135,10 @@ private struct WorkspaceBodyView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("OpenUU")
                         .font(.system(size: 14.5, weight: .bold))
-                    Text("多机无缝同屏 v0.3")
+                    Text("工作伴侣，永久免费。")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .padding(.horizontal, 14)
@@ -188,11 +192,24 @@ private struct WorkspaceBodyView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(state.isHostRunning ? Color.green : Color.gray.opacity(0.5))
+                        .fill(state.isHostRunning ? Color.green : Color.orange.opacity(0.85))
                         .frame(width: 7, height: 7)
                     Text(state.isHostRunning ? "本机被控：已开启" : "本机被控：未开启")
                         .font(.system(size: 11, weight: .medium))
-                    Spacer()
+                    Spacer(minLength: 4)
+                    if state.isHostRunning {
+                        Button("关闭") {
+                            state.toggleHostService()
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.bordered)
+                    } else {
+                        Button("开启") {
+                            state.toggleHostService()
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
                 HStack(spacing: 6) {
                     Circle()
@@ -247,7 +264,7 @@ private struct WorkspaceBodyView: View {
     private var headerSubtitle: String {
         switch state.selectedTab {
         case .remoteHome:
-            return "五层穿透自动兜底 · 支持单应用无缝窗口模式与整屏远程桌面"
+            return "局域网与异地自动直连 · 支持单应用无缝窗口与整屏远程桌面"
         case .deviceList:
             return "集中维护所有受控端设备与密码，支持同时连接并操控多台远端 Mac"
         case .securityQuality:
@@ -324,21 +341,36 @@ struct RemoteControlHomeView: View {
                 Button {
                     state.toggleHostService()
                 } label: {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(state.isHostRunning ? Color.green : Color.orange)
-                            .frame(width: 7, height: 7)
-                        Text(state.isHostRunning ? "被控已开启 (点击关闭)" : "点击开启被控")
-                            .font(.system(size: 11.5, weight: .medium))
+                    if state.isHostRunning {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 7, height: 7)
+                            Text("被控运行中 · 点击关闭")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(.green)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.green.opacity(0.14))
+                        .overlay(
+                            Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 1)
+                        )
+                        .clipShape(Capsule())
+                    } else {
+                        HStack(spacing: 5) {
+                            Image(systemName: "power")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("点击开启被控")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color.accentColor)
+                        .clipShape(Capsule())
+                        .shadow(color: Color.accentColor.opacity(0.28), radius: 4, y: 1)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(
-                        state.isHostRunning
-                            ? Color.green.opacity(0.15)
-                            : Color.orange.opacity(0.15)
-                    )
-                    .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -403,38 +435,90 @@ struct RemoteControlHomeView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                Button {
-                    state.copyInvitationBundle()
-                } label: {
-                    Label("复制代码与密码", systemImage: "square.and.arrow.up")
-                }
-                .controlSize(.small)
+            if state.isHostRunning {
+                HStack(spacing: 8) {
+                    Button {
+                        state.copyInvitationBundle()
+                    } label: {
+                        Label("复制代码与密码", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.large)
 
-                if state.isHostRunning {
                     Button {
                         state.copyMyHostTicket()
                     } label: {
-                        Label("复制免寻址直连串", systemImage: "link")
+                        Label("直连串", systemImage: "link")
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     .help("未部署寻址服务器时，复制 openuu:// 连接串发给对方即可跨网穿透连接")
+
+                    Button {
+                        state.toggleHostService()
+                    } label: {
+                        Text("关闭")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.large)
+                    .help("停止本机被控服务")
                 }
-                Spacer()
+            } else {
+                HStack(spacing: 10) {
+                    Button {
+                        state.requestStartHost()
+                    } label: {
+                        Label("点击开启被控", systemImage: "power.circle.fill")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Button {
+                        state.copyInvitationBundle()
+                    } label: {
+                        Label("复制邀请", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .help("复制本机设备代码与访问密码发送给伙伴")
+                }
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: state.isHostRunning ? "checkmark.shield.fill" : "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(state.isHostRunning ? .green : .secondary)
-                Text(state.isHostRunning ? state.coordStatusText : "开启后支持异地与局域网设备连入（输错5次自动封禁防爆破）")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if !state.hostLinkBadge.isEmpty {
-                    Text("· \(state.hostLinkBadge)")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.blue)
+            if !state.hasAllHostPermissions {
+                Button {
+                    state.openPermissionGuide(startHostWhenReady: !state.isHostRunning)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Text("\(state.missingHostPermissionSummary) · 点击引导前往系统设置开启")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: state.isHostRunning ? "checkmark.shield.fill" : "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(state.isHostRunning ? .green : .secondary)
+                    Text(state.isHostRunning ? state.coordStatusText : "开启后支持异地与局域网设备连入（输错5次自动封禁防爆破）")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !state.hostLinkBadge.isEmpty {
+                        Text("· \(state.hostLinkBadge)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.blue)
+                    }
                 }
             }
         }
@@ -446,7 +530,10 @@ struct RemoteControlHomeView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                .strokeBorder(
+                    state.isHostRunning ? Color.green.opacity(0.42) : Color.primary.opacity(0.08),
+                    lineWidth: state.isHostRunning ? 1.4 : 1
+                )
         )
     }
 
@@ -460,7 +547,7 @@ struct RemoteControlHomeView: View {
                     Menu {
                         ForEach(deviceBook.devices) { dev in
                             Button("\(dev.alias) (\(dev.formattedTarget))") {
-                                state.quickConnectTarget = dev.target
+                                state.quickConnectTarget = DeviceCodeFormatter.formatInput(dev.target)
                                 state.quickConnectPort = "\(dev.port)"
                                 state.quickConnectPassword = dev.savedPassword
                             }
@@ -480,9 +567,14 @@ struct RemoteControlHomeView: View {
                 Text("伙伴设备代码 / 跨网连接串 / IP或域名")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("例如：601 550 599 或 openuu://… 或 192.168.1.10", text: $state.quickConnectTarget)
-                    .font(.system(size: 14.5, design: .monospaced))
-                    .textFieldStyle(.roundedBorder)
+                SmartTargetTextField(
+                    placeholder: "例如：601 550 599 或 openuu://… 或 192.168.1.10",
+                    text: $state.quickConnectTarget,
+                    fontSize: 14.5,
+                    onSubmit: {
+                        state.connectFromQuickInput(autoOpenDesktop: false)
+                    }
+                )
             }
 
             HStack(spacing: 10) {
@@ -792,8 +884,11 @@ struct DeviceBookListView: View {
             guard matchesGroup else { return false }
             let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if q.isEmpty { return true }
+            let qNoSpace = String(q.filter { !$0.isWhitespace })
             return dev.alias.lowercased().contains(q) ||
                    dev.target.lowercased().contains(q) ||
+                   dev.target.lowercased().contains(qNoSpace) ||
+                   dev.formattedTarget.lowercased().contains(q) ||
                    dev.notes.lowercased().contains(q) ||
                    dev.groupTag.lowercased().contains(q)
         }
@@ -1447,7 +1542,7 @@ struct DeviceEditorSheet: View {
         self.existing = existing
         self.onSave = onSave
         _alias = State(initialValue: existing?.alias ?? "")
-        _target = State(initialValue: existing?.target ?? "")
+        _target = State(initialValue: DeviceCodeFormatter.formatInput(existing?.target ?? ""))
         _portText = State(initialValue: "\(existing?.port ?? 39481)")
         _savedPassword = State(initialValue: existing?.savedPassword ?? "")
         _groupTag = State(initialValue: existing?.groupTag ?? "常用")
@@ -1471,9 +1566,11 @@ struct DeviceEditorSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("设备代码 / openuu://直连串 / IP或域名")
                         .font(.caption).foregroundStyle(.secondary)
-                    TextField("例如：601 550 599 或 192.168.1.20", text: $target)
-                        .font(.system(size: 13, design: .monospaced))
-                        .textFieldStyle(.roundedBorder)
+                    SmartTargetTextField(
+                        placeholder: "例如：601 550 599 或 192.168.1.20",
+                        text: $target,
+                        fontSize: 13
+                    )
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -1527,14 +1624,303 @@ struct DeviceEditorSheet: View {
                 }
                 Button("保存设备") {
                     let p = UInt16(portText) ?? 39481
-                    onSave(alias, target, p, savedPassword, groupTag, isFavorite, notes)
+                    let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
+                    onSave(alias, cleanTarget, p, savedPassword, groupTag, isFavorite, notes)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(DeviceCodeFormatter.sanitizeForUse(target).isEmpty)
             }
         }
         .padding(22)
         .frame(width: 460)
+    }
+}
+
+// ============================================================================
+// Host System Permissions Check & Onboarding Guide Sheet
+// ============================================================================
+
+private struct HostPermissionGuideSheet: View {
+    @ObservedObject var state: AppState
+    @State private var isChecking = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.14))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("开启被控需要授予系统权限")
+                        .font(.system(size: 16, weight: .bold))
+                    Text("请前往 macOS「系统设置 ➔ 隐私与安全性」开启以下权限，全部就绪后将自动启动被控服务。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(spacing: 10) {
+                permissionCard(
+                    granted: state.hasEffectiveScreenRecordingPermission,
+                    icon: "rectangle.dashed.badge.record",
+                    title: "屏幕录制权限",
+                    subtitle: "用于捕获你共享的单个应用窗口或整屏桌面画面",
+                    actionTitle: "去系统设置开启",
+                    onOpenSettings: {
+                        state.openScreenRecordingSettings()
+                    }
+                )
+
+                permissionCard(
+                    granted: state.hasAccessibilityPermission,
+                    icon: "cursorarrow.click.2",
+                    title: "辅助功能权限",
+                    subtitle: "用于接收控制端的鼠标点击、滚轮、快捷键与中文输入法",
+                    actionTitle: "去系统设置开启",
+                    onOpenSettings: {
+                        state.openAccessibilitySettings()
+                    }
+                )
+            }
+
+            if !state.permissionCheckFeedback.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 13))
+                        .padding(.top, 1)
+                    Text(state.permissionCheckFeedback)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("提示：首次勾选「屏幕录制」后，若系统提示退出并重开，重启 OpenUU 即可立即生效。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button("取消") {
+                    state.dismissPermissionGuide()
+                }
+
+                if !state.hasEffectiveScreenRecordingPermission && !state.permissionCheckFeedback.isEmpty {
+                    Button("重启应用生效") {
+                        state.relaunchApplication()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                if !state.hasAllHostPermissions {
+                    Button("打开待开启项设置") {
+                        state.openNextMissingPermissionSettings()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    isChecking = true
+                    Task { @MainActor in
+                        await state.recheckPermissionsAndStartIfReady()
+                        isChecking = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if isChecking {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(state.pendingStartHostAfterPermission ? "我已开启，立即启动被控" : "重新检测权限")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(22)
+        .frame(width: 500)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { break }
+                await state.pollPermissionsInGuideSheet(checkScreenCaptureKit: false)
+            }
+        }
+    }
+
+    private func permissionCard(
+        granted: Bool,
+        icon: String,
+        title: String,
+        subtitle: String,
+        actionTitle: String,
+        onOpenSettings: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: granted ? "checkmark.circle.fill" : icon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(granted ? Color.green : Color.orange)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 13.5, weight: .semibold))
+                    Text(granted ? "已开启" : "未开启")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(granted ? Color.green.opacity(0.16) : Color.orange.opacity(0.16))
+                        .foregroundStyle(granted ? Color.green : Color.orange)
+                        .clipShape(Capsule())
+                }
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if granted {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.green)
+                    .padding(.trailing, 6)
+            } else {
+                Button(actionTitle, action: onOpenSettings)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    granted ? Color.green.opacity(0.35) : Color.orange.opacity(0.32),
+                    lineWidth: 1
+                )
+        )
+    }
+}
+
+// ============================================================================
+// Smart Target TextField (Auto-spaces 9-digit device codes every 3 digits)
+// ============================================================================
+
+struct SmartTargetTextField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    var fontSize: CGFloat = 14.5
+    var onSubmit: (() -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let tf = NSTextField()
+        tf.placeholderString = placeholder
+        tf.bezelStyle = .roundedBezel
+        tf.isBordered = true
+        tf.isBezeled = true
+        tf.drawsBackground = true
+        tf.usesSingleLineMode = true
+        tf.lineBreakMode = .byTruncatingTail
+        tf.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let initialFormatted = DeviceCodeFormatter.formatInput(text)
+        tf.stringValue = initialFormatted
+        context.coordinator.lastFormattedText = initialFormatted
+        tf.delegate = context.coordinator
+        return tf
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        nsView.placeholderString = placeholder
+        if let editor = nsView.currentEditor() as? NSTextView, editor.hasMarkedText() {
+            return
+        }
+        let formatted = DeviceCodeFormatter.formatInput(text)
+        if nsView.stringValue != formatted {
+            nsView.stringValue = formatted
+            context.coordinator.lastFormattedText = formatted
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SmartTargetTextField
+        var lastFormattedText: String = ""
+        private var isApplyingFormat = false
+
+        init(parent: SmartTargetTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard !isApplyingFormat,
+                  let field = obj.object as? NSTextField else { return }
+
+            let editor = (obj.userInfo?["NSFieldEditor"] as? NSTextView)
+                ?? (field.currentEditor() as? NSTextView)
+            if let editor, editor.hasMarkedText() {
+                return
+            }
+
+            let raw = field.stringValue
+            let cursor = editor?.selectedRange().location ?? (raw as NSString).length
+            let (formatted, newCursor) = DeviceCodeFormatter.formatInputWithCursor(
+                raw,
+                cursorUTF16Offset: cursor,
+                previousFormatted: lastFormattedText
+            )
+
+            lastFormattedText = formatted
+            if formatted != raw {
+                isApplyingFormat = true
+                field.stringValue = formatted
+                if let editor {
+                    let clamped = min(max(0, newCursor), (formatted as NSString).length)
+                    editor.selectedRange = NSRange(location: clamped, length: 0)
+                }
+                isApplyingFormat = false
+            }
+
+            if parent.text != formatted {
+                parent.text = formatted
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if let onSubmit = parent.onSubmit {
+                    onSubmit()
+                    return true
+                }
+            }
+            return false
+        }
     }
 }

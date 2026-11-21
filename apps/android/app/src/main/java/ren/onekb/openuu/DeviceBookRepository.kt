@@ -43,7 +43,7 @@ class DeviceBookRepository(filesDir: File) {
 
     fun upsert(entry: DeviceBookEntry): List<DeviceBookEntry> = synchronized(lock) {
         val current = loadAll().toMutableList()
-        val cleanTarget = entry.target.trim()
+        val cleanTarget = sanitizeTargetForUse(entry.target)
         val normDigits = extractNineDigitCode(cleanTarget)
         val normalized = entry.copy(
             id = entry.id.ifBlank { UUID.randomUUID().toString() },
@@ -54,7 +54,7 @@ class DeviceBookRepository(filesDir: File) {
 
         val idx = current.indexOfFirst {
             it.id == normalized.id ||
-                (cleanTarget.isNotEmpty() && it.target == cleanTarget) ||
+                (cleanTarget.isNotEmpty() && sanitizeTargetForUse(it.target) == cleanTarget) ||
                 (normDigits.isNotEmpty() && it.deviceCode == normDigits)
         }
         if (idx >= 0) {
@@ -139,6 +139,35 @@ class DeviceBookRepository(filesDir: File) {
     }
 
     companion object {
+        fun isDeviceCodeLike(raw: String): Boolean {
+            val clean = raw.trim()
+            return clean.isNotEmpty() && clean.all { (it in '0'..'9') || it.isWhitespace() }
+        }
+
+        fun formatTargetInput(raw: String): String {
+            if (raw.isEmpty()) return ""
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            if (trimmed.all { (it in '0'..'9') || it.isWhitespace() }) {
+                val digits = trimmed.filter { it in '0'..'9' }
+                if (digits.isEmpty()) return ""
+                return digits.chunked(3).joinToString(" ")
+            }
+            if (raw.any { it.isWhitespace() }) {
+                return raw.filterNot { it.isWhitespace() }
+            }
+            return raw
+        }
+
+        fun sanitizeTargetForUse(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            if (trimmed.all { (it in '0'..'9') || it.isWhitespace() || it == '-' }) {
+                return trimmed.filter { it in '0'..'9' }
+            }
+            return trimmed.filterNot { it.isWhitespace() }
+        }
+
         fun extractNineDigitCode(raw: String): String {
             val clean = raw.trim()
             if (clean.all { it.isDigit() || it == ' ' || it == '-' }) {

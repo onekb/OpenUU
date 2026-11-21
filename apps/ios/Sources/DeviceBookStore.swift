@@ -1,5 +1,42 @@
 import Foundation
 
+enum DeviceCodeFormatter {
+    static func isDeviceCodeLike(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.allSatisfy { ($0.isASCII && $0.isNumber) || $0.isWhitespace }
+    }
+
+    static func formatInput(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if trimmed.allSatisfy({ ($0.isASCII && $0.isNumber) || $0.isWhitespace }) {
+            let digits = Array(trimmed.filter { $0.isASCII && $0.isNumber })
+            guard !digits.isEmpty else { return "" }
+            return stride(from: 0, to: digits.count, by: 3).map { idx in
+                let end = min(idx + 3, digits.count)
+                return String(digits[idx..<end])
+            }.joined(separator: " ")
+        }
+
+        if raw.contains(where: \.isWhitespace) {
+            return String(raw.filter { !$0.isWhitespace })
+        }
+        return raw
+    }
+
+    static func sanitizeForUse(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.allSatisfy({ ($0.isASCII && $0.isNumber) || $0.isWhitespace || $0 == "-" }) {
+            return String(trimmed.filter { $0.isASCII && $0.isNumber })
+        }
+        return String(trimmed.filter { !$0.isWhitespace })
+    }
+}
+
 enum DeviceOnlineState: String, Sendable {
     case lanOnline = "lan"
     case wanOnline = "wan"
@@ -166,7 +203,7 @@ final class DeviceBookStore: ObservableObject {
         isFavorite: Bool = false,
         notes: String = ""
     ) -> ManagedRemoteDevice {
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
         let cleanAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         let normDigits = Self.extractNineDigitCode(cleanTarget)
 
@@ -189,11 +226,12 @@ final class DeviceBookStore: ObservableObject {
         }
 
         if let idx = devices.firstIndex(where: {
-            $0.target == cleanTarget || (!normDigits.isEmpty && $0.deviceCode == normDigits)
+            DeviceCodeFormatter.sanitizeForUse($0.target) == cleanTarget || (!normDigits.isEmpty && $0.deviceCode == normDigits)
         }) {
             if !cleanAlias.isEmpty {
                 devices[idx].alias = cleanAlias
             }
+            devices[idx].target = cleanTarget
             devices[idx].port = port
             if !savedPassword.isEmpty {
                 devices[idx].savedPassword = savedPassword
@@ -236,16 +274,17 @@ final class DeviceBookStore: ObservableObject {
         passwordUsed: String
     ) -> ManagedRemoteDevice {
         let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
         let normCode = Self.extractNineDigitCode(cleanTarget)
 
         let idx = devices.firstIndex { d in
             (!remoteDeviceID.isEmpty && d.remoteDeviceID == remoteDeviceID) ||
             (!normCode.isEmpty && d.deviceCode == normCode) ||
-            d.target == cleanTarget
+            DeviceCodeFormatter.sanitizeForUse(d.target) == cleanTarget
         }
 
         if let idx {
+            devices[idx].target = cleanTarget
             if !remoteDeviceID.isEmpty {
                 devices[idx].remoteDeviceID = remoteDeviceID
             }
@@ -297,10 +336,11 @@ final class DeviceBookStore: ObservableObject {
     }
 
     func findMatchingDevice(forTarget rawTarget: String) -> ManagedRemoteDevice? {
-        let clean = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = DeviceCodeFormatter.sanitizeForUse(rawTarget)
+        guard !clean.isEmpty else { return nil }
         let norm = Self.extractNineDigitCode(clean)
         return devices.first { d in
-            d.target == clean || (!norm.isEmpty && d.deviceCode == norm)
+            DeviceCodeFormatter.sanitizeForUse(d.target) == clean || (!norm.isEmpty && d.deviceCode == norm)
         }
     }
 
@@ -312,7 +352,7 @@ final class DeviceBookStore: ObservableObject {
     }
 
     func probeQueries() -> [DeviceProbeQueryModel] {
-        devices.map { DeviceProbeQueryModel(id: $0.id, target: $0.target) }
+        devices.map { DeviceProbeQueryModel(id: $0.id, target: DeviceCodeFormatter.sanitizeForUse($0.target)) }
     }
 
     static func extractNineDigitCode(_ raw: String) -> String {

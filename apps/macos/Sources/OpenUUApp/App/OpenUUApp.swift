@@ -164,12 +164,37 @@ final class AppState: ObservableObject {
     @Published var hasAccessibilityPermission: Bool = InputInjector.hasAccessibilityPermission(prompt: false)
     @Published var hasScreenRecordingPermission: Bool = CGPreflightScreenCaptureAccess()
     @Published var hasDirectCapturePermission: Bool = false
+    @Published var showingPermissionGuideSheet: Bool = false
+    @Published var pendingStartHostAfterPermission: Bool = false
+    @Published var permissionCheckFeedback: String = ""
+
+    var hasEffectiveScreenRecordingPermission: Bool {
+        hasScreenRecordingPermission || hasDirectCapturePermission
+    }
+
+    var hasAllHostPermissions: Bool {
+        hasEffectiveScreenRecordingPermission && hasAccessibilityPermission
+    }
+
+    var missingHostPermissionSummary: String {
+        switch (hasEffectiveScreenRecordingPermission, hasAccessibilityPermission) {
+        case (true, true): return ""
+        case (false, false): return "缺少屏幕录制与辅助功能权限"
+        case (false, true): return "缺少屏幕录制权限"
+        case (true, false): return "缺少辅助功能权限"
+        }
+    }
 
     // Quick-connect fields on Home tab
     @Published var discoveredPeers: [DiscoveredPeer] = []
-    @Published var quickConnectTarget: String = UserDefaults.standard.string(forKey: PrefKey.manualHostIP) ?? "" {
+    @Published var quickConnectTarget: String = DeviceCodeFormatter.formatInput(
+        UserDefaults.standard.string(forKey: PrefKey.manualHostIP) ?? ""
+    ) {
         didSet {
-            UserDefaults.standard.set(quickConnectTarget, forKey: PrefKey.manualHostIP)
+            UserDefaults.standard.set(
+                DeviceCodeFormatter.sanitizeForUse(quickConnectTarget),
+                forKey: PrefKey.manualHostIP
+            )
             // Only auto-fill saved password when the password field is currently empty,
             // never overwriting a fresh password just typed/pasted by the user!
             if quickConnectPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -244,6 +269,20 @@ final class AppState: ObservableObject {
                 }
                 self.virtualDisplayManager.returnAllWindowsToMainDisplay()
                 self.dockProxyManager.terminateAll()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshPermission()
+                if self.showingPermissionGuideSheet {
+                    await self.pollPermissionsInGuideSheet(checkScreenCaptureKit: true)
+                }
             }
         }
 
@@ -476,9 +515,10 @@ final class AppState: ObservableObject {
 
     /// Connect to a saved device from the Device Book WITHOUT disconnecting any other active remote Macs!
     func connectDevice(_ device: ManagedRemoteDevice, autoOpenDesktop: Bool = false) {
+        let cleanTarget = DeviceCodeFormatter.sanitizeForUse(device.target)
         let sess = ensureSession(for: device)
         sess.alias = device.alias
-        sess.target = device.target
+        sess.target = cleanTarget
         sess.port = device.port
         sess.bridge.setWanConfig(currentWanConfigModel())
         selectedSessionID = sess.id
@@ -490,7 +530,7 @@ final class AppState: ObservableObject {
             _ = deviceBook.addOrUpdateDevice(
                 id: device.id,
                 alias: device.alias,
-                target: device.target,
+                target: cleanTarget,
                 port: device.port,
                 savedPassword: password,
                 groupTag: device.groupTag,
@@ -505,7 +545,7 @@ final class AppState: ObservableObject {
 
     /// Quick-connect from the Home screen (`远程控制` tab). Automatically enrolls into Device Book on success!
     func connectFromQuickInput(autoOpenDesktop: Bool = false) {
-        let rawTarget = quickConnectTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawTarget = DeviceCodeFormatter.sanitizeForUse(quickConnectTarget)
         guard !rawTarget.isEmpty else {
             statusLog = "请输入伙伴 9 位设备代码、openuu:// 连接串或 IP/域名"
             return
@@ -745,7 +785,7 @@ final class AppState: ObservableObject {
             }
             return DeviceProbeQueryModel(
                 id: d.id,
-                target: d.target,
+                target: DeviceCodeFormatter.sanitizeForUse(d.target),
                 pin: d.savedPassword,
                 endpoint_id: matchedTrusted?.endpoint_id ?? ""
             )
@@ -807,7 +847,121 @@ final class AppState: ObservableObject {
         if isHostRunning {
             Task { await stopHostService() }
         } else {
+            requestStartHost()
+        }
+    }
+
+    /// Checks required macOS permissions before starting Host mode; if missing, guides the user to System Settings.
+    func requestStartHost() {
+        hasAccessibilityPermission = InputInjector.hasAccessibilityPermission(prompt: false)
+        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+
+        if hasAllHostPermissions {
             startHost()
+            return
+        }
+
+        permissionCheckFeedback = ""
+        pendingStartHostAfterPermission = true
+        showingPermissionGuideSheet = true
+        statusLog = "[被控端] \(missingHostPermissionSummary)，请先在系统设置中开启权限"
+
+        // If Screen Recording was just granted in-session and SCShareableContent already works, re-verify asynchronously.
+        if !hasEffectiveScreenRecordingPermission {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.pollPermissionsInGuideSheet(checkScreenCaptureKit: false)
+            }
+        }
+    }
+
+    func openPermissionGuide(startHostWhenReady: Bool = false) {
+        refreshPermission()
+        permissionCheckFeedback = ""
+        pendingStartHostAfterPermission = startHostWhenReady
+        showingPermissionGuideSheet = true
+    }
+
+    func dismissPermissionGuide() {
+        showingPermissionGuideSheet = false
+        pendingStartHostAfterPermission = false
+        permissionCheckFeedback = ""
+    }
+
+    func openScreenRecordingSettings() {
+        _ = CGRequestScreenCaptureAccess()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func openAccessibilitySettings() {
+        _ = InputInjector.hasAccessibilityPermission(prompt: true)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func openNextMissingPermissionSettings() {
+        if !hasEffectiveScreenRecordingPermission {
+            openScreenRecordingSettings()
+        } else if !hasAccessibilityPermission {
+            openAccessibilitySettings()
+        }
+    }
+
+    func pollPermissionsInGuideSheet(checkScreenCaptureKit: Bool = false) async {
+        hasAccessibilityPermission = InputInjector.hasAccessibilityPermission(prompt: false)
+        let preflight = CGPreflightScreenCaptureAccess()
+        if preflight {
+            hasScreenRecordingPermission = true
+        } else if checkScreenCaptureKit {
+            await checkDirectCapturePermission()
+        }
+
+        if hasAllHostPermissions {
+            permissionCheckFeedback = ""
+            let shouldStart = pendingStartHostAfterPermission
+            pendingStartHostAfterPermission = false
+            showingPermissionGuideSheet = false
+            if shouldStart && !isHostRunning {
+                startHost()
+                statusLog = "[被控端] 权限已就绪，已自动开启本机被控服务"
+            }
+        }
+    }
+
+    func recheckPermissionsAndStartIfReady() async {
+        await pollPermissionsInGuideSheet(checkScreenCaptureKit: true)
+        guard !hasAllHostPermissions else { return }
+
+        switch (hasEffectiveScreenRecordingPermission, hasAccessibilityPermission) {
+        case (false, false):
+            permissionCheckFeedback = "尚未检测到「屏幕录制」与「辅助功能」权限，请点击上方按钮前往系统设置勾选 OpenUU。"
+        case (false, true):
+            permissionCheckFeedback = "尚未检测到「屏幕录制」权限。若你已在系统设置中勾选 OpenUU，点击下方「重启应用生效」即可完成开启。"
+        case (true, false):
+            permissionCheckFeedback = "尚未检测到「辅助功能」权限，请在「系统设置 ➔ 隐私与安全性 ➔ 辅助功能」中打开 OpenUU 开关。"
+        case (true, true):
+            permissionCheckFeedback = ""
+        }
+    }
+
+    func relaunchApplication() {
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+                Task { @MainActor in
+                    NSApp.terminate(nil)
+                }
+            }
+        } else if let execPath = Bundle.main.executablePath {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: execPath)
+            try? proc.run()
+            NSApp.terminate(nil)
         }
     }
 
@@ -886,10 +1040,12 @@ final class AppState: ObservableObject {
 
     func refreshPermission() {
         hasAccessibilityPermission = InputInjector.hasAccessibilityPermission(prompt: false)
-        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
-        if hasScreenRecordingPermission {
+        let preflight = CGPreflightScreenCaptureAccess()
+        if preflight || hasDirectCapturePermission {
+            hasScreenRecordingPermission = true
             Task { await checkDirectCapturePermission() }
         } else {
+            hasScreenRecordingPermission = false
             hasDirectCapturePermission = false
         }
     }

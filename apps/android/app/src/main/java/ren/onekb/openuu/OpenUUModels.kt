@@ -240,6 +240,13 @@ data class WindowTopologyItem(
 ) {
     val unsignedWindowId: UInt get() = windowId.toUInt()
 
+    val displayTitle: String
+        get() = when {
+            windowId == OpenUUConstants.FULL_DESKTOP_WINDOW_ID -> "Mac 整屏桌面"
+            title.isNotBlank() -> title
+            else -> "窗口 #$unsignedWindowId"
+        }
+
     companion object {
         fun fromJson(obj: JSONObject): WindowTopologyItem = WindowTopologyItem(
             windowId = obj.optLong("window_id", 0L).toInt(),

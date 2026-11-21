@@ -274,10 +274,9 @@ final class MultiWindowCaptureManager {
 
     func notifyNormalWindowInteracted(windowID: UInt32) {
         lastInteractedWindowID = windowID
-        guard !suppressedWindows.isEmpty || lastAppWindows.contains(where: { $0.windowLayer > 0 }) else { return }
         interactionSyncTask?.cancel()
         interactionSyncTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(220))
+            try? await Task.sleep(for: .milliseconds(110))
             guard !Task.isCancelled, let self else { return }
             await self.syncAppWindows(forcePublish: false)
         }
@@ -337,11 +336,10 @@ final class MultiWindowCaptureManager {
         engines[window.windowID] = engine
     }
 
-    /// Filters out tiny transient system overlays owned by the app process, such as macOS 14+
-    /// input-source / Caps Lock indicator pills (~84x77) that appear next to text fields.
+    /// Filters out tiny transient system overlays while always capturing compact WeChat right-click menus (~72x54pt).
     private static func isCapturablePopoverFrame(_ frame: CGRect) -> Bool {
-        guard frame.width >= 44, frame.height >= 28 else { return false }
-        return frame.width >= 110 || frame.height >= 95
+        guard frame.width >= 52, frame.height >= 28 else { return false }
+        return frame.width >= 68 || frame.height >= 48
     }
 
     private func currentOnScreenWindowSnapshot() -> (signature: [Int], visibleIDs: Set<UInt32>) {

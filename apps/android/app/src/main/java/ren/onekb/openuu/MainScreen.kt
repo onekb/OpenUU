@@ -99,9 +99,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -317,7 +319,8 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
     val discoveredPeers by viewModel.discoveredPeers.collectAsState()
     val identity by viewModel.identity.collectAsState()
 
-    var targetInput by remember { mutableStateOf("") }
+    var targetField by remember { mutableStateOf(TextFieldValue("")) }
+    val targetInput = targetField.text
     var pinInput by remember { mutableStateOf("") }
 
     LazyColumn(
@@ -354,7 +357,7 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
-                            text = "跨网 / 局域网低延迟 Mac 远控",
+                            text = "工作伴侣，永久免费。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -415,9 +418,9 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
                         )
                         FilledTonalButton(
                             onClick = {
-                                val pasted = viewModel.readLocalClipboardText().trim()
+                                val pasted = DeviceBookRepository.formatTargetInput(viewModel.readLocalClipboardText().trim())
                                 if (pasted.isNotEmpty()) {
-                                    targetInput = pasted
+                                    targetField = TextFieldValue(pasted, selection = TextRange(pasted.length))
                                 }
                             },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -434,8 +437,8 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
                     }
 
                     OutlinedTextField(
-                        value = targetInput,
-                        onValueChange = { targetInput = it },
+                        value = targetField,
+                        onValueChange = { targetField = formatTargetTextFieldValue(it, targetField.text) },
                         label = { Text("9 位设备码 / openuu:// 连接串 / IP:Port") },
                         placeholder = { Text("例如 839 201 475 或 192.168.1.10") },
                         singleLine = true,
@@ -443,7 +446,7 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                         trailingIcon = {
                             if (targetInput.isNotEmpty()) {
-                                IconButton(onClick = { targetInput = "" }) {
+                                IconButton(onClick = { targetField = TextFieldValue("") }) {
                                     Icon(Icons.Rounded.Close, contentDescription = "清除", modifier = Modifier.size(18.dp))
                                 }
                             }
@@ -490,19 +493,20 @@ private fun ConnectTabView(viewModel: OpenUUViewModel) {
                         }
                         OutlinedButton(
                             onClick = {
-                                if (targetInput.isNotBlank()) {
+                                val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(targetInput)
+                                if (cleanTarget.isNotBlank()) {
                                     viewModel.upsertDeviceBookEntry(
                                         DeviceBookEntry(
                                             id = UUID.randomUUID().toString(),
-                                            alias = targetInput.trim().take(24),
-                                            target = targetInput.trim(),
+                                            alias = cleanTarget.take(24),
+                                            target = cleanTarget,
                                             port = OpenUUConstants.DEFAULT_PORT,
                                             savedPin = pinInput.trim()
                                         )
                                     )
                                 }
                             },
-                            enabled = targetInput.isNotBlank(),
+                            enabled = DeviceBookRepository.sanitizeTargetForUse(targetInput).isNotBlank(),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1085,7 +1089,11 @@ private fun DeviceBookEditDialog(
     onSave: (DeviceBookEntry) -> Unit
 ) {
     var alias by remember(initial) { mutableStateOf(initial?.alias.orEmpty()) }
-    var target by remember(initial) { mutableStateOf(initial?.target.orEmpty()) }
+    var targetField by remember(initial) {
+        val formatted = DeviceBookRepository.formatTargetInput(initial?.target.orEmpty())
+        mutableStateOf(TextFieldValue(formatted, selection = TextRange(formatted.length)))
+    }
+    val target = targetField.text
     var portText by remember(initial) {
         mutableStateOf((initial?.port ?: OpenUUConstants.DEFAULT_PORT).toString())
     }
@@ -1111,8 +1119,8 @@ private fun DeviceBookEditDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
-                    value = target,
-                    onValueChange = { target = it },
+                    value = targetField,
+                    onValueChange = { targetField = formatTargetTextFieldValue(it, targetField.text) },
                     label = { Text("9 位设备码 / openuu:// / IP") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -1151,17 +1159,18 @@ private fun DeviceBookEditDialog(
         },
         confirmButton = {
             Button(
-                enabled = target.isNotBlank(),
+                enabled = DeviceBookRepository.sanitizeTargetForUse(target).isNotBlank(),
                 onClick = {
                     val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: OpenUUConstants.DEFAULT_PORT
+                    val cleanTarget = DeviceBookRepository.sanitizeTargetForUse(target)
                     onSave(
                         (initial ?: DeviceBookEntry(
                             id = UUID.randomUUID().toString(),
                             alias = "",
                             target = ""
                         )).copy(
-                            alias = alias.trim().ifBlank { target.trim() },
-                            target = target.trim(),
+                            alias = alias.trim().ifBlank { cleanTarget },
+                            target = cleanTarget,
                             port = port,
                             savedPin = savedPin.trim(),
                             notes = notes.trim(),
@@ -1664,4 +1673,77 @@ private fun SectionTitleRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+private fun formatTargetTextFieldValue(
+    input: TextFieldValue,
+    previousText: String
+): TextFieldValue {
+    if (input.composition != null) return input
+
+    var raw = input.text
+    var cursor = input.selection.end.coerceIn(0, raw.length)
+
+    if (DeviceBookRepository.isDeviceCodeLike(previousText) &&
+        DeviceBookRepository.isDeviceCodeLike(raw) &&
+        raw.length == previousText.length - 1 &&
+        cursor in 1 until previousText.length &&
+        previousText[cursor] == ' '
+    ) {
+        val prevDigits = previousText.filter { it in '0'..'9' }
+        val rawDigits = raw.filter { it in '0'..'9' }
+        if (prevDigits == rawDigits) {
+            raw = raw.removeRange(cursor - 1, cursor)
+            cursor -= 1
+        }
+    }
+
+    val formatted = DeviceBookRepository.formatTargetInput(raw)
+    if (formatted.isEmpty()) {
+        return TextFieldValue("", selection = TextRange(0))
+    }
+
+    val prefix = raw.substring(0, cursor.coerceAtMost(raw.length))
+    val newCursor = if (DeviceBookRepository.isDeviceCodeLike(formatted)) {
+        val digitsBefore = prefix.count { it in '0'..'9' }
+        if (digitsBefore == 0) {
+            0
+        } else {
+            var seen = 0
+            var pos = formatted.length
+            for (i in formatted.indices) {
+                if (formatted[i] in '0'..'9') {
+                    seen++
+                    if (seen == digitsBefore) {
+                        pos = i + 1
+                        break
+                    }
+                }
+            }
+            pos
+        }
+    } else {
+        val nonSpaceBefore = prefix.count { !it.isWhitespace() }
+        if (nonSpaceBefore == 0) {
+            0
+        } else {
+            var seen = 0
+            var pos = formatted.length
+            for (i in formatted.indices) {
+                if (!formatted[i].isWhitespace()) {
+                    seen++
+                    if (seen == nonSpaceBefore) {
+                        pos = i + 1
+                        break
+                    }
+                }
+            }
+            pos
+        }
+    }
+
+    return TextFieldValue(
+        text = formatted,
+        selection = TextRange(newCursor.coerceIn(0, formatted.length))
+    )
 }
