@@ -1,0 +1,165 @@
+<Window x:Class="OpenUU.Client.ProxyWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="OpenUU Remote Window"
+        Width="960" Height="640"
+        MinWidth="120" MinHeight="80"
+        WindowStyle="None"
+        Background="#0C0E14"
+        AllowDrop="True"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            ResizeBorderThickness="6"
+                            GlassFrameThickness="1"
+                            CornerRadius="10"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="WindowTaskbarInfo" />
+    </Window.TaskbarItemInfo>
+
+    <Grid x:Name="InteractiveSurface"
+          Background="#0C0E14"
+          Focusable="True"
+          InputMethod.IsInputMethodEnabled="True"
+          ClipToBounds="True">
+
+        <!-- Hardware/MediaFoundation Decoded Remote Video Frame -->
+        <Image x:Name="VideoImage"
+               Stretch="Fill"
+               RenderOptions.BitmapScalingMode="HighQuality"
+               IsHitTestVisible="False" />
+
+        <!-- Placeholder shown briefly before first keyframe arrives -->
+        <StackPanel x:Name="ConnectingPlaceholder"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    IsHitTestVisible="False">
+            <TextBlock Text="正在同步远端应用画面..."
+                       Foreground="#94A3B8"
+                       FontSize="13"
+                       HorizontalAlignment="Center" />
+        </StackPanel>
+
+        <!-- Translucent Top-Edge Hover Titlebar Capsule (drag to move, close remote or local stream) -->
+        <Border x:Name="HoverTitlebarPill"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Center"
+                Margin="0,7,0,0"
+                Height="30"
+                MinWidth="310"
+                MaxWidth="460"
+                CornerRadius="15"
+                Background="#D818181B"
+                BorderBrush="#38FFFFFF"
+                BorderThickness="1"
+                Visibility="Collapsed"
+                MouseLeftButtonDown="HoverTitlebarPill_MouseLeftButtonDown">
+            <Grid Margin="8,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="CloseRemoteBtn"
+                        Grid.Column="0"
+                        Content="✕ 关对端窗"
+                        Click="CloseRemoteBtn_Click"
+                        ToolTip="关闭被控端上的这个软件窗口 (⌘W / Alt+F4)"
+                        Padding="8,2"
+                        FontSize="11"
+                        FontWeight="SemiBold"
+                        Foreground="#F87171"
+                        Background="#22EF4444"
+                        BorderThickness="0"
+                        Cursor="Hand" />
+
+                <TextBlock x:Name="HoverTitleText"
+                           Grid.Column="1"
+                           Text="远程窗口"
+                           Foreground="#F4F4F5"
+                           FontSize="11.5"
+                           FontWeight="Medium"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"
+                           Margin="10,0"
+                           TextTrimming="CharacterEllipsis"
+                           IsHitTestVisible="False" />
+
+                <Button x:Name="MuteAudioBtn"
+                        Grid.Column="2"
+                        Content="🔊"
+                        Click="MuteAudioBtn_Click"
+                        ToolTip="远端声音已开启（点击静音）"
+                        Padding="6,2"
+                        Margin="0,0,5,0"
+                        FontSize="11"
+                        Foreground="#4ADE80"
+                        Background="#22FFFFFF"
+                        BorderThickness="0"
+                        Cursor="Hand" />
+
+                <Button x:Name="CloseStreamBtn"
+                        Grid.Column="3"
+                        Content="✕ 关投屏"
+                        Click="CloseStreamBtn_Click"
+                        ToolTip="仅关闭本机投屏窗口（不关闭被控端软件）"
+                        Padding="8,2"
+                        FontSize="11"
+                        FontWeight="SemiBold"
+                        Foreground="#CBD5E1"
+                        Background="#22FFFFFF"
+                        BorderThickness="0"
+                        Cursor="Hand" />
+            </Grid>
+        </Border>
+
+        <!-- Bottom-Left Click-Through Live Video Debug HUD -->
+        <Border x:Name="DebugHudBox"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Left"
+                Margin="10,0,0,10"
+                Padding="10,6"
+                CornerRadius="8"
+                Background="#BE09090B"
+                BorderBrush="#38FFFFFF"
+                BorderThickness="1"
+                Visibility="Collapsed"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="DebugHudText"
+                       Text="等待视频流..."
+                       FontFamily="Consolas"
+                       FontSize="11"
+                       Foreground="#73FA9E"
+                       LineHeight="15" />
+        </Border>
+
+        <!-- Drag-and-Drop File Zone Overlay -->
+        <Border x:Name="FileDropOverlay"
+                Background="#243B82F6"
+                BorderBrush="#D93B82F6"
+                BorderThickness="2.5"
+                CornerRadius="8"
+                Visibility="Collapsed"
+                IsHitTestVisible="False">
+            <Border VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Padding="18,10"
+                    CornerRadius="14"
+                    Background="#E618181B"
+                    BorderBrush="#44FFFFFF"
+                    BorderThickness="1">
+                <TextBlock x:Name="FileDropLabel"
+                           Text="松手发送文件到远端窗口"
+                           Foreground="White"
+                           FontSize="13.5"
+                           FontWeight="SemiBold" />
+            </Border>
+        </Border>
+    </Grid>
+</Window>

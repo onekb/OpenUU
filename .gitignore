@@ -10,6 +10,9 @@ apps/android/local.properties
 apps/android/app/src/main/jniLibs-static/
 apps/ios/Frameworks/
 apps/ios/build/
+apps/windows/.vs/
+apps/windows/**/bin/
+apps/windows/**/obj/
 .DS_Store
 *.xcworkspace
 xcuserdata/

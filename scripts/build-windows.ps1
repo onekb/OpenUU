@@ -1,0 +1,151 @@
+param(
+    [switch]$SelfContained = $true,
+    [switch]$SkipZip = $false,
+    [switch]$SyncIcons = $false,
+    [string]$OutDir = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+$RootDir = Split-Path -Parent $PSScriptRoot
+
+# Auto-augment PATH with user-space Rust, .NET, and WinGet LLVM-MinGW if installed
+$extraPaths = @()
+if (Test-Path "$env:USERPROFILE\.dotnet") { $extraPaths += "$env:USERPROFILE\.dotnet" }
+if (Test-Path "$env:USERPROFILE\.cargo\bin") { $extraPaths += "$env:USERPROFILE\.cargo\bin" }
+
+$wingetLlvm = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW*" -Directory -ErrorAction SilentlyContinue |
+    ForEach-Object { Get-ChildItem -Path $_.FullName -Filter "llvm-mingw-*" -Directory -ErrorAction SilentlyContinue } |
+    Select-Object -Last 1
+if ($wingetLlvm -and (Test-Path (Join-Path $wingetLlvm.FullName "bin"))) {
+    $extraPaths += (Join-Path $wingetLlvm.FullName "bin")
+}
+
+if ($extraPaths.Count -gt 0) {
+    $env:PATH = ($extraPaths -join ";") + ";" + $env:PATH
+}
+
+# Load optional .env.local
+$envLocal = Join-Path $RootDir ".env.local"
+if (Test-Path $envLocal) {
+    Get-Content $envLocal | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $parts = $line.Split("=", 2)
+            [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim().Trim('"').Trim("'"))
+        }
+    }
+}
+
+$iconPath = Join-Path $RootDir "apps\windows\OpenUUApp\Resources\AppIcon.ico"
+if ($SyncIcons -or -not (Test-Path $iconPath)) {
+    Write-Host "==> Syncing official OpenUU brand icons for Windows..."
+    & (Join-Path $PSScriptRoot "sync-windows-icons.ps1")
+}
+
+$nativeOutDir = Join-Path $RootDir "build\native-win-x64"
+New-Item -ItemType Directory -Force -Path $nativeOutDir | Out-Null
+
+Write-Host "==> 1/4 Building openuu-core (Rust release cdylib) & openuu-cli..."
+cargo rustc --manifest-path (Join-Path $RootDir "Cargo.toml") -p openuu-core --release --lib --crate-type cdylib
+if ($LASTEXITCODE -ne 0) { throw "cargo rustc openuu-core failed with exit code $LASTEXITCODE" }
+
+cargo build --manifest-path (Join-Path $RootDir "Cargo.toml") -p openuu-cli --release
+if ($LASTEXITCODE -ne 0) { throw "cargo build openuu-cli failed with exit code $LASTEXITCODE" }
+
+$coreDllSrc = Join-Path $RootDir "target\release\openuu_core.dll"
+if (-not (Test-Path $coreDllSrc)) {
+    throw "Expected Rust cdylib not found at $coreDllSrc"
+}
+Copy-Item -Force $coreDllSrc (Join-Path $nativeOutDir "openuu_core.dll")
+
+Write-Host "==> 2/4 Building openuu_win_media.dll (Media Foundation & DXGI/DWM helper)..."
+$cppSrc = Join-Path $RootDir "apps\windows\native\openuu_win_media.cpp"
+$mediaDllOut = Join-Path $nativeOutDir "openuu_win_media.dll"
+
+$mingwClang = Get-Command "x86_64-w64-mingw32-clang++.exe" -ErrorAction SilentlyContinue
+$clang = Get-Command "clang++.exe" -ErrorAction SilentlyContinue
+$msvcCl = Get-Command "cl.exe" -ErrorAction SilentlyContinue
+
+if ($mingwClang) {
+    & $mingwClang.Source -O3 -std=c++17 -shared -DUNICODE -D_UNICODE `
+        $cppSrc -o $mediaDllOut `
+        -lmfplat -lmf -lmfuuid -ld3d11 -ldxgi -ldwmapi -lgdi32 -luser32 -lole32 -loleaut32 -lstrmiids -lwinmm -luuid `
+        "-static-libgcc" "-static-libstdc++" "-Wl,-Bstatic" "-lwinpthread" "-Wl,-Bdynamic"
+    if ($LASTEXITCODE -ne 0) { throw "x86_64-w64-mingw32-clang++ failed with exit code $LASTEXITCODE" }
+}
+elseif ($msvcCl) {
+    Push-Location $nativeOutDir
+    try {
+        & $msvcCl.Source /nologo /O2 /EHsc /std:c++17 /DUNICODE /D_UNICODE /LD $cppSrc `
+            /Fe:$mediaDllOut `
+            mfplat.lib mf.lib mfuuid.lib d3d11.lib dxgi.lib dwmapi.lib gdi32.lib user32.lib ole32.lib oleaut32.lib strmiids.lib winmm.lib uuid.lib
+        if ($LASTEXITCODE -ne 0) { throw "MSVC cl.exe failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+}
+elseif ($clang) {
+    & $clang.Source -O3 -std=c++17 -shared -DUNICODE -D_UNICODE `
+        $cppSrc -o $mediaDllOut `
+        -lmfplat -lmf -lmfuuid -ld3d11 -ldxgi -ldwmapi -lgdi32 -luser32 -lole32 -loleaut32 -lstrmiids -lwinmm -luuid
+    if ($LASTEXITCODE -ne 0) { throw "clang++ failed with exit code $LASTEXITCODE" }
+}
+else {
+    throw "No C++17 compiler found (install LLVM-MinGW or Visual Studio Build Tools)."
+}
+
+$publishDir = if ($OutDir) { $OutDir } else { Join-Path $RootDir "build\OpenUU-Windows" }
+if (Test-Path $publishDir) {
+    Remove-Item -Recurse -Force $publishDir -ErrorAction SilentlyContinue
+    if (Test-Path (Join-Path $publishDir "OpenUU.dll")) {
+        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.5.0"
+        Write-Host "==> Note: $publishDir is currently in use by a running OpenUU.exe; publishing to $fallbackDir ..."
+        $publishDir = $fallbackDir
+        if (Test-Path $publishDir) {
+            Remove-Item -Recurse -Force $publishDir
+        }
+    }
+}
+
+$scValue = if ($SelfContained) { "true" } else { "false" }
+Write-Host "==> 3/4 Publishing OpenUUApp (.NET 8 WPF win-x64, self-contained=$scValue)..."
+dotnet publish (Join-Path $RootDir "apps\windows\OpenUUApp\OpenUUApp.csproj") `
+    -c Release `
+    -r win-x64 `
+    --self-contained $scValue `
+    -p:PublishSingleFile=false `
+    -p:DebugType=embedded `
+    -o $publishDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+
+Copy-Item -Force (Join-Path $nativeOutDir "openuu_core.dll") (Join-Path $publishDir "openuu_core.dll")
+Copy-Item -Force (Join-Path $nativeOutDir "openuu_win_media.dll") (Join-Path $publishDir "openuu_win_media.dll")
+
+# Optional Authenticode signing if configured
+if ($env:OPENUU_WINDOWS_CERT_SHA1) {
+    $signtool = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+    if ($signtool) {
+        Write-Host "==> Signing binaries with certificate $($env:OPENUU_WINDOWS_CERT_SHA1)..."
+        & $signtool.Source sign /sha1 $env:OPENUU_WINDOWS_CERT_SHA1 /fd SHA256 `
+            (Join-Path $publishDir "openuu_core.dll") `
+            (Join-Path $publishDir "openuu_win_media.dll") `
+            (Join-Path $publishDir "OpenUU.exe")
+    }
+}
+
+$zipPath = Join-Path $RootDir "build\OpenUU-Windows-x64.zip"
+if (-not $SkipZip) {
+    Write-Host "==> 4/4 Creating portable archive $zipPath ..."
+    if (Test-Path $zipPath) {
+        Remove-Item -Force $zipPath
+    }
+    Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
+}
+
+Write-Host "==> Done! Standalone Windows app created at:"
+Write-Host "    Executable : $publishDir\OpenUU.exe"
+if (-not $SkipZip) {
+    Write-Host "    Portable ZIP: $zipPath"
+}

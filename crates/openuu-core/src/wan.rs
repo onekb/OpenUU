@@ -223,6 +223,9 @@ pub fn is_lan_or_private_ip(ip: IpAddr) -> bool {
                 || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
         }
         IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_lan_or_private_ip(IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unicast_link_local()
                 || (v6.segments()[0] & 0xfe00) == 0xfc00

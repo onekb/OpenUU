@@ -11,9 +11,9 @@
 <p align="center">
   <a href="https://github.com/onekb/OpenUU/releases/latest"><img src="https://img.shields.io/github/v/release/onekb/OpenUU?style=flat-square&color=0EA5E9&label=Download" alt="Latest Release" /></a>
   <img src="https://img.shields.io/badge/macOS-控制端%20%26%20被控端-0F172A?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
+  <img src="https://img.shields.io/badge/Windows-控制端%20%26%20被控端-0F172A?style=flat-square&logo=windows&logoColor=00A4EF" alt="Windows" />
   <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-控制端-0F172A?style=flat-square&logo=ios&logoColor=white" alt="iOS" />
   <img src="https://img.shields.io/badge/Android-控制端-0F172A?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
-  <img src="https://img.shields.io/badge/Windows-即将支持-334155?style=flat-square&logo=windows&logoColor=white" alt="Windows Coming Soon" />
   <a href="https://github.com/onekb/OpenUU/stargazers"><img src="https://img.shields.io/github/stars/onekb/OpenUU?style=flat-square&color=10B981" alt="GitHub Stars" /></a>
 </p>
 
@@ -41,11 +41,11 @@
 
 **OpenUU 同时支持「整屏远程桌面」和独家「单应用窗口」模式：**
 
-- **只拉你要用的那个窗口**：把公司 Mac Studio 或家里 Mac mini 上的任意 App（编辑器、终端、聊天软件、浏览器等）单独拉到本机桌面，和本地窗口并排使用，**彻底告别桌面套桌面**。
-- **像本地软件一样自然**：拖拉窗口边缘即可实时同步缩放，文字始终保持 Retina 锐利；本地中文输入法直接打字，剪贴板文字/图片/文件无缝双向同步。
+- **只拉你要用的那个窗口**：把公司或家里的 Mac / Windows 电脑上的任意 App（编辑器、终端、聊天软件、浏览器等）单独拉到本机桌面，和本地窗口并排使用，**彻底告别桌面套桌面**。
+- **像本地软件一样自然**：拖拉窗口边缘即可实时同步缩放，文字始终保持高清锐利；本地中文输入法直接打字，剪贴板文字/图片/文件无缝双向同步，跨 Mac / Windows 智能映射 `Ctrl` 与 `⌘ Command` 快捷键。
 - **远端声音同步 + 被控端自动静音**：无需安装第三方虚拟声卡，支持将远端单应用或整屏声音（48kHz 立体声 AAC-LC）实时传至控制端，并支持远控期间被控电脑自动静音（断开自动恢复外放）。
-- **程序坞独立图标 + 消息通知直达**：远端打开的 App 会在本机 Dock 自动生成带 OpenUU 角标的独立图标，并实时同步未读红点与系统通知横幅——收到消息，点一下通知直接切回对应远端窗口。
-- **多台电脑，一块屏幕**：支持同时连接多台 Mac，把不同机器上的窗口像拼图一样自由混排在你的主屏幕上。
+- **程序坞 / 任务栏独立图标 + 消息通知直达**：远端打开的 App 会在本机 macOS Dock 或 Windows 任务栏自动生成带 OpenUU 角标的独立图标，并实时同步未读红点与系统通知横幅——收到消息，点一下通知直接切回对应远端窗口。
+- **多台电脑，一块屏幕**：支持同时连接多台 Mac 与 Windows 电脑，把不同机器上的窗口像拼图一样自由混排在你的主屏幕上。
 
 ---
 
@@ -85,11 +85,11 @@
 | 平台 | 控制端（发起远控） | 被控端（允许被控） | 状态 |
 | :--- | :---: | :---: | :--- |
 | **macOS** | ✅ 支持 | ✅ 支持 | 已可用（支持单应用窗口 + 整屏桌面） |
+| **Windows** | ✅ 支持 | ✅ 支持 | 已可用（Windows 10 / 11，支持单应用窗口 + 整屏桌面） |
 | **iOS / iPadOS** | ✅ 支持 | — | 已可用（iPhone & iPad 原生硬解） |
 | **Android** | ✅ 支持 | — | 已可用（手机 & 平板原生硬解） |
-| **Windows** | 🚧 规划中 | 🚧 规划中 | **即将支持（控制端 & 被控端均在开发中）** |
 
-> 欢迎点击右上角 **Star ⭐** 关注进度，Windows 端发布后会第一时间更新。
+> 欢迎点击右上角 **Star ⭐** 支持项目持续迭代，更多平台（如 Linux 端）欢迎提交 Issue / PR 共建。
 
 ---
 
@@ -100,11 +100,16 @@
 | 平台 | 安装包 | 系统要求与说明 |
 | :--- | :--- | :--- |
 | **macOS (Apple Silicon / M 系列芯片)** | `OpenUU-*-macOS-arm64.dmg` | 控制端 + 被控端，需 macOS 14.0+ |
+| **Windows (64 位)** | `OpenUU-*-Windows-x64.zip` | 控制端 + 被控端，需 Windows 10 / 11 (`x64`，免安装解压即用) |
 | **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端，需 Android 8.0+ (`arm64-v8a`) |
 | **iOS / iPadOS** | `OpenUU-*-iOS-unsigned.ipa` | 控制端，需 iOS 17.0+，未签名 IPA（需自签安装） |
 
 > **⚠️ 关于系统安全提示（必看）**  
-> OpenUU 为个人发起的完全开源项目，**暂未购买 Apple Developer / 应用商店的商业签名与公证证书**，因此首次安装或打开时系统会弹出安全拦截提示，属正常现象。全部代码均在本仓库公开，有顾虑的朋友也可直接[从源码自行编译](#-开发者与源码构建)。
+> OpenUU 为个人发起的完全开源项目，**暂未购买 Apple Developer / Microsoft EV 代码签名与应用商店商业证书**，因此首次安装或打开时系统会弹出安全拦截提示，属正常现象。全部代码均在本仓库公开，有顾虑的朋友也可直接[从源码自行编译](#-开发者与源码构建)。
+
+- **🪟 Windows 提示“Windows 已保护你的电脑 (Microsoft Defender SmartScreen)”**：  
+  解压 `.zip` 后双击 `OpenUU.exe`，若弹出蓝色拦截窗口，点击 **「更多信息」** → **「仍要运行」** 即可直接启动（无需安装任何运行时依赖）。  
+  > 作为 **被控端** 时无需额外系统权限即可开箱使用；若需远控操控目标机器上以「管理员身份」运行的软件窗口，可在「安全与画质」页点击 **「以管理员身份重启」**。
 
 - **🍎 macOS 提示“已损坏，无法打开”或“无法验证开发者”**：  
   打开 `.dmg` 将 **OpenUU.app** 拖入 `应用程序 (Applications)` 后，打开终端执行一行命令解除浏览器下载隔离标记即可正常打开：
@@ -125,8 +130,8 @@
 ## ⚡ 快速上手
 
 ### 1. 同局域网直连（最简单）
-1. 在被控的 Mac 上打开 OpenUU，点击 **「开启被控」**（首次使用按提示授予「屏幕录制」和「辅助功能」权限）。
-2. 在另一台 Mac、手机或平板上打开 OpenUU，点击局域网列表中发现的设备，输入访问密码即可连接。
+1. 在被控的 Mac 或 Windows 电脑上打开 OpenUU，点击 **「开启被控」**（macOS 首次使用按提示授予「屏幕录制」和「辅助功能」权限；Windows 免配置即开即用）。
+2. 在另一台 Windows、Mac、手机或平板上打开 OpenUU，点击局域网列表中发现的设备，输入访问密码即可连接。
 3. 连上后，自由选择打开某个 **「单应用窗口」** 或进入 **「整屏桌面」**。
 
 ### 2. 异地跨公网连接
@@ -176,6 +181,13 @@ chmod +x scripts/build-macos.sh
 open ./build/OpenUU.app
 ```
 
+### Windows 客户端 & 被控端
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+.\build\OpenUU-Windows\OpenUU.exe
+# 便携版压缩包产物：.\build\OpenUU-Windows-x64.zip
+```
+
 ### Android 客户端
 ```bash
 chmod +x scripts/build-android.sh
@@ -196,6 +208,7 @@ chmod +x scripts/build-ios.sh
 - `crates/openuu-cli`：命令行连通性测试与调试工具
 - `proto/openuu.proto`：跨平台 Protobuf v3 控制协议（H.264 / HEVC 双编码支持）
 - `apps/macos`：macOS 原生 App（SwiftUI + AppKit + ScreenCaptureKit + VideoToolbox）
+- `apps/windows`：Windows 原生客户端 & 被控端（.NET 8 WPF + Win32/DWM + DXGI + Media Foundation 硬编硬解）
 - `apps/ios`：iOS / iPadOS 原生客户端（SwiftUI + UIKit + VideoToolbox）
 - `apps/android`：Android 原生客户端（Kotlin + Jetpack Compose + MediaCodec）
 - `deploy/`：Docker Compose 与 Cloudflare Workers 一键部署套件
@@ -207,4 +220,4 @@ chmod +x scripts/build-ios.sh
 ## 💬 交流与反馈
 
 如果 OpenUU 对你有帮助，欢迎点一个 **Star ⭐** 支持项目持续迭代！  
-遇到问题、想要新功能，或者希望加速 Windows 端适配，欢迎直接提 [Issue](https://github.com/onekb/OpenUU/issues) 或提交 PR。
+遇到问题或想要新功能，欢迎直接提 [Issue](https://github.com/onekb/OpenUU/issues) 或提交 PR。

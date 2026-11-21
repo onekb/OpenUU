@@ -542,5 +542,11 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
 fn default_hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "OpenUU-Mac".to_string())
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "windows") {
+                "OpenUU-PC".to_string()
+            } else {
+                "OpenUU-Mac".to_string()
+            }
+        })
 }

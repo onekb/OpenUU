@@ -455,10 +455,12 @@
       /iPad|iPhone|iPod/i.test(ua) ||
       (platform === "MacIntel" && navigator.maxTouchPoints > 1);
     const isAndroid = /Android/i.test(ua);
+    const isWindows = /Win/i.test(platform) || /Windows/i.test(ua);
 
     let os = "macos";
     if (isAndroid) os = "android";
     else if (isIOS) os = "ios";
+    else if (isWindows) os = "windows";
 
     document.querySelectorAll(".dl-box[data-os]").forEach((box) => {
       const match = box.getAttribute("data-os") === os;
@@ -477,6 +479,7 @@
     if (heroBtn && heroLabel) {
       const map = {
         macos: "免费下载 Mac 版",
+        windows: "免费下载 Windows 版",
         android: "免费下载安卓版",
         ios: "下载 iPhone / iPad 版",
       };
@@ -489,7 +492,7 @@
     const heroMoreLink = document.getElementById("hero-more-link");
     if (heroMoreLink) {
       heroMoreLink.textContent =
-        os === "macos" ? "查看手机与平板版 ›" : "查看 Mac 电脑版与全部平台 ›";
+        os === "macos" || os === "windows" ? "查看全部平台与手机版 ›" : "查看 Mac / Windows 电脑版 ›";
     }
   }
 
@@ -528,6 +531,7 @@
       const assets = Array.isArray(rel.assets) ? rel.assets : [];
       const map = {
         macos: assets.find((a) => /\.dmg$/i.test(a.name)),
+        windows: assets.find((a) => /windows.*\.zip$/i.test(a.name)),
         android: assets.find((a) => /\.apk$/i.test(a.name)),
         ios: assets.find((a) => /\.ipa$/i.test(a.name)),
       };
