@@ -528,21 +528,23 @@
           el.textContent = rel.tag_name;
         });
       }
+      const fallbackReleaseUrl = rel.html_url || "https://github.com/onekb/OpenUU/releases/latest";
       const assets = Array.isArray(rel.assets) ? rel.assets : [];
       const map = {
         macos: assets.find((a) => /\.dmg$/i.test(a.name)),
-        windows: assets.find((a) => /windows.*\.zip$/i.test(a.name)),
+        windows: assets.find((a) => /windows.*\.(zip|exe|msi)$/i.test(a.name)),
         android: assets.find((a) => /\.apk$/i.test(a.name)),
         ios: assets.find((a) => /\.ipa$/i.test(a.name)),
       };
       Object.entries(map).forEach(([k, asset]) => {
-        if (!asset) return;
+        const url = asset ? asset.browser_download_url : k === "windows" ? fallbackReleaseUrl : null;
+        if (!url) return;
         document.querySelectorAll(`a[data-dl-link="${k}"]`).forEach((a) => {
-          a.href = asset.browser_download_url;
+          a.href = url;
         });
         const heroBtn = document.getElementById("hero-dl-btn");
         if (heroBtn && heroBtn.getAttribute("data-dl-role") === k) {
-          heroBtn.href = asset.browser_download_url;
+          heroBtn.href = url;
         }
       });
     } catch {

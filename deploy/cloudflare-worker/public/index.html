@@ -17,7 +17,7 @@
   <meta property="og:title" content="OpenUU — 把另一台电脑上的软件，直接拉到眼前用" />
   <meta
     property="og:description"
-    content="完全免费的远程控制软件：支持把远端电脑的单个窗口单独拉到桌面同屏使用，不限画质、不限速、无广告。"
+    content="完全免费的开源远程控制软件：支持把远端 Mac / Windows 电脑的单个软件窗口单独拉到当前屏幕并排使用，全平台覆盖 Mac、Windows、iPhone / iPad 与安卓。"
   />
   <meta property="og:image" content="https://openuu.1kb.ren/assets/single-window-mode.webp" />
   <meta name="twitter:card" content="summary_large_image" />
@@ -98,9 +98,9 @@
         </div>
 
         <div class="hero-reassure">
-          <span>完全免费</span>
+          <span>支持 Mac · Windows · iOS · 安卓</span>
           <i aria-hidden="true">·</i>
-          <span>无会员限速</span>
+          <span>完全免费不限速</span>
           <i aria-hidden="true">·</i>
           <span>无需注册账号</span>
           <i aria-hidden="true">·</i>
@@ -637,7 +637,7 @@
             </div>
             <h3>只拉你要用的那个窗口</h3>
             <p>
-              不用在公司电脑登录私人聊天账号，也不用把整块远端屏幕缩成小框。需要哪个软件就单独拉哪个过来，拖拉边缘就能调大小，底下程序坞还会同步新消息红点。
+              不用在公司电脑登录私人聊天账号，也不用把整块远端屏幕缩成小框。无论远端是 Mac 还是 Windows，需要哪个软件就单独拉哪个过来，底下程序坞或任务栏还会同步独立图标与消息红点。
             </p>
           </div>
 
@@ -660,9 +660,9 @@
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
               </svg>
             </div>
-            <h3>复制粘贴互通，隐私有保障</h3>
+            <h3>声音剪贴板互通，隐私有保障</h3>
             <p>
-              在这台电脑复制一段话、截一张图或拖一个文件，粘贴就能传到另一台电脑。全程加密传输，自己设备连过一次后自动记住，外人输错密码会自动锁定。
+              跨 Mac 与 Windows 复制文字、截图或拖文件直接互通，自动映射 Ctrl 与 ⌘ 快捷键，还能同步远端声音并让被控电脑自动静音。全程端到端加密，外人输错密码自动锁定。
             </p>
           </div>
         </div>
@@ -674,12 +674,12 @@
               出门没带电脑？手机和平板也能轻松操控
             </h3>
             <p class="mobile-showcase-desc">
-              无论躺在沙发上拿 iPad，还是在路上只带了手机，随时都能连回你的 Mac 处理急事。
+              无论躺在沙发上拿 iPad，还是在路上只带了手机，随时都能连回你的 Mac 或 Windows 电脑处理急事。
             </p>
             <ul class="mobile-points">
               <li>横屏自动铺满整块屏幕，没有多余黑边遮挡视线</li>
               <li>像浏览器标签页一样切换多个电脑窗口，不会误触断开连接</li>
-              <li>自带中文输入键盘与常用快捷键栏（复制、粘贴、撤回一键搞定）</li>
+              <li>系统中文输入法直接打字上屏，自带多排扩展快捷键键盘</li>
               <li>手机相册里的照片和文档，点一下就能直接发到电脑上</li>
             </ul>
           </div>
@@ -728,7 +728,7 @@
             <div class="step-number">1</div>
             <h3>在电脑上开启「允许控制」</h3>
             <p>
-              在你想远程访问的那台 Mac 上打开 OpenUU，点一下开启按钮，屏幕上会自动显示本机的 <strong>9 位数字代码</strong>和访问密码。
+              在你想远程访问的那台 Mac 或 Windows 电脑上打开 OpenUU，点一下开启按钮，屏幕上会自动显示本机的 <strong>9 位数字代码</strong>和访问密码。
             </p>
             <div class="code-demo">996 007 886</div>
           </div>
@@ -737,7 +737,7 @@
             <div class="step-number">2</div>
             <h3>在另一台设备上输入代码</h3>
             <p>
-              打开你手头的另一台 Mac、手机或平板：如果连着同一个 Wi-Fi，直接点列表里出现的电脑名字；如果出门在外，输入那 9 位数字和密码即可。
+              打开你手头的另一台 Windows、Mac、手机或平板：如果连着同一个 Wi-Fi，直接点列表里出现的电脑名字；如果出门在外，输入那 9 位数字和密码即可。
             </p>
           </div>
 
@@ -771,7 +771,7 @@
                 <span class="rec-tag">适合当前设备</span>
               </div>
               <p class="dl-desc">
-                既能控制别的电脑，也能让别的设备连回来。适合 M1 / M2 / M3 / M4 系列芯片苹果电脑（macOS 14 及以上）。
+                既能控制别的 Mac / Windows 电脑，也能让别的设备连回来。适合 M1 / M2 / M3 / M4 系列芯片苹果电脑（macOS 14 及以上）。
               </p>
             </div>
             <a
@@ -783,6 +783,26 @@
             </a>
           </div>
 
+          <!-- Windows -->
+          <div class="dl-box" data-os="windows">
+            <div>
+              <div class="dl-top">
+                <span class="dl-title">Windows 电脑版</span>
+                <span class="rec-tag" hidden>适合当前设备</span>
+              </div>
+              <p class="dl-desc">
+                既能控制别的 Mac / Windows 电脑，也能让别的设备连回来。免安装便携版，解压即用，适合 Windows 10 / 11（64 位）。
+              </p>
+            </div>
+            <a
+              data-dl-link="windows"
+              href="https://github.com/onekb/OpenUU/releases/latest"
+              class="btn btn-secondary"
+            >
+              下载 Windows 版 (.zip)
+            </a>
+          </div>
+
           <!-- Android -->
           <div class="dl-box" data-os="android">
             <div>
@@ -791,7 +811,7 @@
                 <span class="rec-tag" hidden>适合当前设备</span>
               </div>
               <p class="dl-desc">
-                用安卓手机或平板随时随地远程控制你的 Mac 电脑（需要 Android 8.0 及以上系统）。
+                用安卓手机或平板随时随地远程控制你的 Mac 或 Windows 电脑（需要 Android 8.0 及以上系统）。
               </p>
             </div>
             <a
@@ -811,7 +831,7 @@
                 <span class="rec-tag" hidden>适合当前设备</span>
               </div>
               <p class="dl-desc">
-                用 iPhone 或 iPad 远程控制 Mac。暂未上架应用商店，提供安装包供爱思助手 / AltStore / SideStore 安装。
+                用 iPhone 或 iPad 远程控制你的 Mac 或 Windows 电脑。暂未上架应用商店，提供安装包供爱思助手 / AltStore / SideStore 安装。
               </p>
             </div>
             <a
@@ -820,26 +840,6 @@
               class="btn btn-secondary"
             >
               下载安装包 (.ipa)
-            </a>
-          </div>
-
-          <!-- Windows -->
-          <div class="dl-box" data-os="windows">
-            <div>
-              <div class="dl-top">
-                <span class="dl-title">Windows 电脑版</span>
-                <span class="rec-tag" hidden>适合当前设备</span>
-              </div>
-              <p class="dl-desc">
-                既能控制别的 Mac / Windows 电脑，也能让别的设备连回来。免安装便携版，适合 Windows 10 / 11（64 位）。
-              </p>
-            </div>
-            <a
-              data-dl-link="windows"
-              href="https://github.com/onekb/OpenUU/releases/download/v0.5.0/OpenUU-v0.5.0-Windows-x64.zip"
-              class="btn btn-secondary"
-            >
-              下载 Windows 版 (.zip)
             </a>
           </div>
         </div>
@@ -861,7 +861,7 @@
             </summary>
             <div class="faq-body">
               这是因为 OpenUU 是个人免费开源作品（<a href="https://github.com/onekb/OpenUU" target="_blank" rel="noopener noreferrer" class="inline-link">全部源码在 GitHub 公开可查</a>），暂时没有每年付费购买苹果或微软的商业企业签名证书，属于系统的正常首次提醒，软件本身完全安全。<br />
-              <strong>Windows 电脑：</strong>解压后双击 <code>OpenUU.exe</code>，若弹出蓝色 SmartScreen 窗口，点击<strong>「更多信息」→「仍要运行」</strong>即可直接打开。<br />
+              <strong>Windows 电脑：</strong>解压后双击 <code>OpenUU.exe</code>，若弹出蓝色 SmartScreen 窗口，点击<strong>「更多信息」→「仍要运行」</strong>即可直接打开（无需安装额外依赖；若需远控以管理员权限运行的软件窗口，可在设置内一键以管理员身份重启）。<br />
               <strong>Mac 电脑（方式一）：</strong>在弹窗点「完成」，然后打开 Mac 的<strong>「系统设置 → 隐私与安全性」</strong>，滑到最底部点一下<strong>「仍要打开」</strong>即可。<br />
               <strong>Mac 电脑（方式二，最快）：</strong>把 OpenUU 拖进「应用程序」文件夹后，打开「终端」粘贴下面这行命令回车，就能直接打开：
               <div class="cmd-inline">
@@ -916,7 +916,7 @@
               <span>开源不易，去 GitHub 点颗 Star 支持一下？</span>
             </div>
             <p>
-              OpenUU 完全免费开源、无广告无套路。欢迎前往 GitHub 查看源码、点 Star 关注 Windows 版进度，或在 Issues 反馈使用体验。
+              OpenUU 完全免费开源、无广告无套路，现已完整支持 Mac、Windows、iPhone / iPad 与安卓全平台互控。欢迎前往 GitHub 查看源码、点颗 Star 支持持续迭代，或在 Issues 交流反馈。
             </p>
           </div>
           <div class="oss-cta-buttons">
