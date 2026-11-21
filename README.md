@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/onekb/OpenUU/releases/latest"><img src="https://img.shields.io/github/v/release/onekb/OpenUU?style=flat-square&color=0EA5E9&label=Download" alt="Latest Release" /></a>
   <img src="https://img.shields.io/badge/macOS-控制端%20%26%20被控端-0F172A?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
   <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-控制端-0F172A?style=flat-square&logo=ios&logoColor=white" alt="iOS" />
   <img src="https://img.shields.io/badge/Android-控制端-0F172A?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
@@ -17,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="#-下载安装与安全说明"><b>立即下载</b></a> ·
   <a href="#-什么是单应用窗口模式">独家单窗口模式</a> ·
   <a href="#-核心亮点">核心亮点</a> ·
   <a href="#-支持平台与路线图">支持平台</a> ·
@@ -86,6 +88,35 @@
 | **Windows** | 🚧 规划中 | 🚧 规划中 | **即将支持（控制端 & 被控端均在开发中）** |
 
 > 欢迎点击右上角 **Star ⭐** 关注进度，Windows 端发布后会第一时间更新。
+
+---
+
+## 📥 下载安装与安全说明
+
+前往 [**GitHub Releases**](https://github.com/onekb/OpenUU/releases/latest) 直接下载各平台安装包（附 `SHA256SUMS.txt` 校验值）：
+
+| 平台 | 安装包 | 系统要求与说明 |
+| :--- | :--- | :--- |
+| **macOS (Apple Silicon / M 系列芯片)** | `OpenUU-*-macOS-arm64.dmg` | 控制端 + 被控端，需 macOS 14.0+ |
+| **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端，需 Android 8.0+ (`arm64-v8a`) |
+| **iOS / iPadOS** | `OpenUU-*-iOS-unsigned.ipa` | 控制端，需 iOS 17.0+，未签名 IPA（需自签安装） |
+
+> **⚠️ 关于系统安全提示（必看）**  
+> OpenUU 为个人发起的完全开源项目，**暂未购买 Apple Developer / 应用商店的商业签名与公证证书**，因此首次安装或打开时系统会弹出安全拦截提示，属正常现象。全部代码均在本仓库公开，有顾虑的朋友也可直接[从源码自行编译](#-开发者与源码构建)。
+
+- **🍎 macOS 提示“已损坏，无法打开”或“无法验证开发者”**：  
+  打开 `.dmg` 将 **OpenUU.app** 拖入 `应用程序 (Applications)` 后，打开终端执行一行命令解除浏览器下载隔离标记即可正常打开：
+  ```bash
+  xattr -cr /Applications/OpenUU.app
+  ```
+  > 也可在弹窗点「完成」后，进入 **系统设置 → 隐私与安全性** 页面底部点击 **「仍要打开」**。  
+  > 首次开启 **被控模式** 时，需在「隐私与安全性」中授予 **屏幕录制**（捕获窗口画面）与 **辅助功能**（远程键鼠与输入法）两项权限。
+
+- **🤖 Android 提示“未知来源”或安全风险提醒**：  
+  因未上架各大应用商店，安装 `.apk` 时请在系统提示中选择 **「允许安装未知应用」** 或 **「了解风险并继续安装」**。
+
+- **📱 iOS / iPadOS 安装方式**：  
+  暂未上架 App Store，Releases 中提供的是**未签名 `.ipa`**，请使用 **AltStore / SideStore / Sideloadly / 爱思助手 / 巨魔商店 (TrollStore)** 自签安装（或直接拉取源码通过 Xcode 免费账号装到真机）。个人免费 Apple ID 自签需在「设置 → 通用 → VPN 与设备管理」信任证书，并每 7 天续签一次（TrollStore 无需续签）。
 
 ---
 
