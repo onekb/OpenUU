@@ -77,18 +77,25 @@ impl OpenUUTicket {
         lan_quic_port: u16,
     ) -> Self {
         let ep_addr = endpoint.addr();
-        let mut relay_urls: Vec<String> = parse_custom_relay_urls(&identity.wan_config.relay_url)
-            .into_iter()
-            .map(|u| u.to_string())
-            .collect();
-        for r in ep_addr.relay_urls() {
-            let s = r.to_string();
-            if !relay_urls.contains(&s) {
-                relay_urls.push(s);
-            }
+        // Record ONLY the endpoint's actual active home relay(s) so clients never dial an
+        // unregistered relay URL ahead of the Host's real home relay in `EndpointAddr`'s BTreeSet.
+        let mut relay_urls: Vec<String> = ep_addr.relay_urls().map(|r| r.to_string()).collect();
+        if relay_urls.is_empty() {
+            relay_urls = parse_custom_relay_urls(&identity.wan_config.relay_url)
+                .into_iter()
+                .map(|u| u.to_string())
+                .collect();
         }
 
-        let mut direct_addrs: Vec<SocketAddr> = ep_addr.ip_addrs().copied().collect();
+        let mut direct_addrs: Vec<SocketAddr> = ep_addr
+            .ip_addrs()
+            .copied()
+            .filter(|sa| !is_unusable_direct_ip(sa.ip()))
+            .collect();
+        // Drop loopback if any non-loopback address exists (keep loopback for pure-local unit tests)
+        if direct_addrs.iter().any(|sa| !sa.ip().is_loopback()) {
+            direct_addrs.retain(|sa| !sa.ip().is_loopback());
+        }
         // Prioritize Global Unicast IPv6 (China telecom/unicom/mobile native IPv6), then Public IPv4, then LAN IPs!
         direct_addrs.sort_by_key(|sa| addr_priority(sa.ip()));
 
@@ -129,19 +136,43 @@ impl OpenUUTicket {
         let mut addrs: Vec<TransportAddr> = Vec::new();
         for r_str in &self.relay_urls {
             if let Ok(url) = RelayUrl::from_str(r_str) {
-                addrs.push(TransportAddr::Relay(url));
+                let t = TransportAddr::Relay(url);
+                if !addrs.contains(&t) {
+                    addrs.push(t);
+                }
             }
         }
-        for extra in extra_relays {
-            let t = TransportAddr::Relay(extra.clone());
-            if !addrs.contains(&t) {
-                addrs.push(t);
+        // Only fall back to client-side `extra_relays` if the ticket carried no active home relay.
+        if addrs.is_empty() {
+            for extra in extra_relays {
+                let t = TransportAddr::Relay(extra.clone());
+                if !addrs.contains(&t) {
+                    addrs.push(t);
+                }
             }
         }
         for sa in &self.direct_addrs {
-            addrs.push(TransportAddr::Ip(*sa));
+            if !is_unusable_direct_ip(sa.ip()) {
+                addrs.push(TransportAddr::Ip(*sa));
+            }
         }
         Ok(EndpointAddr::from_parts(pk, addrs))
+    }
+}
+
+/// Returns true for non-routable / virtual TUN Fake-IP addresses that should never be advertised
+/// or probed as direct P2P candidates (e.g. Clash/Mihomo/Surge `198.18.0.0/15`, link-local, unspecified).
+pub fn is_unusable_direct_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_unspecified()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19)) // RFC 2544 / TUN Fake-IP (198.18.0.0/15)
+        }
+        IpAddr::V6(v6) => v6.is_unspecified() || v6.is_unicast_link_local() || v6.is_multicast(),
     }
 }
 
@@ -149,8 +180,11 @@ impl OpenUUTicket {
 /// 0 = Global Unicast IPv6 (fastest direct path across CGNAT ISPs in Mainland China)
 /// 1 = Public Unicast IPv4
 /// 2 = Private LAN IPv4 / ULA IPv6
-/// 3 = Loopback / Link-local
+/// 3 = Loopback / Link-local / Virtual TUN
 fn addr_priority(ip: IpAddr) -> u8 {
+    if is_unusable_direct_ip(ip) {
+        return 3;
+    }
     match ip {
         IpAddr::V6(v6) => {
             if v6.is_loopback() || v6.is_unicast_link_local() || v6.is_unspecified() {
@@ -181,10 +215,12 @@ fn addr_priority(ip: IpAddr) -> u8 {
 pub fn is_lan_or_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let o = v4.octets();
             v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
-                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
+                || (o[0] == 169 && o[1] == 254)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -254,13 +290,73 @@ impl ServerCertVerifier for InsecureRelayTlsVerifier {
     }
 }
 
+/// Concurrently probes custom `iroh-relay` URLs (`GET <relay>/ping`) with a short timeout,
+/// returning those that respond with HTTP 2xx so Host endpoints can implement true cascading
+/// fallback (prefer healthy custom/domestic relay first; only fall back to overseas `n0` if down).
+pub async fn probe_reachable_relays(
+    relays: &[RelayUrl],
+    allow_insecure_tls: bool,
+) -> Vec<RelayUrl> {
+    if relays.is_empty() {
+        return Vec::new();
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_millis(3500))
+        .connect_timeout(Duration::from_millis(2500))
+        .danger_accept_invalid_certs(allow_insecure_tls)
+        .build()
+    else {
+        return relays.to_vec();
+    };
+
+    let mut handles = Vec::with_capacity(relays.len());
+    for url in relays {
+        let client = client.clone();
+        let relay_url = url.clone();
+        handles.push(tokio::spawn(async move {
+            let base = relay_url.to_string();
+            let ping_url = format!("{}/ping", base.trim_end_matches('/'));
+            match client.get(&ping_url).send().await {
+                Ok(resp) if resp.status().is_success() => Some(relay_url),
+                _ => None,
+            }
+        }));
+    }
+
+    let mut healthy = Vec::new();
+    for h in handles {
+        if let Ok(Some(u)) = h.await {
+            healthy.push(u);
+        }
+    }
+    healthy
+}
+
 /// Build a WAN-tuned `iroh::Endpoint` with cascading relay configuration:
 /// 1. Direct IPv6 / IPv4 UDP hole-punching
-/// 2. Self-hosted Hong Kong / Mainland `iroh-relay` (if configured)
-/// 3. Public `n0` global relay + DNS/Pkarr fallback (when `enable_public_fallback` is true)
+/// 2. Self-hosted Hong Kong / Cloudflare-Tunnel `iroh-relay` (if configured)
+/// 3. Public `n0` global relay fallback (when `enable_public_fallback` is true)
 pub async fn bind_iroh_endpoint(
     identity: &DeviceIdentity,
     local_only_no_relay: bool,
+) -> Result<Endpoint> {
+    bind_iroh_endpoint_with_role(identity, local_only_no_relay, false).await
+}
+
+/// Build a WAN-tuned `iroh::Endpoint` with role-aware relay selection:
+/// - When `prefer_custom_relay_first == true` (Host mode) and `custom_relays` are configured:
+///   probes `custom_relays` first. If at least one custom relay is healthy, anchors the Host ONLY
+///   on the healthy custom relay(s) so `iroh` never abandons the domestic-accessible relay for an
+///   overseas `n0` node (which can be TLS-reset for mainland clients). Falls back to public `n0`
+///   relays automatically if all custom relays are unreachable and `enable_public_fallback` is true.
+/// - When `prefer_custom_relay_first == false` (Client mode):
+///   attaches Bearer auth token to custom relay(s) and merges public `n0` relays (if enabled) so
+///   the client can connect seamlessly to hosts on either custom relays or legacy `n0` relays,
+///   while retaining QUIC Address Discovery for P2P hole-punching.
+pub async fn bind_iroh_endpoint_with_role(
+    identity: &DeviceIdentity,
+    local_only_no_relay: bool,
+    prefer_custom_relay_first: bool,
 ) -> Result<Endpoint> {
     init_crypto();
 
@@ -295,8 +391,28 @@ pub async fn bind_iroh_endpoint(
         Endpoint::builder(presets::Minimal)
             .clear_address_lookup()
             .relay_mode(RelayMode::Custom(custom_map))
+    } else if !custom_relays.is_empty() && prefer_custom_relay_first {
+        // True cascading fallback for Host: anchor on healthy custom relay(s) first;
+        // only fall back to overseas public n0 relays when every custom relay is unreachable.
+        let healthy =
+            probe_reachable_relays(&custom_relays, identity.wan_config.allow_insecure_tls).await;
+        if !healthy.is_empty() {
+            let mut custom_map = RelayMap::from_iter(healthy);
+            if !relay_token.is_empty() {
+                custom_map = custom_map.with_auth_token(relay_token);
+            }
+            Endpoint::builder(presets::Minimal)
+                .clear_address_lookup()
+                .relay_mode(RelayMode::Custom(custom_map))
+        } else {
+            let mut b = Endpoint::builder(presets::N0);
+            if !identity.wan_config.coord_url.trim().is_empty() {
+                b = b.clear_address_lookup();
+            }
+            b
+        }
     } else if !custom_relays.is_empty() {
-        // Cascading fallback: attach Bearer token ONLY to custom private relay(s), then merge public n0 relay pool!
+        // Client mixed mode: attach Bearer token ONLY to custom private relay(s), then merge public n0 relay pool
         let mut relay_map = RelayMap::from_iter(custom_relays);
         if !relay_token.is_empty() {
             relay_map = relay_map.with_auth_token(relay_token);
@@ -835,5 +951,44 @@ mod tests {
         assert!(limiter.check_allowed("peer-a").is_err());
         // Different peer is unaffected
         assert!(limiter.check_allowed("peer-b").is_ok());
+    }
+
+    #[test]
+    fn ticket_filters_fake_ip_and_preserves_active_home_relay() {
+        let id = DeviceIdentity::ephemeral("Test-Mac").unwrap();
+        let extra = parse_custom_relay_urls("https://openuu-relay.1kb.ren/");
+        let ticket = OpenUUTicket {
+            v: 1,
+            endpoint_id: id.endpoint_id_str(),
+            device_id: id.device_id.clone(),
+            device_name: id.device_name.clone(),
+            device_code: id.device_code.clone(),
+            relay_urls: vec!["https://usw1-1.relay.n0.iroh.link./".to_string()],
+            direct_addrs: vec![
+                "198.18.0.1:51118".parse().unwrap(),
+                "198.19.12.3:51118".parse().unwrap(),
+                "113.88.70.225:17840".parse().unwrap(),
+                "192.168.68.77:51118".parse().unwrap(),
+            ],
+            lan_quic_port: 39481,
+        };
+
+        let ep_addr = ticket.to_endpoint_addr(&extra).unwrap();
+        let relays: Vec<String> = ep_addr.relay_urls().map(|u| u.to_string()).collect();
+        // Must NOT inject client's extra relay when ticket already specifies the Host's active home relay
+        assert_eq!(relays, vec!["https://usw1-1.relay.n0.iroh.link./"]);
+
+        let ips: Vec<SocketAddr> = ep_addr.ip_addrs().copied().collect();
+        assert!(!ips.iter().any(|sa| sa.ip().to_string().starts_with("198.18.")));
+        assert!(!ips.iter().any(|sa| sa.ip().to_string().starts_with("198.19.")));
+        assert!(ips.contains(&"113.88.70.225:17840".parse().unwrap()));
+        assert!(ips.contains(&"192.168.68.77:51118".parse().unwrap()));
+
+        // When ticket has no relay_urls, client extra_relays acts as fallback
+        let mut no_relay_ticket = ticket;
+        no_relay_ticket.relay_urls.clear();
+        let ep_fallback = no_relay_ticket.to_endpoint_addr(&extra).unwrap();
+        let fallback_relays: Vec<String> = ep_fallback.relay_urls().map(|u| u.to_string()).collect();
+        assert_eq!(fallback_relays, vec!["https://openuu-relay.1kb.ren/"]);
     }
 }

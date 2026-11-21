@@ -28,9 +28,10 @@ use crate::transport::{
     connect_via_iroh, resolve_host_socket_addr, IncomingChannels, PeerSession,
 };
 use crate::wan::{
-    bind_iroh_endpoint, compute_pin_proof_hex, coord_register_heartbeat, coord_resolve_batch,
-    coord_resolve_code, coord_resolve_endpoint, parse_custom_relay_urls, BatchProbeQueryItem,
-    OpenUUTicket, PinRateLimiter, RATE_LIMIT_ERR, TICKET_PREFIX, UNIFIED_AUTH_OR_CODE_ERR,
+    bind_iroh_endpoint, bind_iroh_endpoint_with_role, compute_pin_proof_hex,
+    coord_register_heartbeat, coord_resolve_batch, coord_resolve_code, coord_resolve_endpoint,
+    parse_custom_relay_urls, BatchProbeQueryItem, OpenUUTicket, PinRateLimiter, RATE_LIMIT_ERR,
+    TICKET_PREFIX, UNIFIED_AUTH_OR_CODE_ERR,
 };
 
 pub type OpenUUControlCallback = extern "C" fn(*mut c_void, *const c_char);
@@ -1091,7 +1092,7 @@ pub unsafe extern "C" fn openuu_start_host(
             if let Ok(mut st) = coord_status_slot.lock() {
                 *st = "正在连接跨网打洞/中继网络...".to_string();
             }
-            let iroh_ep = match bind_iroh_endpoint(&init_id, false).await {
+            let iroh_ep = match bind_iroh_endpoint_with_role(&init_id, false, true).await {
                 Ok(ep) => ep,
                 Err(e) => {
                     if let Ok(mut st) = coord_status_slot.lock() {
@@ -1124,8 +1125,8 @@ pub unsafe extern "C" fn openuu_start_host(
             let notify_hb = Arc::clone(&stop_notify);
             let pin_hb = pin_wan.clone();
             tokio::spawn(async move {
-                // Wait up to 4s for home relay latency probe so initial ticket includes RelayUrl
-                let _ = tokio::time::timeout(Duration::from_secs(4), ep_hb.online()).await;
+                // Wait up to 6s for home relay handshake so initial ticket captures the real active RelayUrl
+                let _ = tokio::time::timeout(Duration::from_secs(6), ep_hb.online()).await;
                 let mut last_registered_ticket = String::new();
                 let mut last_registered_coord = String::new();
                 let mut last_registered_at: Option<Instant> = None;
@@ -1503,10 +1504,31 @@ unsafe fn openuu_connect_smart_inner(
         // ====================================================================
         // LAYER 1: Same-LAN mDNS Fast Path (< 2ms, zero Internet dependency)
         // ====================================================================
-        let lan_peer = discovery_arc
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().and_then(|d| d.find_peer_by_code_or_id(&raw_target)));
+        let predecoded_ticket = if raw_target.starts_with(TICKET_PREFIX) {
+            OpenUUTicket::decode(&raw_target).ok()
+        } else {
+            None
+        };
+        let lan_peer = discovery_arc.lock().ok().and_then(|g| {
+            let d = g.as_ref()?;
+            d.find_peer_by_code_or_id(&raw_target).or_else(|| {
+                let t = predecoded_ticket.as_ref()?;
+                if !t.device_code.is_empty() {
+                    if let Some(p) = d.find_peer_by_code_or_id(&t.device_code) {
+                        return Some(p);
+                    }
+                }
+                if !t.endpoint_id.is_empty() {
+                    if let Some(p) = d.find_peer_by_code_or_id(&t.endpoint_id) {
+                        return Some(p);
+                    }
+                }
+                if !t.device_id.is_empty() {
+                    return d.find_peer_by_code_or_id(&t.device_id);
+                }
+                None
+            })
+        });
         if let Some(peer) = lan_peer {
             if let Some(&lan_ip) = peer
                 .addresses
@@ -1871,7 +1893,90 @@ unsafe fn openuu_connect_smart_inner(
             },
         };
 
-        match connect_via_iroh(&client_ep, &cur_id, ep_addr, &pin_owned).await {
+        let dial_timeout = Duration::from_secs(22);
+        let mut connect_res = match tokio::time::timeout(
+            dial_timeout,
+            connect_via_iroh(&client_ep, &cur_id, ep_addr.clone(), &pin_owned),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => Err(crate::error::OpenUUError::Wan(
+                "连接超时（22s）：双方中继或直连 UDP 不可达".into(),
+            )),
+        };
+
+        // On non-auth WAN errors: invalidate cached client endpoint (handles Wi-Fi/VPN changes)
+        // and, if the user pasted a possibly stale `openuu://` ticket while coord_url is configured,
+        // try refreshing the Host's latest live ticket by 256-bit EndpointId and retry once!
+        if let Err(ref first_err) = connect_res {
+            if !matches!(first_err, crate::error::OpenUUError::PairingRejected(_)) {
+                if let Ok(mut slot) = iroh_client_slot.lock() {
+                    if let Some(stale) = slot.take() {
+                        tokio::spawn(async move {
+                            stale.close().await;
+                        });
+                    }
+                }
+
+                if raw_target.starts_with(TICKET_PREFIX)
+                    && !cur_id.wan_config.coord_url.trim().is_empty()
+                {
+                    if let Some(ref orig_ticket) = resolved_ticket {
+                        if orig_ticket.endpoint_id.len() == 64 {
+                            if let Ok(resp) = coord_resolve_endpoint(
+                                &cur_id.wan_config.coord_url,
+                                cur_id.wan_config.allow_insecure_tls,
+                                &orig_ticket.endpoint_id,
+                            )
+                            .await
+                            {
+                                if resp.found && !resp.ticket.is_empty() && resp.ticket != raw_target
+                                {
+                                    if let Ok(fresh_ticket) = OpenUUTicket::decode(&resp.ticket) {
+                                        if let Ok(fresh_addr) =
+                                            fresh_ticket.to_endpoint_addr(&extra_relays)
+                                        {
+                                            emit_status(
+                                                on_status,
+                                                ctx,
+                                                "原连接串已过期或不可达，已从寻址服刷新最新地址并重试...",
+                                            );
+                                            if let Ok(fresh_ep) =
+                                                bind_iroh_endpoint(&cur_id, false).await
+                                            {
+                                                if let Ok(mut slot) = iroh_client_slot.lock() {
+                                                    *slot = Some(fresh_ep.clone());
+                                                }
+                                                resolved_ticket = Some(fresh_ticket);
+                                                connect_res = match tokio::time::timeout(
+                                                    dial_timeout,
+                                                    connect_via_iroh(
+                                                        &fresh_ep,
+                                                        &cur_id,
+                                                        fresh_addr,
+                                                        &pin_owned,
+                                                    ),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(res) => res,
+                                                    Err(_) => Err(crate::error::OpenUUError::Wan(
+                                                        "重试连接超时（22s）：请检查双方网络/代理或自建中继连通性".into(),
+                                                    )),
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match connect_res {
             Ok((session, channels, ack, verified_host_pk)) => {
                 let link = session.link_telemetry();
                 let ticket_str = resolved_ticket
@@ -1924,7 +2029,19 @@ unsafe fn openuu_connect_smart_inner(
                 let msg = match e {
                     crate::error::OpenUUError::PairingRejected(ref m) => m.clone(),
                     _ if norm_code.len() == 9 => UNIFIED_AUTH_OR_CODE_ERR.to_string(),
-                    _ => format!("{e}"),
+                    _ => {
+                        let relays: Vec<String> =
+                            ep_addr.relay_urls().map(|u| u.to_string()).collect();
+                        let direct_cnt = ep_addr.ip_addrs().count();
+                        if relays.is_empty() {
+                            format!("{e}（无中继地址，候选直连IP={direct_cnt}）")
+                        } else {
+                            format!(
+                                "{e}（目标中继={}，候选直连IP={direct_cnt}）",
+                                relays.join(",")
+                            )
+                        }
+                    }
                 };
                 emit_status(on_status, ctx, &format!("connect failed: {msg}"));
             }

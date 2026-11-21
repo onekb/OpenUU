@@ -22,8 +22,8 @@ use openuu_core::transport::{
     connect_via_iroh,
 };
 use openuu_core::wan::{
-    bind_iroh_endpoint, coord_register_heartbeat, coord_resolve_code, parse_custom_relay_urls,
-    OpenUUTicket, PinRateLimiter, TICKET_PREFIX,
+    bind_iroh_endpoint, bind_iroh_endpoint_with_role, coord_register_heartbeat, coord_resolve_code,
+    parse_custom_relay_urls, OpenUUTicket, PinRateLimiter, TICKET_PREFIX,
 };
 
 const MOCK_FRAMES_BIN: &[u8] = include_bytes!("../assets/mock_frames.bin");
@@ -558,7 +558,7 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             }
             let force_relay = args.iter().any(|a| a == "--force-relay");
             let pin = parse_flag(&args, "--pin").unwrap_or_else(generate_strong_access_code);
-            let iroh_ep = bind_iroh_endpoint(&identity, false).await?;
+            let iroh_ep = bind_iroh_endpoint_with_role(&identity, false, true).await?;
             let _ = tokio::time::timeout(Duration::from_secs(6), iroh_ep.online()).await;
 
             let mut ticket = OpenUUTicket::from_endpoint(&iroh_ep, &identity, 0);
