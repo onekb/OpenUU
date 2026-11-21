@@ -49,6 +49,7 @@ def generate() -> None:
 
     system_frameworks = [
         "AVFoundation.framework",
+        "AudioToolbox.framework",
         "CoreMedia.framework",
         "VideoToolbox.framework",
         "Security.framework",

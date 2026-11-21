@@ -19,24 +19,131 @@ enum MacModifiers {
 enum MacKeyCodes {
     static let a: UInt32 = 0
     static let s: UInt32 = 1
+    static let d: UInt32 = 2
     static let f: UInt32 = 3
+    static let h: UInt32 = 4
+    static let g: UInt32 = 5
     static let z: UInt32 = 6
     static let x: UInt32 = 7
     static let c: UInt32 = 8
     static let v: UInt32 = 9
+    static let b: UInt32 = 11
     static let q: UInt32 = 12
     static let w: UInt32 = 13
+    static let e: UInt32 = 14
     static let r: UInt32 = 15
+    static let y: UInt32 = 16
     static let t: UInt32 = 17
+    static let num1: UInt32 = 18
+    static let num2: UInt32 = 19
+    static let num3: UInt32 = 20
+    static let num4: UInt32 = 21
+    static let num6: UInt32 = 22
+    static let num5: UInt32 = 23
+    static let equal: UInt32 = 24
+    static let num9: UInt32 = 25
+    static let num7: UInt32 = 26
+    static let minus: UInt32 = 27
+    static let num8: UInt32 = 28
+    static let num0: UInt32 = 29
+    static let rightBracket: UInt32 = 30
+    static let o: UInt32 = 31
+    static let u: UInt32 = 32
+    static let leftBracket: UInt32 = 33
+    static let i: UInt32 = 34
+    static let p: UInt32 = 35
     static let returnKey: UInt32 = 36
+    static let l: UInt32 = 37
+    static let j: UInt32 = 38
+    static let quote: UInt32 = 39
+    static let k: UInt32 = 40
+    static let semicolon: UInt32 = 41
+    static let backslash: UInt32 = 42
+    static let comma: UInt32 = 43
+    static let slash: UInt32 = 44
+    static let n: UInt32 = 45
+    static let m: UInt32 = 46
+    static let period: UInt32 = 47
     static let tab: UInt32 = 48
     static let space: UInt32 = 49
+    static let grave: UInt32 = 50
     static let delete: UInt32 = 51
     static let escape: UInt32 = 53
+    static let f5: UInt32 = 96
+    static let f6: UInt32 = 97
+    static let f7: UInt32 = 98
+    static let f3: UInt32 = 99
+    static let f8: UInt32 = 100
+    static let f9: UInt32 = 101
+    static let f11: UInt32 = 103
+    static let f10: UInt32 = 109
+    static let f12: UInt32 = 111
+    static let home: UInt32 = 115
+    static let pageUp: UInt32 = 116
+    static let forwardDelete: UInt32 = 117
+    static let f4: UInt32 = 118
+    static let end: UInt32 = 119
+    static let f2: UInt32 = 120
+    static let pageDown: UInt32 = 121
+    static let f1: UInt32 = 122
     static let left: UInt32 = 123
     static let right: UInt32 = 124
     static let down: UInt32 = 125
     static let up: UInt32 = 126
+
+    static func asciiToKeyAndShift(_ ch: Character) -> (UInt32, UInt32)? {
+        switch ch {
+        case "a": return (a, 0); case "A": return (a, MacModifiers.shift)
+        case "b": return (b, 0); case "B": return (b, MacModifiers.shift)
+        case "c": return (c, 0); case "C": return (c, MacModifiers.shift)
+        case "d": return (d, 0); case "D": return (d, MacModifiers.shift)
+        case "e": return (e, 0); case "E": return (e, MacModifiers.shift)
+        case "f": return (f, 0); case "F": return (f, MacModifiers.shift)
+        case "g": return (g, 0); case "G": return (g, MacModifiers.shift)
+        case "h": return (h, 0); case "H": return (h, MacModifiers.shift)
+        case "i": return (i, 0); case "I": return (i, MacModifiers.shift)
+        case "j": return (j, 0); case "J": return (j, MacModifiers.shift)
+        case "k": return (k, 0); case "K": return (k, MacModifiers.shift)
+        case "l": return (l, 0); case "L": return (l, MacModifiers.shift)
+        case "m": return (m, 0); case "M": return (m, MacModifiers.shift)
+        case "n": return (n, 0); case "N": return (n, MacModifiers.shift)
+        case "o": return (o, 0); case "O": return (o, MacModifiers.shift)
+        case "p": return (p, 0); case "P": return (p, MacModifiers.shift)
+        case "q": return (q, 0); case "Q": return (q, MacModifiers.shift)
+        case "r": return (r, 0); case "R": return (r, MacModifiers.shift)
+        case "s": return (s, 0); case "S": return (s, MacModifiers.shift)
+        case "t": return (t, 0); case "T": return (t, MacModifiers.shift)
+        case "u": return (u, 0); case "U": return (u, MacModifiers.shift)
+        case "v": return (v, 0); case "V": return (v, MacModifiers.shift)
+        case "w": return (w, 0); case "W": return (w, MacModifiers.shift)
+        case "x": return (x, 0); case "X": return (x, MacModifiers.shift)
+        case "y": return (y, 0); case "Y": return (y, MacModifiers.shift)
+        case "z": return (z, 0); case "Z": return (z, MacModifiers.shift)
+        case "0": return (num0, 0); case ")": return (num0, MacModifiers.shift)
+        case "1": return (num1, 0); case "!": return (num1, MacModifiers.shift)
+        case "2": return (num2, 0); case "@": return (num2, MacModifiers.shift)
+        case "3": return (num3, 0); case "#": return (num3, MacModifiers.shift)
+        case "4": return (num4, 0); case "$": return (num4, MacModifiers.shift)
+        case "5": return (num5, 0); case "%": return (num5, MacModifiers.shift)
+        case "6": return (num6, 0); case "^": return (num6, MacModifiers.shift)
+        case "7": return (num7, 0); case "&": return (num7, MacModifiers.shift)
+        case "8": return (num8, 0); case "*": return (num8, MacModifiers.shift)
+        case "9": return (num9, 0); case "(": return (num9, MacModifiers.shift)
+        case "-": return (minus, 0); case "_": return (minus, MacModifiers.shift)
+        case "=": return (equal, 0); case "+": return (equal, MacModifiers.shift)
+        case "[": return (leftBracket, 0); case "{": return (leftBracket, MacModifiers.shift)
+        case "]": return (rightBracket, 0); case "}": return (rightBracket, MacModifiers.shift)
+        case "\\": return (backslash, 0); case "|": return (backslash, MacModifiers.shift)
+        case ";": return (semicolon, 0); case ":": return (semicolon, MacModifiers.shift)
+        case "'": return (quote, 0); case "\"": return (quote, MacModifiers.shift)
+        case ",": return (comma, 0); case "<": return (comma, MacModifiers.shift)
+        case ".": return (period, 0); case ">": return (period, MacModifiers.shift)
+        case "/": return (slash, 0); case "?": return (slash, MacModifiers.shift)
+        case "`": return (grave, 0); case "~": return (grave, MacModifiers.shift)
+        case " ": return (space, 0)
+        default: return nil
+        }
+    }
 }
 
 struct DiscoveredPeer: Codable, Identifiable, Hashable, Sendable {
@@ -238,6 +345,8 @@ struct ControlEventMessage: Codable, Sendable {
     let link_mode: String?
     let rtt_ms: UInt32?
     let remote_addr: String?
+    let audio_enabled: Bool?
+    let mute_host: Bool?
     let windows: [WindowTopologyItem]?
     let apps: [RemoteAppSummary]?
 }
@@ -252,6 +361,15 @@ struct EncodedVideoPacket: Sendable {
     let data: Data
 }
 
+struct EncodedAudioPacket: Sendable {
+    let codec: UInt8
+    let flags: UInt8
+    let channels: UInt8
+    let sampleRate: UInt32
+    let timestampUS: UInt64
+    let data: Data
+}
+
 final class OpenUUBridge: @unchecked Sendable {
     private let runtime: OpaquePointer
     let appSupportDir: URL
@@ -259,6 +377,7 @@ final class OpenUUBridge: @unchecked Sendable {
 
     var onControlEvent: (@Sendable (ControlEventMessage) -> Void)?
     var onVideoFrame: (@Sendable (EncodedVideoPacket) -> Void)?
+    var onAudioFrame: (@Sendable (EncodedAudioPacket) -> Void)?
     var onStatus: (@Sendable (String) -> Void)?
     var onProbeResults: (@Sendable ([DeviceProbeResultModel]) -> Void)?
 
@@ -287,9 +406,12 @@ final class OpenUUBridge: @unchecked Sendable {
             fatalError("Failed to create OpenUURuntime")
         }
         self.runtime = rt
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        _ = openuu_set_audio_callback(rt, openuuAudioTrampoline, ctx)
     }
 
     deinit {
+        _ = openuu_set_audio_callback(runtime, nil, nil)
         openuu_disconnect(runtime)
         openuu_runtime_destroy(runtime)
     }
@@ -442,6 +564,10 @@ final class OpenUUBridge: @unchecked Sendable {
         _ = openuu_request_keyframe(runtime, windowID)
     }
 
+    func sendAudioControl(enabled: Bool, muteHost: Bool) {
+        _ = openuu_send_audio_control(runtime, enabled, muteHost)
+    }
+
     func sendResizeWindow(windowID: UInt32, width: Float, height: Float) {
         _ = openuu_send_resize_window(runtime, windowID, width, height)
     }
@@ -515,6 +641,30 @@ private func openuuVideoTrampoline(
         data: payload
     )
     bridge.onVideoFrame?(packet)
+}
+
+private func openuuAudioTrampoline(
+    ctx: UnsafeMutableRawPointer?,
+    codec: UInt8,
+    flags: UInt8,
+    channels: UInt8,
+    sampleRate: UInt32,
+    timestampUS: UInt64,
+    dataPtr: UnsafePointer<UInt8>?,
+    dataLen: Int
+) {
+    guard let ctx, let dataPtr, dataLen > 0 else { return }
+    let bridge = Unmanaged<OpenUUBridge>.fromOpaque(ctx).takeUnretainedValue()
+    let payload = Data(bytes: dataPtr, count: dataLen)
+    let packet = EncodedAudioPacket(
+        codec: codec,
+        flags: flags,
+        channels: channels,
+        sampleRate: sampleRate,
+        timestampUS: timestampUS,
+        data: payload
+    )
+    bridge.onAudioFrame?(packet)
 }
 
 private func openuuStatusTrampoline(ctx: UnsafeMutableRawPointer?, statusPtr: UnsafePointer<CChar>?) {

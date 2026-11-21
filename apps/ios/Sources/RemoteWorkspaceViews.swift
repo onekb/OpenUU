@@ -11,10 +11,13 @@ struct RemoteWorkspaceContainer: View {
     let viewportSize: CGSize
 
     @State private var showKeyboardDock = false
+    @State private var imeRequested = false
+    @State private var imeRequestSeq: Int = 0
+    @State private var isIMEEditing = false
+    @State private var imeComposingPreview = ""
     @State private var showSessionSheet = false
     @State private var showLastWindowDialog = false
     @State private var showFileImporter = false
-    @State private var imeText = ""
 
     @State private var tabStripAutoRevealed = false
     @State private var manualTabStripRevealed = false
@@ -70,16 +73,13 @@ struct RemoteWorkspaceContainer: View {
                         showKeyboardDock: showKeyboardDock,
                         rttText: rttPillText,
                         showCollapseButton: false,
+                        onStepBack: handleStepBack,
                         onCollapse: {},
                         onOpenApps: handleOpenAppsTap,
                         onSelectWindow: { viewModel.selectWindow($0) },
                         onCloseWindow: handleCloseWindowTab,
                         onToggleTouchMode: toggleTouchMode,
-                        onToggleKeyboard: {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                showKeyboardDock.toggle()
-                            }
-                        },
+                        onToggleKeyboard: toggleKeyboardDockAndIME,
                         onOpenSessionMenu: { showSessionSheet = true }
                     )
                 }
@@ -87,6 +87,16 @@ struct RemoteWorkspaceContainer: View {
                 ZStack(alignment: .bottomLeading) {
                     if viewModel.selectedWindowID == 0 {
                         RemoteAppLauncherView(viewModel: viewModel)
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 24, coordinateSpace: .local)
+                                    .onEnded { value in
+                                        if value.startLocation.x < 34
+                                            && value.translation.width > 64
+                                            && abs(value.translation.height) < 60 {
+                                            handleStepBack()
+                                        }
+                                    }
+                            )
                     } else {
                         MobileRemoteCanvasView(
                             renderer: viewModel.videoRenderer,
@@ -97,6 +107,7 @@ struct RemoteWorkspaceContainer: View {
                             cursorPos: viewModel.cursorPos,
                             cursorKind: viewModel.cursorKind,
                             activePopovers: viewModel.activePopovers,
+                            popoverReadyIDs: viewModel.popoverReadyIDs,
                             parentLogicalSize: viewModel.currentLogicalSize(),
                             popoverRenderers: viewModel.popoverRenderers,
                             resetToken: viewModel.canvasResetToken,
@@ -117,17 +128,34 @@ struct RemoteWorkspaceContainer: View {
                                     clickCount: clickCount
                                 )
                             },
+                            onPopoverMouseEvent: { winID, lx, ly, effRelX, effRelY, type, button, clickCount in
+                                viewModel.sendPopoverMouseDirect(
+                                    popoverWindowID: winID,
+                                    lx: lx,
+                                    ly: ly,
+                                    effectiveRelX: effRelX,
+                                    effectiveRelY: effRelY,
+                                    type: type,
+                                    button: button,
+                                    clickCount: clickCount
+                                )
+                            },
                             onScrollEvent: { nx, ny, dx, dy in
                                 viewModel.sendScrollNormalized(nx: nx, ny: ny, deltaX: dx, deltaY: dy)
+                            },
+                            onPopoverScrollEvent: { winID, lx, ly, dx, dy in
+                                viewModel.sendPopoverScrollDirect(
+                                    popoverWindowID: winID,
+                                    lx: lx,
+                                    ly: ly,
+                                    deltaX: dx,
+                                    deltaY: dy
+                                )
                             },
                             onGestureBadgeChanged: { badge in
                                 viewModel.gestureFeedbackBadge = badge
                             },
-                            onToggleKeyboard: {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    showKeyboardDock.toggle()
-                                }
-                            },
+                            onToggleKeyboard: toggleKeyboardDockAndIME,
                             onToggleToolbar: {
                                 if isImmersive && !viewModel.pinLandscapeTabBar {
                                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -139,6 +167,35 @@ struct RemoteWorkspaceContainer: View {
                             }
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    if viewModel.selectedWindowID != 0 && showKeyboardDock {
+                        DirectRemoteIMEHost(
+                            imeRequested: imeRequested,
+                            imeRequestSeq: imeRequestSeq,
+                            onCommitText: { text in
+                                viewModel.handleDirectIMEInput(text)
+                            },
+                            onBackspace: { isRepeat in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.delete, isRepeat: isRepeat)
+                            },
+                            onReturnKey: {
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.returnKey)
+                            },
+                            onComposingPreview: { preview in
+                                imeComposingPreview = preview
+                            },
+                            onEditingChanged: { editing in
+                                isIMEEditing = editing
+                                if !editing && imeRequested {
+                                    imeRequested = false
+                                    imeComposingPreview = ""
+                                }
+                            }
+                        )
+                        .frame(width: 1, height: 1)
+                        .opacity(0.01)
+                        .allowsHitTesting(false)
                     }
 
                     if let badge = viewModel.gestureFeedbackBadge, viewModel.selectedWindowID != 0 {
@@ -162,7 +219,10 @@ struct RemoteWorkspaceContainer: View {
                 if viewModel.selectedWindowID != 0 && showKeyboardDock {
                     MacKeyboardAndIMEDock(
                         viewModel: viewModel,
-                        imeText: $imeText
+                        isIMEActive: isIMEEditing || imeRequested,
+                        composingPreview: imeComposingPreview,
+                        onToggleIME: toggleSystemIMEOnly,
+                        onCloseDock: closeKeyboardDockAndIME
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -179,6 +239,7 @@ struct RemoteWorkspaceContainer: View {
                     showKeyboardDock: showKeyboardDock,
                     rttText: rttPillText,
                     showCollapseButton: true,
+                    onStepBack: handleStepBack,
                     onCollapse: {
                         withAnimation(.easeOut(duration: 0.18)) {
                             manualTabStripRevealed = false
@@ -195,9 +256,9 @@ struct RemoteWorkspaceContainer: View {
                     onCloseWindow: handleCloseWindowTab,
                     onToggleTouchMode: toggleTouchMode,
                     onToggleKeyboard: {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            showKeyboardDock.toggle()
-                        }
+                        manualTabStripRevealed = false
+                        tabStripAutoRevealed = false
+                        toggleKeyboardDockAndIME()
                     },
                     onOpenSessionMenu: {
                         manualTabStripRevealed = false
@@ -318,6 +379,86 @@ struct RemoteWorkspaceContainer: View {
 
     // MARK: Actions & Compact Overlays
 
+    private func openKeyboardDockAndIME() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showKeyboardDock = true
+        }
+        imeRequested = true
+        imeRequestSeq += 1
+    }
+
+    private func closeKeyboardDockAndIME() {
+        imeRequested = false
+        isIMEEditing = false
+        imeComposingPreview = ""
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showKeyboardDock = false
+        }
+    }
+
+    private func toggleKeyboardDockAndIME() {
+        if !showKeyboardDock {
+            openKeyboardDockAndIME()
+        } else {
+            closeKeyboardDockAndIME()
+        }
+    }
+
+    private func toggleSystemIMEOnly() {
+        if isIMEEditing || imeRequested {
+            imeRequested = false
+            isIMEEditing = false
+            imeComposingPreview = ""
+        } else {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                showKeyboardDock = true
+            }
+            imeRequested = true
+            imeRequestSeq += 1
+        }
+    }
+
+    private func handleStepBack() {
+        if overlayTabStripVisible {
+            withAnimation(.easeOut(duration: 0.18)) {
+                manualTabStripRevealed = false
+                tabStripAutoRevealed = false
+            }
+            return
+        }
+        if isIMEEditing || imeRequested {
+            imeRequested = false
+            isIMEEditing = false
+            imeComposingPreview = ""
+            return
+        }
+        if showKeyboardDock {
+            closeKeyboardDockAndIME()
+            return
+        }
+        if viewModel.selectedWindowID != 0 && !viewModel.activePopovers.isEmpty {
+            viewModel.dismissActivePopoversViaEsc()
+            return
+        }
+        if viewModel.manualFullscreen {
+            viewModel.manualFullscreen = false
+            return
+        }
+        if viewModel.selectedWindowID != 0 && viewModel.canvasZoomScale > 1.02 {
+            viewModel.resetZoom()
+            return
+        }
+        if viewModel.canNavigateBackWindow {
+            _ = viewModel.navigateBackWindow()
+            return
+        }
+        if viewModel.selectedWindowID != 0 {
+            viewModel.enterAppLauncherPage()
+            return
+        }
+        viewModel.selectedTab = .connect
+    }
+
     private func handleOpenAppsTap() {
         if viewModel.selectedWindowID == 0 {
             viewModel.refreshRemoteApps()
@@ -421,6 +562,7 @@ private struct WindowTabStrip: View {
     let showKeyboardDock: Bool
     let rttText: String
     let showCollapseButton: Bool
+    let onStepBack: () -> Void
     let onCollapse: () -> Void
     let onOpenApps: () -> Void
     let onSelectWindow: (UInt32) -> Void
@@ -432,27 +574,47 @@ private struct WindowTabStrip: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 5) {
-                // Left [应用] pill
-                Button(action: onOpenApps) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.grid.2x2")
-                            .font(.system(size: 11.5, weight: .semibold))
-                        Text("应用")
-                            .font(.system(size: 11.5, weight: .medium))
-                    }
-                    .foregroundStyle(showAppLauncher ? OpenUUTheme.background : OpenUUTheme.textPrimary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 26)
-                    .background(
-                        showAppLauncher ? OpenUUTheme.primaryCTA : OpenUUTheme.elevated,
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(showAppLauncher ? OpenUUTheme.primaryCTA : OpenUUTheme.hairline, lineWidth: 0.5)
-                    )
+                // Step-by-step Back button
+                Button(action: onStepBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            OpenUUTheme.elevated,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+                        )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("返回上一步")
+
+                // Left [应用] pill
+                if selectedWindowID != 0 {
+                    Button(action: onOpenApps) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.system(size: 11.5, weight: .semibold))
+                            Text("应用")
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .foregroundStyle(showAppLauncher ? OpenUUTheme.background : OpenUUTheme.textPrimary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(
+                            showAppLauncher ? OpenUUTheme.primaryCTA : OpenUUTheme.elevated,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(showAppLauncher ? OpenUUTheme.primaryCTA : OpenUUTheme.hairline, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 // Center scrollable browser-style window tabs
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -876,6 +1038,11 @@ private struct SessionControlSheet: View {
 
                 // Toggles Card
                 VStack(spacing: 0) {
+                    sheetToggleRow("接收远程电脑声音", isOn: $viewModel.remoteAudioEnabled)
+                    sheetDivider
+                    sheetToggleRow("远控时被控 Mac 静音", isOn: $viewModel.muteHostAudio)
+                        .disabled(!viewModel.remoteAudioEnabled)
+                    sheetDivider
                     sheetToggleRow("固定顶部窗口栏", isOn: $viewModel.pinLandscapeTabBar)
                     if !isLandscape && viewModel.selectedWindowID != 0 {
                         sheetDivider
@@ -991,11 +1158,235 @@ private struct SessionControlSheet: View {
     }
 }
 
-// MARK: - Keyboard & Mac Shortcut Dock
+// MARK: - Direct System IME Responder & Multi-Row Simulated Mac Keyboard
+
+private struct DirectRemoteIMEHost: UIViewRepresentable {
+    let imeRequested: Bool
+    let imeRequestSeq: Int
+    let onCommitText: (String) -> Void
+    let onBackspace: (Bool) -> Void
+    let onReturnKey: () -> Void
+    let onComposingPreview: (String) -> Void
+    let onEditingChanged: (Bool) -> Void
+
+    func makeUIView(context: Context) -> DirectRemoteIMETextField {
+        let tf = DirectRemoteIMETextField()
+        applyCallbacks(to: tf)
+        return tf
+    }
+
+    func updateUIView(_ uiView: DirectRemoteIMETextField, context: Context) {
+        applyCallbacks(to: uiView)
+        if imeRequested {
+            if uiView.lastShownSeq != imeRequestSeq {
+                uiView.lastShownSeq = imeRequestSeq
+                uiView.wasRequested = true
+                DispatchQueue.main.async {
+                    if !uiView.isFirstResponder {
+                        _ = uiView.becomeFirstResponder()
+                    }
+                    uiView.ensureCursorAtEndIfIdle()
+                }
+            }
+        } else if uiView.wasRequested || uiView.isFirstResponder {
+            uiView.wasRequested = false
+            DispatchQueue.main.async {
+                if uiView.isFirstResponder {
+                    _ = uiView.resignFirstResponder()
+                }
+            }
+        }
+    }
+
+    static func dismantleUIView(_ uiView: DirectRemoteIMETextField, coordinator: ()) {
+        if uiView.isFirstResponder {
+            _ = uiView.resignFirstResponder()
+        }
+    }
+
+    private func applyCallbacks(to tf: DirectRemoteIMETextField) {
+        tf.onCommitText = onCommitText
+        tf.onBackspace = onBackspace
+        tf.onReturnKey = onReturnKey
+        tf.onComposingPreview = onComposingPreview
+        tf.onEditingStateChanged = onEditingChanged
+    }
+}
+
+private final class DirectRemoteIMETextField: UITextField, UITextFieldDelegate {
+    private static let sentinel = "\u{200B}\u{200B}\u{200B}\u{200B}"
+
+    var onCommitText: ((String) -> Void)?
+    var onBackspace: ((Bool) -> Void)?
+    var onReturnKey: (() -> Void)?
+    var onComposingPreview: ((String) -> Void)?
+    var onEditingStateChanged: ((Bool) -> Void)?
+
+    var lastShownSeq: Int = -1
+    var wasRequested: Bool = false
+    private var internalMutation: Bool = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        delegate = self
+        backgroundColor = .clear
+        textColor = .clear
+        tintColor = .clear
+        autocapitalizationType = .none
+        autocorrectionType = .default
+        spellCheckingType = .no
+        smartQuotesType = .no
+        smartDashesType = .no
+        smartInsertDeleteType = .no
+        returnKeyType = .default
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
+        resetToSentinel()
+        addTarget(self, action: #selector(handleEditingChanged), for: .editingChanged)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func deleteBackward() {
+        if markedTextRange != nil {
+            super.deleteBackward()
+            emitMarkedPreview()
+            return
+        }
+        resetToSentinel()
+        onBackspace?(false)
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if markedTextRange != nil {
+            return true
+        }
+        resetToSentinel()
+        onReturnKey?()
+        return false
+    }
+
+    func textFieldDidBeginEditing(_ textField: UITextField) {
+        ensureCursorAtEndIfIdle()
+        onEditingStateChanged?(true)
+    }
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
+        onComposingPreview?("")
+        onEditingStateChanged?(false)
+    }
+
+    func resetToSentinel() {
+        internalMutation = true
+        defer { internalMutation = false }
+        text = Self.sentinel
+        let end = endOfDocument
+        selectedTextRange = textRange(from: end, to: end)
+    }
+
+    func ensureCursorAtEndIfIdle() {
+        guard markedTextRange == nil else { return }
+        internalMutation = true
+        defer { internalMutation = false }
+        if (text ?? "").isEmpty {
+            text = Self.sentinel
+        }
+        let end = endOfDocument
+        selectedTextRange = textRange(from: end, to: end)
+    }
+
+    private func emitMarkedPreview() {
+        if let range = markedTextRange {
+            let raw = (text(in: range) ?? "").replacingOccurrences(of: "\u{200B}", with: "")
+            onComposingPreview?(raw)
+        } else {
+            onComposingPreview?("")
+        }
+    }
+
+    @objc private func handleEditingChanged() {
+        guard !internalMutation else { return }
+        if markedTextRange != nil {
+            emitMarkedPreview()
+            return
+        }
+        onComposingPreview?("")
+
+        let raw = text ?? ""
+        var sentinelCount = 0
+        var committed = ""
+        for ch in raw {
+            if ch == "\u{200B}" {
+                sentinelCount += 1
+            } else {
+                committed.append(ch)
+            }
+        }
+
+        if !committed.isEmpty {
+            resetToSentinel()
+            onCommitText?(committed)
+        } else if sentinelCount < 4 {
+            let deletes = min(max(4 - sentinelCount, 1), 8)
+            resetToSentinel()
+            for idx in 0..<deletes {
+                onBackspace?(idx > 0 || deletes > 1)
+            }
+        } else if raw != Self.sentinel {
+            resetToSentinel()
+        }
+    }
+}
+
+private enum IOSSimKeyPage: String, CaseIterable, Identifiable {
+    case main = "常用按键"
+    case combos = "组合键"
+    case fkeys = "F1-F12"
+
+    var id: String { rawValue }
+}
+
+private struct IOSSimComboDef: Identifiable {
+    let keyHint: String
+    let subtitle: String
+    let keyCode: UInt32
+    let modifiers: UInt32
+    var id: String { keyHint }
+}
+
+private let IOSSimComboRows: [[IOSSimComboDef]] = [
+    [
+        IOSSimComboDef(keyHint: "⌘A", subtitle: "全选", keyCode: MacKeyCodes.a, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘S", subtitle: "保存", keyCode: MacKeyCodes.s, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘F", subtitle: "查找", keyCode: MacKeyCodes.f, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘R", subtitle: "刷新", keyCode: MacKeyCodes.r, modifiers: MacModifiers.command),
+    ],
+    [
+        IOSSimComboDef(keyHint: "⌘T", subtitle: "新标签", keyCode: MacKeyCodes.t, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘W", subtitle: "关窗口", keyCode: MacKeyCodes.w, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘N", subtitle: "新建", keyCode: MacKeyCodes.n, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌘Space", subtitle: "搜索", keyCode: MacKeyCodes.space, modifiers: MacModifiers.command),
+    ],
+    [
+        IOSSimComboDef(keyHint: "⌘Tab", subtitle: "切应用", keyCode: MacKeyCodes.tab, modifiers: MacModifiers.command),
+        IOSSimComboDef(keyHint: "⌃←", subtitle: "左桌面", keyCode: MacKeyCodes.left, modifiers: MacModifiers.control),
+        IOSSimComboDef(keyHint: "⌃→", subtitle: "右桌面", keyCode: MacKeyCodes.right, modifiers: MacModifiers.control),
+        IOSSimComboDef(keyHint: "⌃↑", subtitle: "调度中心", keyCode: MacKeyCodes.up, modifiers: MacModifiers.control),
+    ],
+]
 
 private struct MacKeyboardAndIMEDock: View {
     @ObservedObject var viewModel: MobileSessionViewModel
-    @Binding var imeText: String
+    let isIMEActive: Bool
+    let composingPreview: String
+    let onToggleIME: () -> Void
+    let onCloseDock: () -> Void
+
+    @AppStorage("openuu.simKeyboardExpanded") private var isExpanded: Bool = true
+    @State private var activePage: IOSSimKeyPage = .main
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1003,133 +1394,437 @@ private struct MacKeyboardAndIMEDock: View {
                 .fill(OpenUUTheme.divider)
                 .frame(height: 0.5)
 
-            HStack(spacing: 8) {
-                TextField("输入中英文发送至 Mac...", text: $imeText)
-                    .font(.system(size: 14))
-                    .foregroundStyle(OpenUUTheme.textPrimary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
-                    )
-                    .submitLabel(.send)
-                    .onSubmit(commitText)
-
-                let canSend = !imeText.isEmpty
-                Button("发送", action: commitText)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(canSend ? OpenUUTheme.background : OpenUUTheme.textMuted)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        canSend ? OpenUUTheme.primaryCTA : OpenUUTheme.hairline,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 7)
-            .padding(.bottom, 5)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
-                    modifierKey("⌘", bit: MacModifiers.command)
-                    modifierKey("⌥", bit: MacModifiers.option)
-                    modifierKey("⌃", bit: MacModifiers.control)
-                    modifierKey("⇧", bit: MacModifiers.shift)
-
-                    Rectangle().fill(OpenUUTheme.hairline).frame(width: 0.5, height: 18)
-
-                    tapKey("Esc", code: MacKeyCodes.escape)
-                    tapKey("Tab", code: MacKeyCodes.tab)
-                    tapKey("Space", code: MacKeyCodes.space)
-                    tapKey("⌫", code: MacKeyCodes.delete)
-                    tapKey("⏎", code: MacKeyCodes.returnKey)
-                    tapKey("←", code: MacKeyCodes.left)
-                    tapKey("↑", code: MacKeyCodes.up)
-                    tapKey("↓", code: MacKeyCodes.down)
-                    tapKey("→", code: MacKeyCodes.right)
-
-                    Rectangle().fill(OpenUUTheme.hairline).frame(width: 0.5, height: 18)
-
-                    comboKey("⌘C", code: MacKeyCodes.c, mods: MacModifiers.command)
-                    comboKey("⌘V", code: MacKeyCodes.v, mods: MacModifiers.command)
-                    comboKey("⌘W", code: MacKeyCodes.w, mods: MacModifiers.command)
-                    comboKey("⌘Z", code: MacKeyCodes.z, mods: MacModifiers.command)
-                    comboKey("⌘Space", code: MacKeyCodes.space, mods: MacModifiers.command)
-                    comboKey("⌘Q", code: MacKeyCodes.q, mods: MacModifiers.command)
+            if !isExpanded && !composingPreview.isEmpty {
+                HStack {
+                    Text("拼音: \(composingPreview)")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(OpenUUTheme.liveDot)
+                        .lineLimit(1)
+                    Spacer()
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 7)
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+            }
+
+            if !isExpanded {
+                // Collapsed single-row bar (even full-width tap targets, no horizontal scroll)
+                HStack(spacing: 4) {
+                    IOSSimKeyCap(label: "Esc", height: 36) { rep in
+                        viewModel.sendKeyTap(keyCode: MacKeyCodes.escape, isRepeat: rep)
+                    }
+                    IOSSimKeyCap(label: "Tab", height: 36) { rep in
+                        viewModel.sendKeyTap(keyCode: MacKeyCodes.tab, isRepeat: rep)
+                    }
+                    IOSSimKeyCap(
+                        label: "⌘",
+                        active: (viewModel.stickyModifiers & MacModifiers.command) != 0,
+                        height: 36
+                    ) { _ in
+                        viewModel.toggleStickyModifier(MacModifiers.command)
+                    }
+                    IOSSimKeyCap(
+                        label: "⌃",
+                        active: (viewModel.stickyModifiers & MacModifiers.control) != 0,
+                        height: 36
+                    ) { _ in
+                        viewModel.toggleStickyModifier(MacModifiers.control)
+                    }
+                    IOSSimKeyCap(
+                        label: "⌥",
+                        active: (viewModel.stickyModifiers & MacModifiers.option) != 0,
+                        height: 36
+                    ) { _ in
+                        viewModel.toggleStickyModifier(MacModifiers.option)
+                    }
+                    IOSSimKeyCap(
+                        label: "⇧",
+                        active: (viewModel.stickyModifiers & MacModifiers.shift) != 0,
+                        height: 36
+                    ) { _ in
+                        viewModel.toggleStickyModifier(MacModifiers.shift)
+                    }
+                    IOSSimKeyCap(label: "⌫", repeatable: true, height: 36) { rep in
+                        viewModel.sendKeyTap(keyCode: MacKeyCodes.delete, isRepeat: rep)
+                    }
+
+                    Button(action: onToggleIME) {
+                        Image(systemName: isIMEActive ? "keyboard.chevron.compact.down" : "keyboard")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(isIMEActive ? OpenUUTheme.background : OpenUUTheme.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 36)
+                            .background(
+                                isIMEActive ? OpenUUTheme.primaryCTA : OpenUUTheme.elevated,
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(isIMEActive ? OpenUUTheme.primaryCTA : OpenUUTheme.popoverBorder, lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            isExpanded = true
+                        }
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("展开")
+                                .font(.system(size: 11.5, weight: .medium))
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                        .padding(.horizontal, 6)
+                        .frame(height: 36)
+                        .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(OpenUUTheme.popoverBorder, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+            } else {
+                // Expanded multi-row Mac auxiliary keyboard
+                VStack(spacing: 5) {
+                    // Header control bar
+                    HStack(spacing: 5) {
+                        ForEach(IOSSimKeyPage.allCases) { page in
+                            let selected = (activePage == page)
+                            Button {
+                                activePage = page
+                            } label: {
+                                Text(page.rawValue)
+                                    .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? OpenUUTheme.textPrimary : OpenUUTheme.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4.5)
+                                    .background(
+                                        selected ? OpenUUTheme.activeTab : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .stroke(selected ? OpenUUTheme.popoverBorder : OpenUUTheme.hairline, lineWidth: 0.5)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if !composingPreview.isEmpty {
+                            Text(composingPreview)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(OpenUUTheme.liveDot)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Spacer(minLength: 2)
+                        }
+
+                        Button(action: onToggleIME) {
+                            HStack(spacing: 3) {
+                                Image(systemName: isIMEActive ? "keyboard.chevron.compact.down" : "keyboard")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                Text(isIMEActive ? "收输入法" : "输入法")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(isIMEActive ? OpenUUTheme.background : OpenUUTheme.textPrimary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4.5)
+                            .background(
+                                isIMEActive ? OpenUUTheme.primaryCTA : OpenUUTheme.elevated,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(isIMEActive ? OpenUUTheme.primaryCTA : OpenUUTheme.popoverBorder, lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                isExpanded = false
+                            }
+                        } label: {
+                            HStack(spacing: 2) {
+                                Text("收起")
+                                    .font(.system(size: 11, weight: .medium))
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9.5, weight: .bold))
+                            }
+                            .foregroundStyle(OpenUUTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4.5)
+                            .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onCloseDock) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(OpenUUTheme.textSecondary)
+                                .frame(width: 26, height: 26)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    switch activePage {
+                    case .main:
+                        // Row 1: Esc | Tab | Space | ⌫ | ⌦ | ⏎
+                        GeometryReader { geo in
+                            let spacing: CGFloat = 5
+                            let totalSpacing = spacing * 5
+                            let avail = max(geo.size.width - totalSpacing, 60)
+                            let unit = avail / 7.15
+                            HStack(spacing: spacing) {
+                                IOSSimKeyCap(label: "Esc") { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.escape, isRepeat: rep)
+                                }
+                                .frame(width: unit * 1.0)
+
+                                IOSSimKeyCap(label: "Tab") { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.tab, isRepeat: rep)
+                                }
+                                .frame(width: unit * 1.0)
+
+                                IOSSimKeyCap(label: "Space 空格", repeatable: true) { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.space, isRepeat: rep)
+                                }
+                                .frame(width: unit * 1.85)
+
+                                IOSSimKeyCap(label: "⌫", repeatable: true) { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.delete, isRepeat: rep)
+                                }
+                                .frame(width: unit * 1.1)
+
+                                IOSSimKeyCap(label: "⌦", repeatable: true) { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.forwardDelete, isRepeat: rep)
+                                }
+                                .frame(width: unit * 0.95)
+
+                                IOSSimKeyCap(label: "⏎ 回车", emphasized: true) { rep in
+                                    viewModel.sendKeyTap(keyCode: MacKeyCodes.returnKey, isRepeat: rep)
+                                }
+                                .frame(width: unit * 1.25)
+                            }
+                        }
+                        .frame(height: 39)
+
+                        // Row 2: ⌘ | ⌃ | ⌥ | ⇧ | Home | PgUp | ↑ | End (8 equal columns)
+                        HStack(spacing: 5) {
+                            IOSSimKeyCap(
+                                label: "⌘",
+                                subtitle: "Cmd",
+                                active: (viewModel.stickyModifiers & MacModifiers.command) != 0
+                            ) { _ in
+                                viewModel.toggleStickyModifier(MacModifiers.command)
+                            }
+                            IOSSimKeyCap(
+                                label: "⌃",
+                                subtitle: "Ctrl",
+                                active: (viewModel.stickyModifiers & MacModifiers.control) != 0
+                            ) { _ in
+                                viewModel.toggleStickyModifier(MacModifiers.control)
+                            }
+                            IOSSimKeyCap(
+                                label: "⌥",
+                                subtitle: "Opt",
+                                active: (viewModel.stickyModifiers & MacModifiers.option) != 0
+                            ) { _ in
+                                viewModel.toggleStickyModifier(MacModifiers.option)
+                            }
+                            IOSSimKeyCap(
+                                label: "⇧",
+                                subtitle: "Shift",
+                                active: (viewModel.stickyModifiers & MacModifiers.shift) != 0
+                            ) { _ in
+                                viewModel.toggleStickyModifier(MacModifiers.shift)
+                            }
+                            IOSSimKeyCap(label: "Home") { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.home, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "PgUp", repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.pageUp, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "↑", emphasized: true, repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.up, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "End") { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.end, isRepeat: rep)
+                            }
+                        }
+
+                        // Row 3: ⌘C | ⌘V | ⌘X | ⌘Z | PgDn | ← | ↓ | → (Inverted-T arrows aligned with ↑ above!)
+                        HStack(spacing: 5) {
+                            IOSSimKeyCap(label: "⌘C", subtitle: "复制") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.c, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "⌘V", subtitle: "粘贴") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.v, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "⌘X", subtitle: "剪切") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.x, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "⌘Z", subtitle: "撤销") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.z, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "PgDn", repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.pageDown, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "←", emphasized: true, repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.left, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "↓", emphasized: true, repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.down, isRepeat: rep)
+                            }
+                            IOSSimKeyCap(label: "→", emphasized: true, repeatable: true) { rep in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.right, isRepeat: rep)
+                            }
+                        }
+
+                    case .combos:
+                        ForEach(Array(IOSSimComboRows.enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: 5) {
+                                ForEach(row) { item in
+                                    IOSSimKeyCap(label: item.keyHint, subtitle: item.subtitle) { _ in
+                                        viewModel.sendKeyTap(keyCode: item.keyCode, explicitModifiers: item.modifiers)
+                                    }
+                                }
+                            }
+                        }
+
+                    case .fkeys:
+                        let row1: [(String, UInt32)] = [
+                            ("F1", MacKeyCodes.f1), ("F2", MacKeyCodes.f2), ("F3", MacKeyCodes.f3),
+                            ("F4", MacKeyCodes.f4), ("F5", MacKeyCodes.f5), ("F6", MacKeyCodes.f6),
+                        ]
+                        let row2: [(String, UInt32)] = [
+                            ("F7", MacKeyCodes.f7), ("F8", MacKeyCodes.f8), ("F9", MacKeyCodes.f9),
+                            ("F10", MacKeyCodes.f10), ("F11", MacKeyCodes.f11), ("F12", MacKeyCodes.f12),
+                        ]
+                        HStack(spacing: 5) {
+                            ForEach(row1, id: \.0) { lbl, code in
+                                IOSSimKeyCap(label: lbl) { _ in
+                                    viewModel.sendKeyTap(keyCode: code)
+                                }
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            ForEach(row2, id: \.0) { lbl, code in
+                                IOSSimKeyCap(label: lbl) { _ in
+                                    viewModel.sendKeyTap(keyCode: code)
+                                }
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            IOSSimKeyCap(label: "⌘[", subtitle: "后退") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.leftBracket, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "⌘]", subtitle: "前进") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.rightBracket, explicitModifiers: MacModifiers.command)
+                            }
+                            IOSSimKeyCap(label: "⌘⇧Z", subtitle: "重做") { _ in
+                                viewModel.sendKeyTap(
+                                    keyCode: MacKeyCodes.z,
+                                    explicitModifiers: MacModifiers.command | MacModifiers.shift
+                                )
+                            }
+                            IOSSimKeyCap(label: "⌘Q", subtitle: "退出应用") { _ in
+                                viewModel.sendKeyTap(keyCode: MacKeyCodes.q, explicitModifiers: MacModifiers.command)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
             }
         }
         .background(OpenUUTheme.barBg)
     }
+}
 
-    private func commitText() {
-        guard !imeText.isEmpty else { return }
-        viewModel.sendTextCommit(imeText)
-        imeText = ""
-    }
+private struct IOSSimKeyCap: View {
+    let label: String
+    var subtitle: String? = nil
+    var active: Bool = false
+    var emphasized: Bool = false
+    var repeatable: Bool = false
+    var height: CGFloat = 39
+    let onTrigger: (_ isRepeat: Bool) -> Void
 
-    private func modifierKey(_ label: String, bit: UInt32) -> some View {
-        let active = (viewModel.stickyModifiers & bit) != 0
-        return Button {
-            viewModel.toggleStickyModifier(bit)
-        } label: {
+    @State private var isPressed = false
+    @State private var repeatTask: Task<Void, Never>?
+
+    var body: some View {
+        let bgColor: Color = active
+            ? OpenUUTheme.primaryCTA
+            : (isPressed ? Color(red: 58 / 255, green: 58 / 255, blue: 68 / 255) : (emphasized ? OpenUUTheme.elevated : OpenUUTheme.keycap))
+        let borderColor: Color = active
+            ? OpenUUTheme.primaryCTA
+            : (emphasized ? OpenUUTheme.popoverBorder : OpenUUTheme.hairline)
+        let fgColor: Color = active ? OpenUUTheme.background : OpenUUTheme.textPrimary
+        let subColor: Color = active ? OpenUUTheme.background.opacity(0.72) : OpenUUTheme.textSecondary
+
+        VStack(spacing: 1) {
             Text(label)
-                .font(.system(size: 12.5, weight: .bold))
-                .foregroundStyle(active ? OpenUUTheme.background : OpenUUTheme.textPrimary)
-                .frame(minWidth: 34, minHeight: 30)
-                .background(
-                    active ? OpenUUTheme.primaryCTA : OpenUUTheme.keycap,
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(active ? OpenUUTheme.primaryCTA : OpenUUTheme.hairline, lineWidth: 0.5)
-                )
+                .font(.system(size: subtitle == nil ? 12 : 11.5, weight: subtitle == nil ? .medium : .semibold))
+                .foregroundStyle(fgColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 9))
+                    .foregroundStyle(subColor)
+                    .lineLimit(1)
+            }
         }
-        .buttonStyle(.plain)
-    }
-
-    private func tapKey(_ label: String, code: UInt32) -> some View {
-        Button {
-            viewModel.sendKeyTap(keyCode: code)
-        } label: {
-            Text(label)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(OpenUUTheme.textPrimary)
-                .padding(.horizontal, 9)
-                .frame(minHeight: 30)
-                .background(OpenUUTheme.keycap, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
-                )
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .background(bgColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(borderColor, lineWidth: 0.5)
+        )
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !isPressed else { return }
+                    isPressed = true
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onTrigger(false)
+                    if repeatable {
+                        repeatTask?.cancel()
+                        repeatTask = Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(360))
+                            while !Task.isCancelled {
+                                onTrigger(true)
+                                try? await Task.sleep(for: .milliseconds(62))
+                            }
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    isPressed = false
+                    repeatTask?.cancel()
+                    repeatTask = nil
+                }
+        )
+        .onDisappear {
+            isPressed = false
+            repeatTask?.cancel()
+            repeatTask = nil
         }
-        .buttonStyle(.plain)
-    }
-
-    private func comboKey(_ label: String, code: UInt32, mods: UInt32) -> some View {
-        Button {
-            viewModel.sendKeyTap(keyCode: code, explicitModifiers: mods)
-        } label: {
-            Text(label)
-                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(OpenUUTheme.textPrimary)
-                .padding(.horizontal, 9)
-                .frame(minHeight: 30)
-                .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(OpenUUTheme.popoverBorder, lineWidth: 0.5)
-                )
-        }
-        .buttonStyle(.plain)
     }
 }
 

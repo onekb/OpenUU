@@ -42,6 +42,7 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
     private var lastCodec: UInt8 = 0
     private var lastScheduledPTS: Double = 0
     private var maxJitterLeadSec: Double = 0.038
+    private var cachedGopPackets: [EncodedVideoPacket] = []
 
     // Live telemetry counters (mutated strictly on renderQueue)
     private var decodedFramesTotal: UInt64 = 0
@@ -55,6 +56,7 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
 
     var onTelemetryUpdated: (@Sendable (VideoStreamTelemetry) -> Void)?
     var onRequestKeyframe: (@Sendable () -> Void)?
+    var onFirstFrameDecoded: (@Sendable () -> Void)?
 
     @MainActor
     init() {
@@ -87,15 +89,27 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
     }
 
     @MainActor
-    func configureOnMainActor(videoFitMode: VideoFitMode = .fit) {
-        displayLayer.videoGravity = (videoFitMode == .fill) ? .resizeAspectFill : .resizeAspect
+    func configureOnMainActor(videoFitMode: VideoFitMode = .fit, isPopover: Bool = false) {
+        if isPopover {
+            displayLayer.videoGravity = .resize
+        } else {
+            displayLayer.videoGravity = (videoFitMode == .fill) ? .resizeAspectFill : .resizeAspect
+        }
         displayLayer.backgroundColor = UIColor.clear.cgColor
         nonisolated(unsafe) let renderer = displayLayer.sampleBufferRenderer
         if let tb = controlTimebase {
             displayLayer.controlTimebase = tb
         }
         renderQueue.async { [weak self] in
-            self?.sbRenderer = renderer
+            guard let self else { return }
+            self.sbRenderer = renderer
+            if !self.cachedGopPackets.isEmpty {
+                self.lastScheduledPTS = 0
+                let snapshot = self.cachedGopPackets
+                for pkt in snapshot {
+                    self.processAnnexB(packet: pkt, cachePacket: false)
+                }
+            }
         }
     }
 
@@ -112,7 +126,7 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
 
     func enqueue(packet: EncodedVideoPacket) {
         renderQueue.async { [weak self] in
-            self?.processAnnexB(packet: packet)
+            self?.processAnnexB(packet: packet, cachePacket: true)
         }
     }
 
@@ -132,6 +146,7 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
             self.lastPPS = nil
             self.lastCodec = 0
             self.lastScheduledPTS = 0
+            self.cachedGopPackets.removeAll()
             self.statsWindowStartAt = 0
             self.statsFramesInWindow = 0
             self.statsBytesInWindow = 0
@@ -150,7 +165,16 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
         }
     }
 
-    private func processAnnexB(packet: EncodedVideoPacket) {
+    private func processAnnexB(packet: EncodedVideoPacket, cachePacket: Bool) {
+        if cachePacket {
+            let isKey = (packet.flags & 0x01) != 0
+            if isKey {
+                cachedGopPackets.removeAll(keepingCapacity: true)
+                cachedGopPackets.append(packet)
+            } else if !cachedGopPackets.isEmpty && cachedGopPackets.count < 12 {
+                cachedGopPackets.append(packet)
+            }
+        }
         let startTime = CFAbsoluteTimeGetCurrent()
         let data = packet.data
         let ranges = splitAnnexBRanges(data)
@@ -324,7 +348,11 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
         }
         renderer.enqueue(sampleBuffer)
 
+        let wasZero = (decodedFramesTotal == 0)
         decodedFramesTotal += 1
+        if wasZero {
+            onFirstFrameDecoded?()
+        }
         let endTime = CFAbsoluteTimeGetCurrent()
         let decodeMs = max(0, (endTime - startTime) * 1000.0)
         recordFrameTelemetry(

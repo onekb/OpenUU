@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */; };
+		51408B5608BA9E00114B7976 /* IOSAudioStreamPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */; };
 		EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */; };
 		1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */; };
 		F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */; };
@@ -19,6 +20,7 @@
 		7FD8A490824D6C5B1C23F3AB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 034EB524EA946A4000C74EBD /* Assets.xcassets */; };
 		93FFAFE6BD46DA8C2AC3313D /* OpenUUCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */; };
 		B56F5DE331671B0BB7E2A0AC /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */; };
+		C592762E398BE2210232A9DB /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A4C42A845DA60611B762F944 /* AudioToolbox.framework */; };
 		6A4BC17E305FA2C487B0B3B1 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2764245D9BE180B6C4638433 /* CoreMedia.framework */; };
 		F5388E14546F775C8DDBC417 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */; };
 		93858CF0F053C86BCF4F7023 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E15AB25BC8F1374D38CCF85F /* Security.framework */; };
@@ -31,11 +33,13 @@
 		034EB524EA946A4000C74EBD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = OpenUUCore.xcframework; path = Frameworks/OpenUUCore.xcframework; sourceTree = "<group>"; };
 		603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		A4C42A845DA60611B762F944 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		2764245D9BE180B6C4638433 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
 		E15AB25BC8F1374D38CCF85F /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		69F4B1A4D23EBE5690C49BC5 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeviceBookStore.swift; path = Sources/DeviceBookStore.swift; sourceTree = "<group>"; };
+		51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IOSAudioStreamPlayer.swift; path = Sources/IOSAudioStreamPlayer.swift; sourceTree = "<group>"; };
 		F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IOSVideoDisplayRenderer.swift; path = Sources/IOSVideoDisplayRenderer.swift; sourceTree = "<group>"; };
 		7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileMainView.swift; path = Sources/MobileMainView.swift; sourceTree = "<group>"; };
 		4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileRemoteCanvasView.swift; path = Sources/MobileRemoteCanvasView.swift; sourceTree = "<group>"; };
@@ -53,6 +57,7 @@
 			files = (
 				93FFAFE6BD46DA8C2AC3313D /* OpenUUCore.xcframework in Frameworks */,
 				B56F5DE331671B0BB7E2A0AC /* AVFoundation.framework in Frameworks */,
+				C592762E398BE2210232A9DB /* AudioToolbox.framework in Frameworks */,
 				6A4BC17E305FA2C487B0B3B1 /* CoreMedia.framework in Frameworks */,
 				F5388E14546F775C8DDBC417 /* VideoToolbox.framework in Frameworks */,
 				93858CF0F053C86BCF4F7023 /* Security.framework in Frameworks */,
@@ -78,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */,
+				51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */,
 				F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */,
 				7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */,
 				4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */,
@@ -103,6 +109,7 @@
 			children = (
 				87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */,
 				603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */,
+				A4C42A845DA60611B762F944 /* AudioToolbox.framework */,
 				2764245D9BE180B6C4638433 /* CoreMedia.framework */,
 				ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */,
 				E15AB25BC8F1374D38CCF85F /* Security.framework */,
@@ -185,6 +192,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */,
+				51408B5608BA9E00114B7976 /* IOSAudioStreamPlayer.swift in Sources */,
 				EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */,
 				1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */,
 				F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */,

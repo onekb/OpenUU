@@ -10,6 +10,7 @@ struct MobileRemoteCanvasView: UIViewRepresentable {
     let cursorPos: CGPoint
     let cursorKind: String
     let activePopovers: [WindowTopologyItem]
+    let popoverReadyIDs: Set<UInt32>
     let parentLogicalSize: CGSize
     let popoverRenderers: [UInt32: IOSVideoDisplayRenderer]
     let resetToken: Int
@@ -19,7 +20,9 @@ struct MobileRemoteCanvasView: UIViewRepresentable {
     let onZoomChanged: (CGFloat) -> Void
     let onCursorPosChanged: (CGPoint) -> Void
     let onMouseEvent: (_ nx: CGFloat, _ ny: CGFloat, _ type: UInt8, _ button: UInt32, _ clickCount: UInt32) -> Void
+    let onPopoverMouseEvent: (_ windowID: UInt32, _ lx: Float, _ ly: Float, _ effRelX: Float, _ effRelY: Float, _ type: UInt8, _ button: UInt32, _ clickCount: UInt32) -> Void
     let onScrollEvent: (_ nx: CGFloat, _ ny: CGFloat, _ dx: Float, _ dy: Float) -> Void
+    let onPopoverScrollEvent: (_ windowID: UInt32, _ lx: Float, _ ly: Float, _ dx: Float, _ dy: Float) -> Void
     let onGestureBadgeChanged: (String?) -> Void
     let onToggleKeyboard: () -> Void
     let onToggleToolbar: () -> Void
@@ -35,6 +38,7 @@ struct MobileRemoteCanvasView: UIViewRepresentable {
             cursorPos: cursorPos,
             cursorKind: cursorKind,
             activePopovers: activePopovers,
+            popoverReadyIDs: popoverReadyIDs,
             parentLogicalSize: parentLogicalSize,
             popoverRenderers: popoverRenderers,
             resetToken: resetToken,
@@ -54,6 +58,7 @@ struct MobileRemoteCanvasView: UIViewRepresentable {
             cursorPos: cursorPos,
             cursorKind: cursorKind,
             activePopovers: activePopovers,
+            popoverReadyIDs: popoverReadyIDs,
             parentLogicalSize: parentLogicalSize,
             popoverRenderers: popoverRenderers,
             resetToken: resetToken,
@@ -79,7 +84,9 @@ struct MobileRemoteCanvasView: UIViewRepresentable {
         view.onZoomChanged = onZoomChanged
         view.onCursorPosChanged = onCursorPosChanged
         view.onMouseEvent = onMouseEvent
+        view.onPopoverMouseEvent = onPopoverMouseEvent
         view.onScrollEvent = onScrollEvent
+        view.onPopoverScrollEvent = onPopoverScrollEvent
         view.onGestureBadgeChanged = onGestureBadgeChanged
         view.onToggleKeyboard = onToggleKeyboard
         view.onToggleToolbar = onToggleToolbar
@@ -180,8 +187,16 @@ private final class HoldTapSecondaryClickRecognizer: UIGestureRecognizer {
 }
 
 final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
+    private struct PlacedPopoverEntry {
+        let item: WindowTopologyItem
+        let frameInHost: CGRect
+        let effRelX: Float
+        let effRelY: Float
+    }
+
     private let renderer: IOSVideoDisplayRenderer
     private let videoHostView = UIView()
+    private let mainVideoClipView = UIView()
     private let cursorView = UIImageView()
 
     private var aspectRatio: CGFloat = 16.0 / 10.0
@@ -195,9 +210,11 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
 
     // Floating kind==2 popover video overlays
     private var activePopovers: [WindowTopologyItem] = []
+    private var popoverReadyIDs: Set<UInt32> = []
     private var parentLogicalSize: CGSize = CGSize(width: 960, height: 600)
     private var popoverRenderers: [UInt32: IOSVideoDisplayRenderer] = [:]
     private var popoverViews: [UInt32: UIView] = [:]
+    private var placedPopovers: [PlacedPopoverEntry] = []
 
     private var zoomScale: CGFloat = 1.0
     private var panOffset: CGPoint = .zero
@@ -223,7 +240,9 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
     var onZoomChanged: ((CGFloat) -> Void)?
     var onCursorPosChanged: ((CGPoint) -> Void)?
     var onMouseEvent: ((_ nx: CGFloat, _ ny: CGFloat, _ type: UInt8, _ button: UInt32, _ clickCount: UInt32) -> Void)?
+    var onPopoverMouseEvent: ((_ windowID: UInt32, _ lx: Float, _ ly: Float, _ effRelX: Float, _ effRelY: Float, _ type: UInt8, _ button: UInt32, _ clickCount: UInt32) -> Void)?
     var onScrollEvent: ((_ nx: CGFloat, _ ny: CGFloat, _ dx: Float, _ dy: Float) -> Void)?
+    var onPopoverScrollEvent: ((_ windowID: UInt32, _ lx: Float, _ ly: Float, _ dx: Float, _ dy: Float) -> Void)?
     var onGestureBadgeChanged: ((String?) -> Void)?
     var onToggleKeyboard: (() -> Void)?
     var onToggleToolbar: (() -> Void)?
@@ -233,7 +252,6 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
     private static let trackpadSensitivity: CGFloat = 1.35
     private static let obsidianBg = UIColor(red: 9.0 / 255.0, green: 9.0 / 255.0, blue: 11.0 / 255.0, alpha: 1.0)
     private static let popoverBorderColor = UIColor(red: 63.0 / 255.0, green: 63.0 / 255.0, blue: 70.0 / 255.0, alpha: 1.0)
-    private static let popoverSurfaceColor = UIColor(red: 22.0 / 255.0, green: 22.0 / 255.0, blue: 26.0 / 255.0, alpha: 1.0)
 
     init(renderer: IOSVideoDisplayRenderer) {
         self.renderer = renderer
@@ -242,10 +260,16 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         clipsToBounds = true
         isMultipleTouchEnabled = true
 
-        videoHostView.backgroundColor = .black
-        videoHostView.clipsToBounds = true
-        videoHostView.layer.cornerRadius = 4
+        // Keep videoHostView unclipped so right-click menus extending past window edges into letterbox bars remain visible!
+        videoHostView.backgroundColor = .clear
+        videoHostView.clipsToBounds = false
         addSubview(videoHostView)
+
+        mainVideoClipView.backgroundColor = .black
+        mainVideoClipView.clipsToBounds = true
+        mainVideoClipView.layer.cornerRadius = 4
+        mainVideoClipView.isUserInteractionEnabled = false
+        videoHostView.addSubview(mainVideoClipView)
 
         attachDisplayLayerIfNeeded()
 
@@ -287,14 +311,14 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
 
     private func attachDisplayLayerIfNeeded() {
         renderer.configureOnMainActor(videoFitMode: videoFitMode)
-        if renderer.displayLayer.superlayer !== videoHostView.layer {
+        if renderer.displayLayer.superlayer !== mainVideoClipView.layer {
             renderer.displayLayer.removeFromSuperlayer()
-            videoHostView.layer.insertSublayer(renderer.displayLayer, at: 0)
+            mainVideoClipView.layer.insertSublayer(renderer.displayLayer, at: 0)
         }
-        if videoHostView.bounds.width > 1 && videoHostView.bounds.height > 1 {
+        if mainVideoClipView.bounds.width > 1 && mainVideoClipView.bounds.height > 1 {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            renderer.displayLayer.frame = videoHostView.bounds
+            renderer.displayLayer.frame = mainVideoClipView.bounds
             CATransaction.commit()
         }
     }
@@ -370,6 +394,7 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         cursorPos: CGPoint,
         cursorKind: String,
         activePopovers: [WindowTopologyItem],
+        popoverReadyIDs: Set<UInt32>,
         parentLogicalSize: CGSize,
         popoverRenderers: [UInt32: IOSVideoDisplayRenderer],
         resetToken: Int,
@@ -387,10 +412,11 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         self.isImmersive = isImmersive
         self.cursorPos = cursorPos
         self.activePopovers = activePopovers
+        self.popoverReadyIDs = popoverReadyIDs
         self.parentLogicalSize = parentLogicalSize
         self.popoverRenderers = popoverRenderers
 
-        if window != nil && renderer.displayLayer.superlayer !== videoHostView.layer {
+        if window != nil && renderer.displayLayer.superlayer !== mainVideoClipView.layer {
             attachDisplayLayerIfNeeded()
             setNeedsLayout()
         }
@@ -401,7 +427,7 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
 
         if immersiveChanged {
             backgroundColor = isImmersive ? .black : Self.obsidianBg
-            videoHostView.layer.cornerRadius = isImmersive ? 0 : 4
+            mainVideoClipView.layer.cornerRadius = isImmersive ? 0 : 4
         }
 
         if self.cursorKind != cursorKind {
@@ -451,10 +477,11 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
             : aspectFitRect(aspect: aspectRatio, in: bounds)
         videoHostView.transform = .identity
         videoHostView.frame = fitted
-        if renderer.displayLayer.superlayer === videoHostView.layer {
+        mainVideoClipView.frame = videoHostView.bounds
+        if renderer.displayLayer.superlayer === mainVideoClipView.layer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            renderer.displayLayer.frame = videoHostView.bounds
+            renderer.displayLayer.frame = mainVideoClipView.bounds
             CATransaction.commit()
         }
         syncPopovers()
@@ -469,23 +496,28 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
             view.removeFromSuperview()
             popoverViews.removeValue(forKey: winID)
         }
+        placedPopovers.removeAll(keepingCapacity: true)
 
         let hostW = videoHostView.bounds.width
         let hostH = videoHostView.bounds.height
+        let containerW = max(bounds.width, hostW)
+        let containerH = max(bounds.height, hostH)
+        let offsetX = (containerW - hostW) * 0.5
+        let offsetY = (containerH - hostH) * 0.5
         let parentW = max(parentLogicalSize.width, 1)
         let parentH = max(parentLogicalSize.height, 1)
 
         for pop in activePopovers {
-            guard let popRenderer = popoverRenderers[pop.window_id] else { continue }
+            guard pop.width > 1, pop.height > 1, let popRenderer = popoverRenderers[pop.window_id] else { continue }
             let popView: UIView
             if let existing = popoverViews[pop.window_id] {
                 popView = existing
             } else {
                 let v = UIView()
                 v.isUserInteractionEnabled = false
-                v.backgroundColor = Self.popoverSurfaceColor
+                v.backgroundColor = .clear
                 v.layer.cornerRadius = 6
-                v.layer.borderWidth = 1
+                v.layer.borderWidth = 0.75
                 v.layer.borderColor = Self.popoverBorderColor.cgColor
                 v.layer.shadowColor = UIColor.black.cgColor
                 v.layer.shadowOpacity = 0.48
@@ -498,29 +530,38 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
             }
 
             if popRenderer.displayLayer.superlayer !== popView.layer {
-                popRenderer.configureOnMainActor(videoFitMode: .fit)
+                popRenderer.configureOnMainActor(videoFitMode: .fit, isPopover: true)
                 popRenderer.displayLayer.removeFromSuperlayer()
                 popRenderer.displayLayer.cornerRadius = 6
                 popRenderer.displayLayer.masksToBounds = true
                 popView.layer.addSublayer(popRenderer.displayLayer)
             }
 
-            guard hostW > 1, hostH > 1 else { continue }
-            let wFrac = min(max(CGFloat(pop.width) / parentW, 0.06), 1.0)
-            let hFrac = min(max(CGFloat(pop.height) / parentH, 0.05), 1.0)
-            let xFrac = min(max(CGFloat(pop.rel_x) / parentW, 0), max(0, 1.0 - wFrac))
-            let yFrac = min(max(CGFloat(pop.rel_y) / parentH, 0), max(0, 1.0 - hFrac))
+            popView.isHidden = !popoverReadyIDs.contains(pop.window_id)
 
-            popView.frame = CGRect(
-                x: xFrac * hostW,
-                y: yFrac * hostH,
-                width: wFrac * hostW,
-                height: hFrac * hostH
-            )
+            guard hostW > 1, hostH > 1 else { continue }
+            let popWPx = min(max((CGFloat(pop.width) / parentW) * hostW, 1), containerW)
+            let popHPx = min(max((CGFloat(pop.height) / parentH) * hostH, 1), containerH)
+            let rawLeftPx = (CGFloat(pop.rel_x) / parentW) * hostW
+            let rawTopPx = (CGFloat(pop.rel_y) / parentH) * hostH
+            let clampedLeftPx = min(max(rawLeftPx, -offsetX), max(-offsetX, hostW + offsetX - popWPx))
+            let clampedTopPx = min(max(rawTopPx, -offsetY), max(-offsetY, hostH + offsetY - popHPx))
+
+            let frameInHost = CGRect(x: clampedLeftPx, y: clampedTopPx, width: popWPx, height: popHPx)
+            popView.frame = frameInHost
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             popRenderer.displayLayer.frame = popView.bounds
             CATransaction.commit()
+
+            placedPopovers.append(
+                PlacedPopoverEntry(
+                    item: pop,
+                    frameInHost: frameInHost,
+                    effRelX: Float((clampedLeftPx / hostW) * parentW),
+                    effRelY: Float((clampedTopPx / hostH) * parentH)
+                )
+            )
         }
 
         // Always keep virtual cursor floating above all popovers
@@ -596,6 +637,8 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    private var activePointerPopover: PlacedPopoverEntry?
+
     private func normalizedPoint(from gesture: UIGestureRecognizer) -> CGPoint {
         normalizedPoint(atSelfPoint: gesture.location(in: self))
     }
@@ -604,7 +647,72 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         let pt = convert(ptInSelf, to: videoHostView)
         let w = max(videoHostView.bounds.width, 1)
         let h = max(videoHostView.bounds.height, 1)
+        if !placedPopovers.isEmpty {
+            return CGPoint(x: pt.x / w, y: pt.y / h)
+        }
         return CGPoint(x: min(max(pt.x / w, 0), 1), y: min(max(pt.y / h, 0), 1))
+    }
+
+    private func dispatchMouse(
+        nx: CGFloat,
+        ny: CGFloat,
+        type: UInt8,
+        button: UInt32,
+        clickCount: UInt32
+    ) {
+        let hostW = max(videoHostView.bounds.width, 1)
+        let hostH = max(videoHostView.bounds.height, 1)
+        let pt = CGPoint(x: nx * hostW, y: ny * hostH)
+
+        let targetEntry: PlacedPopoverEntry?
+        if type == 1 {
+            targetEntry = placedPopovers.reversed().first { $0.frameInHost.contains(pt) }
+            activePointerPopover = targetEntry
+        } else if (type == 2 || type == 3), let locked = activePointerPopover,
+                  placedPopovers.contains(where: { $0.item.window_id == locked.item.window_id }) {
+            targetEntry = placedPopovers.first { $0.item.window_id == locked.item.window_id }
+            if type == 2 { activePointerPopover = nil }
+        } else {
+            if type == 2 { activePointerPopover = nil }
+            targetEntry = placedPopovers.reversed().first { $0.frameInHost.contains(pt) }
+        }
+
+        if let entry = targetEntry {
+            let fw = max(entry.frameInHost.width, 1)
+            let fh = max(entry.frameInHost.height, 1)
+            let lx = min(max(Float((pt.x - entry.frameInHost.minX) / fw), 0), 1) * entry.item.width
+            let ly = min(max(Float((pt.y - entry.frameInHost.minY) / fh), 0), 1) * entry.item.height
+            onPopoverMouseEvent?(
+                entry.item.window_id,
+                lx,
+                ly,
+                entry.effRelX,
+                entry.effRelY,
+                type,
+                button,
+                clickCount
+            )
+            return
+        }
+
+        let clampedX = min(max(nx, 0), 1)
+        let clampedY = min(max(ny, 0), 1)
+        onMouseEvent?(clampedX, clampedY, type, button, clickCount)
+    }
+
+    private func dispatchScroll(nx: CGFloat, ny: CGFloat, dx: Float, dy: Float) {
+        let hostW = max(videoHostView.bounds.width, 1)
+        let hostH = max(videoHostView.bounds.height, 1)
+        let pt = CGPoint(x: nx * hostW, y: ny * hostH)
+        if let entry = placedPopovers.reversed().first(where: { $0.frameInHost.contains(pt) }) {
+            let fw = max(entry.frameInHost.width, 1)
+            let fh = max(entry.frameInHost.height, 1)
+            let lx = min(max(Float((pt.x - entry.frameInHost.minX) / fw), 0), 1) * entry.item.width
+            let ly = min(max(Float((pt.y - entry.frameInHost.minY) / fh), 0), 1) * entry.item.height
+            onPopoverScrollEvent?(entry.item.window_id, lx, ly, dx, dy)
+            return
+        }
+        onScrollEvent?(min(max(nx, 0), 1), min(max(ny, 0), 1), dx, dy)
     }
 
     private func moveTrackpadCursor(by delta: CGPoint) {
@@ -660,9 +768,9 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         if haptic {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         }
-        onMouseEvent?(target.x, target.y, 0, 1, 0)
-        onMouseEvent?(target.x, target.y, 1, 1, 1)
-        onMouseEvent?(target.x, target.y, 2, 1, 1)
+        dispatchMouse(nx: target.x, ny: target.y, type: 0, button: 1, clickCount: 0)
+        dispatchMouse(nx: target.x, ny: target.y, type: 1, button: 1, clickCount: 1)
+        dispatchMouse(nx: target.x, ny: target.y, type: 2, button: 1, clickCount: 1)
         showBadge("右键", autoClearAfter: 0.55)
     }
 
@@ -679,9 +787,9 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
         lastSingleTapPoint = screenPt
 
         let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
-        onMouseEvent?(target.x, target.y, 0, 0, 0)
-        onMouseEvent?(target.x, target.y, 1, 0, clickCount)
-        onMouseEvent?(target.x, target.y, 2, 0, clickCount)
+        dispatchMouse(nx: target.x, ny: target.y, type: 0, button: 0, clickCount: 0)
+        dispatchMouse(nx: target.x, ny: target.y, type: 1, button: 0, clickCount: clickCount)
+        dispatchMouse(nx: target.x, ny: target.y, type: 2, button: 0, clickCount: clickCount)
     }
 
     @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
@@ -721,8 +829,8 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
                 isLongPressDragging = true
                 showBadge("左键拖拽中")
                 let startTarget: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(atSelfPoint: longPressStartLocation)
-                onMouseEvent?(startTarget.x, startTarget.y, 0, 0, 0)
-                onMouseEvent?(startTarget.x, startTarget.y, 1, 0, 1)
+                dispatchMouse(nx: startTarget.x, ny: startTarget.y, type: 0, button: 0, clickCount: 0)
+                dispatchMouse(nx: startTarget.x, ny: startTarget.y, type: 1, button: 0, clickCount: 1)
                 let delta = CGPoint(x: currentLoc.x - longPressStartLocation.x, y: currentLoc.y - longPressStartLocation.y)
                 longPressLastLocation = currentLoc
                 emitDragMove(currentLoc: currentLoc, delta: delta)
@@ -736,7 +844,7 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
             if isLongPressDragging {
                 isLongPressDragging = false
                 let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
-                onMouseEvent?(target.x, target.y, 2, 0, 1)
+                dispatchMouse(nx: target.x, ny: target.y, type: 2, button: 0, clickCount: 1)
                 showBadge(nil)
             } else if gesture.state == .ended && !suppressLongPressRightClick {
                 let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
@@ -754,10 +862,10 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
     private func emitDragMove(currentLoc: CGPoint, delta: CGPoint) {
         if touchMode == .trackpad {
             moveTrackpadCursor(by: delta)
-            onMouseEvent?(cursorPos.x, cursorPos.y, 3, 0, 1)
+            dispatchMouse(nx: cursorPos.x, ny: cursorPos.y, type: 3, button: 0, clickCount: 1)
         } else {
             let pt = normalizedPoint(atSelfPoint: currentLoc)
-            onMouseEvent?(pt.x, pt.y, 3, 0, 1)
+            dispatchMouse(nx: pt.x, ny: pt.y, type: 3, button: 0, clickCount: 1)
         }
     }
 
@@ -773,8 +881,8 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 showBadge("双击拖拽中")
                 let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
-                onMouseEvent?(target.x, target.y, 0, 0, 0)
-                onMouseEvent?(target.x, target.y, 1, 0, 1)
+                dispatchMouse(nx: target.x, ny: target.y, type: 0, button: 0, clickCount: 0)
+                dispatchMouse(nx: target.x, ny: target.y, type: 1, button: 0, clickCount: 1)
                 gesture.setTranslation(.zero, in: self)
                 return
             }
@@ -787,14 +895,14 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
                 } else {
                     let pt = normalizedPoint(from: gesture)
                     isDraggingRemoteMouse = true
-                    onMouseEvent?(pt.x, pt.y, 0, 0, 0)
-                    onMouseEvent?(pt.x, pt.y, 1, 0, 1)
+                    dispatchMouse(nx: pt.x, ny: pt.y, type: 0, button: 0, clickCount: 0)
+                    dispatchMouse(nx: pt.x, ny: pt.y, type: 1, button: 0, clickCount: 1)
                 }
             case .trackpad:
                 let delta = gesture.translation(in: self)
                 gesture.setTranslation(.zero, in: self)
                 moveTrackpadCursor(by: delta)
-                onMouseEvent?(cursorPos.x, cursorPos.y, 0, 0, 0)
+                dispatchMouse(nx: cursorPos.x, ny: cursorPos.y, type: 0, button: 0, clickCount: 0)
             }
 
         case .changed:
@@ -803,10 +911,10 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
                     let delta = gesture.translation(in: self)
                     gesture.setTranslation(.zero, in: self)
                     moveTrackpadCursor(by: delta)
-                    onMouseEvent?(cursorPos.x, cursorPos.y, 3, 0, 1)
+                    dispatchMouse(nx: cursorPos.x, ny: cursorPos.y, type: 3, button: 0, clickCount: 1)
                 } else {
                     let pt = normalizedPoint(from: gesture)
-                    onMouseEvent?(pt.x, pt.y, 3, 0, 1)
+                    dispatchMouse(nx: pt.x, ny: pt.y, type: 3, button: 0, clickCount: 1)
                 }
                 return
             }
@@ -822,25 +930,25 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
                     applyVideoTransform()
                 } else if isDraggingRemoteMouse {
                     let pt = normalizedPoint(from: gesture)
-                    onMouseEvent?(pt.x, pt.y, 3, 0, 1)
+                    dispatchMouse(nx: pt.x, ny: pt.y, type: 3, button: 0, clickCount: 1)
                 }
             case .trackpad:
                 let delta = gesture.translation(in: self)
                 gesture.setTranslation(.zero, in: self)
                 moveTrackpadCursor(by: delta)
-                onMouseEvent?(cursorPos.x, cursorPos.y, 0, 0, 0)
+                dispatchMouse(nx: cursorPos.x, ny: cursorPos.y, type: 0, button: 0, clickCount: 0)
             }
 
         case .ended, .cancelled, .failed:
             if isDoubleTapHoldDragging {
                 isDoubleTapHoldDragging = false
                 let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
-                onMouseEvent?(target.x, target.y, 2, 0, 1)
+                dispatchMouse(nx: target.x, ny: target.y, type: 2, button: 0, clickCount: 1)
                 showBadge(nil)
             } else if isDraggingRemoteMouse {
                 isDraggingRemoteMouse = false
                 let pt = normalizedPoint(from: gesture)
-                onMouseEvent?(pt.x, pt.y, 2, 0, 1)
+                dispatchMouse(nx: pt.x, ny: pt.y, type: 2, button: 0, clickCount: 1)
             }
 
         default:
@@ -860,7 +968,7 @@ final class RemoteCanvasContainerView: UIView, UIGestureRecognizerDelegate {
 
         let target: CGPoint = (touchMode == .trackpad) ? cursorPos : normalizedPoint(from: gesture)
         let scale: Float = 1.6
-        onScrollEvent?(target.x, target.y, Float(delta.x) * scale, Float(delta.y) * scale)
+        dispatchScroll(nx: target.x, ny: target.y, dx: Float(delta.x) * scale, dy: Float(delta.y) * scale)
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {

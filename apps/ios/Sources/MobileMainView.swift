@@ -71,7 +71,7 @@ struct MobileMainView: View {
                         viewModel.dismissNotificationBanner()
                     } onOpenRemote: {
                         if viewModel.phase.isConnected {
-                            viewModel.selectedTab = .remote
+                            viewModel.enterRemoteWorkspace()
                         }
                         viewModel.dismissNotificationBanner()
                     }
@@ -498,7 +498,7 @@ struct HostsHomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button("进入画面") {
-                    viewModel.selectedTab = .remote
+                    viewModel.enterRemoteWorkspace()
                 }
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(OpenUUTheme.background)

@@ -142,6 +142,7 @@ final class MobileSessionViewModel: ObservableObject {
     @Published var normalWindows: [WindowTopologyItem] = []
     @Published var activePopovers: [WindowTopologyItem] = []
     @Published var popoverRenderers: [UInt32: IOSVideoDisplayRenderer] = [:]
+    @Published var popoverReadyIDs: Set<UInt32> = []
     @Published var selectedWindowID: UInt32 = 0
     @Published var windowSwitchNotice: String?
     @Published var proactiveTabRevealTick: Int = 0
@@ -149,6 +150,23 @@ final class MobileSessionViewModel: ObservableObject {
 
     @Published var showAppLauncher: Bool = true
     @Published var showDebugHUD: Bool = false
+    @Published var remoteAudioEnabled: Bool = UserDefaults.standard.object(forKey: "openuu.ios.remoteAudioEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(remoteAudioEnabled, forKey: "openuu.ios.remoteAudioEnabled")
+            audioPlayer.setMuted(!remoteAudioEnabled)
+            if phase.isConnected {
+                bridge.sendAudioControl(enabled: remoteAudioEnabled, muteHost: muteHostAudio)
+            }
+        }
+    }
+    @Published var muteHostAudio: Bool = UserDefaults.standard.object(forKey: "openuu.ios.muteHostAudio") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(muteHostAudio, forKey: "openuu.ios.muteHostAudio")
+            if phase.isConnected {
+                bridge.sendAudioControl(enabled: remoteAudioEnabled, muteHost: muteHostAudio)
+            }
+        }
+    }
     @Published var touchMode: TouchControlMode = .directTouch
     @Published var manualFullscreen: Bool = false
     @Published var videoFitMode: VideoFitMode = .fit
@@ -175,10 +193,13 @@ final class MobileSessionViewModel: ObservableObject {
     let bridge: OpenUUBridge
     let deviceBook: DeviceBookStore
     let videoRenderer = IOSVideoDisplayRenderer()
+    let audioPlayer = IOSAudioStreamPlayer()
 
     private let activeWindowIDBox = LockedValue<UInt32>(0)
     private let popoverRenderersBox = LockedValue<[UInt32: IOSVideoDisplayRenderer]>([:])
     private let knownPopoverIDsBox = LockedValue<Set<UInt32>>([])
+    private let pendingWindowPacketsBox = LockedValue<[UInt32: [EncodedVideoPacket]]>([:])
+    private let userPausedAtLauncherBox = LockedValue<Bool>(false)
 
     // Window auto-focus & history tracking
     private var knownNormalWindowIDs: Set<UInt32> = []
@@ -271,18 +292,20 @@ final class MobileSessionViewModel: ObservableObject {
         let windowBox = activeWindowIDBox
         let popRenderersBox = popoverRenderersBox
         let popIDsBox = knownPopoverIDsBox
+        let pendingBox = pendingWindowPacketsBox
+        let pausedBox = userPausedAtLauncherBox
         bridge.onVideoFrame = { [weak self] packet in
             var active = windowBox.value
             let popMap = popRenderersBox.value
             let isKnownPopover = (popMap[packet.windowID] != nil) || popIDsBox.value.contains(packet.windowID)
 
-            if active == 0 && packet.windowID != 0 && !isKnownPopover {
+            if active == 0 && packet.windowID != 0 && !isKnownPopover && !pausedBox.value {
                 active = packet.windowID
                 windowBox.value = active
                 let adoptedID = packet.windowID
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    if self.selectedWindowID == 0 {
+                    if self.selectedWindowID == 0 && !self.userPausedAtLauncherBox.value {
                         self.selectedWindowID = adoptedID
                         self.showAppLauncher = false
                         self.recomputeWindowBuckets(allWindows: self.remoteWindows, selectedID: adoptedID)
@@ -298,7 +321,28 @@ final class MobileSessionViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.popoverRenderer(for: packet.windowID).enqueue(packet: packet)
                 }
+            } else if packet.windowID != 0 {
+                // Buffer early frames arriving over QUIC before WindowTopology is processed on MainActor!
+                var pending = pendingBox.value
+                let isKey = (packet.flags & 0x01) != 0
+                if pending[packet.windowID] == nil && pending.count >= 12, let firstKey = pending.keys.first {
+                    pending.removeValue(forKey: firstKey)
+                }
+                var list = pending[packet.windowID] ?? []
+                if isKey {
+                    list.removeAll(keepingCapacity: true)
+                    list.append(packet)
+                } else if list.count < 10 {
+                    list.append(packet)
+                }
+                pending[packet.windowID] = list
+                pendingBox.value = pending
             }
+        }
+
+        let player = audioPlayer
+        bridge.onAudioFrame = { packet in
+            player.enqueue(packet)
         }
     }
 
@@ -421,13 +465,25 @@ final class MobileSessionViewModel: ObservableObject {
     private func clearWindowTrackingState() {
         knownNormalWindowIDs.removeAll()
         hadPriorTopology = false
+        userPausedAtLauncherBox.value = false
         windowHistory.removeAll()
         windowNoticeTask?.cancel()
         windowNoticeTask = nil
         windowSwitchNotice = nil
+        popoverReadyIDs.removeAll()
+        pendingWindowPacketsBox.value = [:]
         dragTargetWindowID = 0
         dragTargetRelX = 0
         dragTargetRelY = 0
+    }
+
+    private func drainPendingPackets(for windowID: UInt32, into renderer: IOSVideoDisplayRenderer) {
+        var map = pendingWindowPacketsBox.value
+        guard let buffered = map.removeValue(forKey: windowID), !buffered.isEmpty else { return }
+        pendingWindowPacketsBox.value = map
+        for pkt in buffered {
+            renderer.enqueue(packet: pkt)
+        }
     }
 
     private func releaseAllPopoverRenderers() {
@@ -435,6 +491,7 @@ final class MobileSessionViewModel: ObservableObject {
             r.flushAndRemoveImage()
         }
         popoverRenderers.removeAll()
+        popoverReadyIDs.removeAll()
         popoverRenderersBox.value = [:]
         knownPopoverIDsBox.value = []
     }
@@ -449,8 +506,17 @@ final class MobileSessionViewModel: ObservableObject {
         renderer.onRequestKeyframe = {
             bridgeRef.requestKeyframe(windowID: windowID)
         }
+        renderer.onFirstFrameDecoded = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.activePopovers.contains(where: { $0.window_id == windowID }) {
+                    self.popoverReadyIDs.insert(windowID)
+                }
+            }
+        }
         popoverRenderers[windowID] = renderer
         popoverRenderersBox.value = popoverRenderers
+        drainPendingPackets(for: windowID, into: renderer)
         return renderer
     }
 
@@ -470,10 +536,14 @@ final class MobileSessionViewModel: ObservableObject {
         let activePopoverIDs = Set(popovers.map(\.window_id))
         var changedMap = false
         for pop in popovers {
-            if popoverRenderers[pop.window_id] == nil {
-                _ = popoverRenderer(for: pop.window_id)
+            let r: IOSVideoDisplayRenderer
+            if let existing = popoverRenderers[pop.window_id] {
+                r = existing
+            } else {
+                r = popoverRenderer(for: pop.window_id)
                 changedMap = true
             }
+            drainPendingPackets(for: pop.window_id, into: r)
         }
         for existingID in Array(popoverRenderers.keys) where !activePopoverIDs.contains(existingID) {
             if let removed = popoverRenderers.removeValue(forKey: existingID) {
@@ -484,10 +554,15 @@ final class MobileSessionViewModel: ObservableObject {
         if changedMap {
             popoverRenderersBox.value = popoverRenderers
         }
+        let trimmedReady = popoverReadyIDs.intersection(activePopoverIDs)
+        if trimmedReady != popoverReadyIDs {
+            popoverReadyIDs = trimmedReady
+        }
         knownPopoverIDsBox.value = Set(allWindows.filter { $0.kind == 2 }.map(\.window_id))
     }
 
     private func resetSessionState() {
+        audioPlayer.stop()
         activeWindowIDBox.value = 0
         clearWindowTrackingState()
         releaseAllPopoverRenderers()
@@ -518,6 +593,7 @@ final class MobileSessionViewModel: ObservableObject {
 
     func openRemoteApp(bundleID: String, appName: String) {
         appendLog("打开远程应用: \(appName) (\(bundleID))")
+        userPausedAtLauncherBox.value = false
         showAppLauncher = false
         if activeWindowIDBox.value == 0 {
             selectedWindowID = 0
@@ -535,6 +611,7 @@ final class MobileSessionViewModel: ObservableObject {
     }
 
     func selectRemoteWindow(_ windowID: UInt32) {
+        userPausedAtLauncherBox.value = false
         let prev = activeWindowIDBox.value
         if windowID == prev && !showAppLauncher {
             recomputeWindowBuckets(allWindows: remoteWindows, selectedID: windowID)
@@ -551,10 +628,84 @@ final class MobileSessionViewModel: ObservableObject {
         selectedWindowID = windowID
         showAppLauncher = false
         videoRenderer.resetStream(resetDecodedCounter: false)
+        if windowID != 0 {
+            drainPendingPackets(for: windowID, into: videoRenderer)
+        }
         recomputeWindowBuckets(allWindows: remoteWindows, selectedID: windowID)
         if windowID != 0 {
             bridge.requestKeyframe(windowID: windowID)
         }
+    }
+
+    func enterRemoteWorkspace() {
+        selectedTab = .remote
+        if selectedWindowID == 0 && !normalWindows.isEmpty {
+            userPausedAtLauncherBox.value = false
+            let chosen = windowHistory.last(where: { id in normalWindows.contains(where: { $0.window_id == id }) })
+                .flatMap { id in normalWindows.first(where: { $0.window_id == id }) }
+                ?? normalWindows.first(where: { $0.kind == 0 })
+                ?? normalWindows[0]
+            selectRemoteWindow(chosen.window_id)
+        }
+    }
+
+    var canNavigateBackWindow: Bool {
+        let cur = selectedWindowID
+        return windowHistory.contains { id in
+            id != 0 && id != cur && normalWindows.contains(where: { $0.window_id == id })
+        }
+    }
+
+    @discardableResult
+    func navigateBackWindow() -> Bool {
+        let cur = selectedWindowID
+        while let prevID = windowHistory.popLast() {
+            if let match = normalWindows.first(where: { $0.window_id == prevID && $0.window_id != cur }) {
+                userPausedAtLauncherBox.value = false
+                dragTargetWindowID = 0
+                dragTargetRelX = 0
+                dragTargetRelY = 0
+                activeWindowIDBox.value = match.window_id
+                selectedWindowID = match.window_id
+                showAppLauncher = false
+                videoRenderer.resetStream(resetDecodedCounter: false)
+                drainPendingPackets(for: match.window_id, into: videoRenderer)
+                recomputeWindowBuckets(allWindows: remoteWindows, selectedID: match.window_id)
+                bridge.requestKeyframe(windowID: match.window_id)
+                showWindowSwitchNotice("返回窗口 · \(match.displayTitle)")
+                return true
+            }
+        }
+        return false
+    }
+
+    func enterAppLauncherPage() {
+        let prev = activeWindowIDBox.value
+        if prev != 0 && normalWindows.contains(where: { $0.window_id == prev }) {
+            windowHistory.removeAll { $0 == prev }
+            windowHistory.append(prev)
+        }
+        userPausedAtLauncherBox.value = true
+        dragTargetWindowID = 0
+        dragTargetRelX = 0
+        dragTargetRelY = 0
+        activeWindowIDBox.value = 0
+        selectedWindowID = 0
+        showAppLauncher = true
+        manualFullscreen = false
+        gestureFeedbackBadge = nil
+        videoRenderer.resetStream(resetDecodedCounter: true)
+        recomputeWindowBuckets(allWindows: remoteWindows, selectedID: 0)
+        refreshRemoteApps()
+    }
+
+    @discardableResult
+    func dismissActivePopoversViaEsc() -> Bool {
+        guard let topPop = activePopovers.last else { return false }
+        let targetID = activeWindowIDBox.value != 0 ? activeWindowIDBox.value : topPop.window_id
+        bridge.sendKey(windowID: targetID, keyCode: MacKeyCodes.escape, isDown: true, isRepeat: false, modifiers: 0)
+        bridge.sendKey(windowID: targetID, keyCode: MacKeyCodes.escape, isDown: false, isRepeat: false, modifiers: 0)
+        return true
     }
 
     /// Sends ⌘W to a remote window and stops its stream, switching back to the previous window (never disconnects).
@@ -635,8 +786,55 @@ final class MobileSessionViewModel: ObservableObject {
         return CGSize(width: 960, height: 600)
     }
 
+    func sendPopoverMouseDirect(
+        popoverWindowID: UInt32,
+        lx: Float,
+        ly: Float,
+        effectiveRelX: Float,
+        effectiveRelY: Float,
+        type: UInt8,
+        button: UInt32 = 0,
+        clickCount: UInt32 = 1
+    ) {
+        guard popoverWindowID != 0 else { return }
+        let mods = stickyModifiers
+        if type == 1 {
+            dragTargetWindowID = popoverWindowID
+            dragTargetRelX = effectiveRelX
+            dragTargetRelY = effectiveRelY
+        } else if type == 2 && dragTargetWindowID == popoverWindowID {
+            dragTargetWindowID = 0
+            dragTargetRelX = 0
+            dragTargetRelY = 0
+        }
+        bridge.sendMouse(
+            windowID: popoverWindowID,
+            x: lx,
+            y: ly,
+            type: type,
+            button: button,
+            clickCount: clickCount,
+            modifiers: mods
+        )
+    }
+
+    func sendPopoverScrollDirect(popoverWindowID: UInt32, lx: Float, ly: Float, deltaX: Float, deltaY: Float) {
+        guard popoverWindowID != 0 else { return }
+        bridge.sendScroll(
+            windowID: popoverWindowID,
+            x: lx,
+            y: ly,
+            deltaX: deltaX,
+            deltaY: deltaY,
+            isContinuous: true,
+            modifiers: stickyModifiers
+        )
+    }
+
     func sendMouseNormalized(nx: CGFloat, ny: CGFloat, type: UInt8, button: UInt32 = 0, clickCount: UInt32 = 1) {
         let logical = currentLogicalSize()
+        let rawPx = Float(nx * logical.width)
+        let rawPy = Float(ny * logical.height)
         let px = Float(min(max(nx, 0), 1) * logical.width)
         let py = Float(min(max(ny, 0), 1) * logical.height)
         let mods = stickyModifiers
@@ -646,12 +844,9 @@ final class MobileSessionViewModel: ObservableObject {
             let targetID = dragTargetWindowID
             let lx: Float
             let ly: Float
-            if let pop = activePopovers.first(where: { $0.window_id == targetID }) {
-                lx = px - pop.rel_x
-                ly = py - pop.rel_y
-            } else if targetID != activeWindowIDBox.value {
-                lx = px - dragTargetRelX
-                ly = py - dragTargetRelY
+            if targetID != activeWindowIDBox.value {
+                lx = rawPx - dragTargetRelX
+                ly = rawPy - dragTargetRelY
             } else {
                 lx = px
                 ly = py
@@ -673,14 +868,14 @@ final class MobileSessionViewModel: ObservableObject {
             return
         }
 
-        // Hit-test topmost active popovers (kind == 2) first
+        // Hit-test topmost active popovers (kind == 2) first using unclamped rawPx/rawPy
         if let hitPopover = activePopovers.reversed().first(where: { pop in
             pop.width > 1 && pop.height > 1
-                && px >= pop.rel_x && px <= pop.rel_x + pop.width
-                && py >= pop.rel_y && py <= pop.rel_y + pop.height
+                && rawPx >= pop.rel_x && rawPx <= pop.rel_x + pop.width
+                && rawPy >= pop.rel_y && rawPy <= pop.rel_y + pop.height
         }) {
-            let lx = px - hitPopover.rel_x
-            let ly = py - hitPopover.rel_y
+            let lx = rawPx - hitPopover.rel_x
+            let ly = rawPy - hitPopover.rel_y
             if type == 1 {
                 dragTargetWindowID = hitPopover.window_id
                 dragTargetRelX = hitPopover.rel_x
@@ -729,19 +924,21 @@ final class MobileSessionViewModel: ObservableObject {
 
     func sendScrollNormalized(nx: CGFloat, ny: CGFloat, deltaX: Float, deltaY: Float) {
         let logical = currentLogicalSize()
+        let rawPx = Float(nx * logical.width)
+        let rawPy = Float(ny * logical.height)
         let px = Float(min(max(nx, 0), 1) * logical.width)
         let py = Float(min(max(ny, 0), 1) * logical.height)
         let mods = stickyModifiers
 
         if let hitPopover = activePopovers.reversed().first(where: { pop in
             pop.width > 1 && pop.height > 1
-                && px >= pop.rel_x && px <= pop.rel_x + pop.width
-                && py >= pop.rel_y && py <= pop.rel_y + pop.height
+                && rawPx >= pop.rel_x && rawPx <= pop.rel_x + pop.width
+                && rawPy >= pop.rel_y && py <= pop.rel_y + pop.height
         }) {
             bridge.sendScroll(
                 windowID: hitPopover.window_id,
-                x: px - hitPopover.rel_x,
-                y: py - hitPopover.rel_y,
+                x: rawPx - hitPopover.rel_x,
+                y: rawPy - hitPopover.rel_y,
                 deltaX: deltaX,
                 deltaY: deltaY,
                 isContinuous: true,
@@ -778,13 +975,13 @@ final class MobileSessionViewModel: ObservableObject {
         stickyModifiers ^= bit
     }
 
-    func sendKeyTap(keyCode: UInt32, explicitModifiers: UInt32? = nil) {
+    func sendKeyTap(keyCode: UInt32, explicitModifiers: UInt32? = nil, isRepeat: Bool = false) {
         let winID = activeWindowIDBox.value
         guard winID != 0 else { return }
         let mods = explicitModifiers ?? stickyModifiers
-        bridge.sendKey(windowID: winID, keyCode: keyCode, isDown: true, isRepeat: false, modifiers: mods)
+        bridge.sendKey(windowID: winID, keyCode: keyCode, isDown: true, isRepeat: isRepeat, modifiers: mods)
         bridge.sendKey(windowID: winID, keyCode: keyCode, isDown: false, isRepeat: false, modifiers: mods)
-        if explicitModifiers == nil && stickyModifiers != 0 {
+        if !isRepeat && explicitModifiers == nil && stickyModifiers != 0 {
             stickyModifiers = 0
         }
     }
@@ -793,6 +990,47 @@ final class MobileSessionViewModel: ObservableObject {
         let winID = activeWindowIDBox.value
         guard winID != 0, !text.isEmpty else { return }
         bridge.sendTextCommit(windowID: winID, text: text)
+    }
+
+    /// Streams committed IME characters directly to the Mac without requiring a visible staging input box.
+    func handleDirectIMEInput(_ rawText: String) {
+        guard !rawText.isEmpty else { return }
+        if stickyModifiers != 0, rawText.count == 1, let first = rawText.first,
+           let (code, extraShift) = MacKeyCodes.asciiToKeyAndShift(first) {
+            let mods = stickyModifiers | extraShift
+            sendKeyTap(keyCode: code, explicitModifiers: mods)
+            stickyModifiers = 0
+            return
+        }
+        if rawText == " " {
+            sendKeyTap(keyCode: MacKeyCodes.space)
+            return
+        }
+
+        var buffer = ""
+        func flushBuffer() {
+            if !buffer.isEmpty {
+                sendTextCommit(buffer)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+
+        for ch in rawText {
+            switch ch {
+            case "\r\n", "\n", "\r":
+                flushBuffer()
+                sendKeyTap(keyCode: MacKeyCodes.returnKey)
+            case "\t":
+                flushBuffer()
+                sendKeyTap(keyCode: MacKeyCodes.tab)
+            case "\u{0008}", "\u{007F}":
+                flushBuffer()
+                sendKeyTap(keyCode: MacKeyCodes.delete)
+            default:
+                buffer.append(ch)
+            }
+        }
+        flushBuffer()
     }
 
     // MARK: - Clipboard & File Drop
@@ -968,6 +1206,8 @@ final class MobileSessionViewModel: ObservableObject {
                 .first?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Mac"
             phase = .connected(hostName.isEmpty ? "Mac" : hostName)
+            audioPlayer.setMuted(!remoteAudioEnabled)
+            bridge.sendAudioControl(enabled: remoteAudioEnabled, muteHost: muteHostAudio)
             refreshIdentityAndDeviceBook()
             let remoteDevID = identity?.trusted_peers.first?.device_id ?? ""
             if !lastConnectedTarget.isEmpty {
@@ -1115,6 +1355,7 @@ final class MobileSessionViewModel: ObservableObject {
 
         let curSelected = selectedWindowID
         if hadPrior, let targetNew = newlyOpened.last {
+            userPausedAtLauncherBox.value = false
             if curSelected != 0 && curSelected != targetNew.window_id && normals.contains(where: { $0.window_id == curSelected }) {
                 windowHistory.removeAll { $0 == curSelected }
                 windowHistory.append(curSelected)
@@ -1122,7 +1363,7 @@ final class MobileSessionViewModel: ObservableObject {
             selectWindow(targetNew.window_id)
             showWindowSwitchNotice("新窗口 · \(targetNew.displayTitle)")
             proactiveTabRevealTick += 1
-        } else if !normals.isEmpty && (curSelected == 0 || !normals.contains(where: { $0.window_id == curSelected })) {
+        } else if !normals.isEmpty && ((curSelected == 0 && !userPausedAtLauncherBox.value) || (curSelected != 0 && !normals.contains(where: { $0.window_id == curSelected }))) {
             var fallback: WindowTopologyItem?
             while let prevID = windowHistory.popLast() {
                 if let match = normals.first(where: { $0.window_id == prevID }) {
@@ -1133,6 +1374,7 @@ final class MobileSessionViewModel: ObservableObject {
             let chosen = fallback ?? normals.first(where: { $0.kind == 0 }) ?? normals[0]
             selectWindow(chosen.window_id)
         } else if normals.isEmpty && curSelected != 0 {
+            userPausedAtLauncherBox.value = false
             activeWindowIDBox.value = 0
             selectedWindowID = 0
             showAppLauncher = true
