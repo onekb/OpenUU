@@ -69,21 +69,27 @@
           >
             <span id="hero-dl-label">免费下载 Mac 版</span>
           </a>
-          <a href="#download" class="link-more">查看手机与平板版 ›</a>
+          <a href="#download" class="link-more" id="hero-more-link">查看手机与平板版 ›</a>
         </div>
 
         <div class="hero-reassure">
-          完全免费 · 无会员限速 · 无需注册账号 · 当前版本 <span data-ver>v0.5.0</span>
+          <span>完全免费</span>
+          <i aria-hidden="true">·</i>
+          <span>无会员限速</span>
+          <i aria-hidden="true">·</i>
+          <span>无需注册账号</span>
+          <i aria-hidden="true">·</i>
+          <span>当前版本 <b data-ver>v0.5.0</b></span>
         </div>
 
         <!-- Mode Toggle + Live Story Progress Pills -->
         <div class="stage-controls">
           <div class="seg-switch" role="tablist" aria-label="使用效果对比">
             <button type="button" class="seg-item active" data-mode="single">
-              OpenUU 单窗口同屏（自动演示中）
+              OpenUU 单窗口同屏<span class="seg-extra">（自动演示中）</span>
             </button>
             <button type="button" class="seg-item" data-mode="legacy">
-              传统远程桌面（对比痛点）
+              传统远程桌面<span class="seg-extra">（对比痛点）</span>
             </button>
           </div>
 
@@ -103,6 +109,7 @@
 
         <!-- Realistic MacBook Screen Preview + Live Choreographed Animation -->
         <div class="mac-bezel">
+          <div class="mac-stage-viewport" id="mac-stage-viewport">
           <div class="mac-wallpaper" id="mac-wallpaper" data-mode="single">
             <!-- Authentic macOS Top Menu Bar -->
             <div class="mac-top-bar">
@@ -573,6 +580,7 @@
               </div>
             </div>
           </div>
+          </div>
         </div>
       </div>
     </section>
@@ -630,10 +638,10 @@
         <!-- Phone & Tablet Card -->
         <div class="mobile-showcase">
           <div>
-            <h3 style="margin: 0 0 10px; font-size: 1.45rem; letter-spacing: -0.02em;">
+            <h3 class="mobile-showcase-title">
               出门没带电脑？手机和平板也能轻松操控
             </h3>
-            <p style="margin: 0; color: var(--ink-secondary); font-size: 0.96rem;">
+            <p class="mobile-showcase-desc">
               无论躺在沙发上拿 iPad，还是在路上只带了手机，随时都能连回你的 Mac 处理急事。
             </p>
             <ul class="mobile-points">
@@ -647,11 +655,11 @@
           <div class="pad-illustration" aria-label="手机与平板横屏操控示意">
             <div class="pad-inner">
               <div class="pad-tabs">
-                <div style="display: flex; gap: 6px; align-items: center;">
+                <div class="pad-tabs-left">
                   <span class="pad-tab-pill">公司方案.docx</span>
-                  <span style="color: #86868b; padding: 0 6px;">聊天窗口</span>
+                  <span class="pad-tab-inactive">聊天窗口</span>
                 </div>
-                <span style="color: #28cd41; font-weight: 600;">● 已连接</span>
+                <span class="pad-status-online">● 已连接</span>
               </div>
               <div class="pad-content">
                 <div>

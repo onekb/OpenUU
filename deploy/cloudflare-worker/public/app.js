@@ -27,6 +27,7 @@
 
   // 2. End-to-End Choreographed Mac Desktop Stage
   function initDesktopStage() {
+    const stageViewport = document.getElementById("mac-stage-viewport");
     const wallpaper = document.getElementById("mac-wallpaper");
     const activeApp = document.getElementById("mac-active-name");
     const connectedTag = document.getElementById("mac-connected-tag");
@@ -79,6 +80,38 @@
 
     let timers = [];
     let currentMode = "single";
+    let lastStageKey = "";
+
+    function updateStageScale() {
+      if (!stageViewport || !wallpaper) return;
+      const availW = stageViewport.clientWidth;
+      const key = `${availW}:${currentMode}`;
+      if (key === lastStageKey) return;
+      lastStageKey = key;
+
+      const designW = 960;
+      if (availW > 0 && availW < designW) {
+        const s = availW / designW;
+        wallpaper.style.width = `${designW}px`;
+        wallpaper.style.transform = `scale(${s})`;
+        wallpaper.style.transformOrigin = "top left";
+        stageViewport.style.height = `${Math.round(wallpaper.offsetHeight * s)}px`;
+        stageViewport.style.aspectRatio = "auto";
+      } else {
+        wallpaper.style.width = "";
+        wallpaper.style.transform = "";
+        wallpaper.style.transformOrigin = "";
+        stageViewport.style.height = "";
+        stageViewport.style.aspectRatio = "";
+      }
+    }
+
+    updateStageScale();
+    if (stageViewport && typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => requestAnimationFrame(updateStageScale)).observe(stageViewport);
+    } else {
+      window.addEventListener("resize", updateStageScale);
+    }
 
     function clearTimers() {
       timers.forEach((id) => clearTimeout(id));
@@ -108,9 +141,10 @@
       const base = wallpaper.getBoundingClientRect();
       const r = el.getBoundingClientRect();
       if (r.width === 0 && r.height === 0) return { x: 440, y: 220 };
+      const scale = base.width / (wallpaper.offsetWidth || base.width) || 1;
       return {
-        x: Math.round(r.left - base.left + r.width * rx),
-        y: Math.round(r.top - base.top + r.height * ry),
+        x: Math.round((r.left - base.left + r.width * rx) / scale),
+        y: Math.round((r.top - base.top + r.height * ry) / scale),
       };
     }
 
@@ -361,6 +395,7 @@
       wallpaper.setAttribute("data-mode", mode);
       if (stepsSingleWrap) stepsSingleWrap.style.display = mode === "single" ? "flex" : "none";
       if (stepsLegacyWrap) stepsLegacyWrap.style.display = mode === "legacy" ? "flex" : "none";
+      updateStageScale();
 
       if (mode === "single") {
         runSingleLoop();
@@ -449,6 +484,12 @@
       heroBtn.setAttribute("data-dl-role", os);
       const target = document.querySelector(`a[data-dl-link="${os}"]`);
       if (target) heroBtn.href = target.href;
+    }
+
+    const heroMoreLink = document.getElementById("hero-more-link");
+    if (heroMoreLink) {
+      heroMoreLink.textContent =
+        os === "macos" ? "查看手机与平板版 ›" : "查看 Mac 电脑版与全部平台 ›";
     }
   }
 

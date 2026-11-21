@@ -219,6 +219,25 @@ a {
   font-size: 0.82rem;
   color: var(--ink-muted);
   margin-bottom: 42px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+}
+
+.hero-reassure span {
+  white-space: nowrap;
+}
+
+.hero-reassure i {
+  font-style: normal;
+  opacity: 0.65;
+}
+
+.hero-reassure b {
+  font-weight: 600;
+  color: var(--ink-secondary);
 }
 
 /* ============================================================================
@@ -299,6 +318,13 @@ a {
   border: 1px solid #323236;
 }
 
+.mac-stage-viewport {
+  position: relative;
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
 .mac-wallpaper {
   position: relative;
   border-radius: 14px;
@@ -342,6 +368,7 @@ a {
   justify-content: space-between;
   font-size: 0.74rem;
   color: #1d1d1f;
+  white-space: nowrap;
 }
 
 .mac-bar-left,
@@ -469,6 +496,7 @@ a {
 }
 
 .app-win {
+  min-width: 0;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 11px;
@@ -978,6 +1006,7 @@ a {
 
 .wx-main {
   position: relative;
+  min-width: 0;
   background: #f3f3f3;
   display: flex;
   flex-direction: column;
@@ -1178,6 +1207,7 @@ a {
 }
 
 .finder-table-wrap {
+  min-width: 0;
   background: #ffffff;
   display: flex;
   flex-direction: column;
@@ -1386,6 +1416,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  white-space: nowrap;
 }
 
 .legacy-floating-strip {
@@ -1399,6 +1430,7 @@ a {
   font-size: 0.64rem;
   display: flex;
   gap: 10px;
+  white-space: nowrap;
 }
 
 /* Shrunken 52% Nested Second Mac Desktop Inside Black Letterbox */
@@ -1680,6 +1712,19 @@ a {
   align-items: center;
 }
 
+.mobile-showcase-title {
+  margin: 0 0 10px;
+  font-size: clamp(1.22rem, 4.6vw, 1.45rem);
+  line-height: 1.28;
+  letter-spacing: -0.02em;
+}
+
+.mobile-showcase-desc {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: 0.96rem;
+}
+
 .mobile-points {
   list-style: none;
   padding: 0;
@@ -1725,8 +1770,31 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   font-size: 0.74rem;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  white-space: nowrap;
+}
+
+.pad-tabs-left {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pad-tab-inactive {
+  color: #86868b;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pad-status-online {
+  color: #28cd41;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .pad-tab-pill {
@@ -1836,6 +1904,8 @@ a {
   border-radius: 999px;
   background: #e8f2ff;
   color: var(--blue);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .dl-desc {
@@ -1882,6 +1952,7 @@ a {
   font-size: 1.25rem;
   font-weight: 400;
   color: var(--ink-muted);
+  flex-shrink: 0;
   transition: transform 0.18s ease;
 }
 
@@ -1911,6 +1982,7 @@ a {
   font-family: var(--font-mono);
   font-size: 0.84rem;
   color: var(--ink);
+  min-width: 0;
   overflow-x: auto;
 }
 
@@ -1966,21 +2038,33 @@ a {
 }
 
 /* ============================================================================
-   RESPONSIVE
+   RESPONSIVE (Proportionally scaled MacBook stage + native mobile typography)
    ============================================================================ */
+@media (max-width: 999px) {
+  .mac-bezel {
+    padding: 9px;
+    border-radius: 20px;
+  }
+
+  .mac-stage-viewport {
+    aspect-ratio: 960 / 500;
+    border-radius: 11px;
+  }
+
+  .mac-wallpaper {
+    width: 960px;
+    transform-origin: top left;
+  }
+}
+
 @media (max-width: 960px) {
-  .desk-area,
   .cards-3,
   .mobile-showcase {
     grid-template-columns: 1fr;
   }
 
-  .legacy-blocked-local {
-    display: none;
-  }
-
-  .legacy-viewer-win {
-    width: 100%;
+  .cards-3 {
+    gap: 16px;
   }
 
   .dl-grid {
@@ -1989,19 +2073,246 @@ a {
 
   .mobile-showcase {
     padding: 28px 24px;
+    gap: 26px;
   }
 }
 
 @media (max-width: 640px) {
+  .container {
+    width: calc(100% - 32px);
+  }
+
+  .nav-inner {
+    height: 50px;
+  }
+
   .nav-links {
     display: none;
   }
 
-  .dl-grid {
-    grid-template-columns: 1fr;
+  .hero {
+    padding: 34px 0 26px;
   }
 
-  .hero {
-    padding-top: 48px;
+  .hero h1 {
+    font-size: clamp(1.5rem, 7vw, 2.1rem);
+    line-height: 1.22;
+    margin-bottom: 14px;
+  }
+
+  .hero-sub {
+    font-size: 0.96rem;
+    line-height: 1.62;
+    margin-bottom: 22px;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .hero-actions .btn-lg {
+    width: 100%;
+    max-width: 280px;
+    padding: 13px 24px;
+    font-size: 0.98rem;
+  }
+
+  .hero-reassure {
+    font-size: 0.78rem;
+    margin-bottom: 26px;
+  }
+
+  .stage-controls {
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .seg-extra {
+    display: none;
+  }
+
+  .seg-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    max-width: 360px;
+  }
+
+  .seg-item {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  .story-steps {
+    min-height: 32px;
+    width: 100%;
+  }
+
+  .story-pill {
+    display: none;
+    font-size: 0.8rem;
+    padding: 5px 14px;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .story-pill.active {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .mac-bezel {
+    padding: 6px;
+    border-radius: 15px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.14), 0 3px 10px rgba(0, 0, 0, 0.08);
+  }
+
+  .mac-stage-viewport {
+    border-radius: 10px;
+  }
+
+  .section {
+    padding: 52px 0;
+  }
+
+  .sec-head {
+    margin-bottom: 28px;
+  }
+
+  .sec-head p {
+    font-size: 0.95rem;
+  }
+
+  .soft-card {
+    padding: 22px 20px;
+    border-radius: 18px;
+    gap: 10px;
+  }
+
+  .soft-card h3 {
+    font-size: 1.1rem;
+  }
+
+  .soft-card p {
+    font-size: 0.9rem;
+  }
+
+  .mobile-showcase {
+    margin-top: 16px;
+    padding: 24px 18px;
+    border-radius: 20px;
+    gap: 20px;
+  }
+
+  .mobile-points {
+    margin-top: 16px;
+    gap: 10px;
+    font-size: 0.9rem;
+  }
+
+  .pad-illustration {
+    padding: 7px;
+    border-radius: 16px;
+  }
+
+  .pad-tabs {
+    padding: 7px 10px;
+    font-size: 0.7rem;
+  }
+
+  .pad-content {
+    padding: 16px 14px;
+    min-height: auto;
+    gap: 14px;
+  }
+
+  .gesture-chips {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .g-chip {
+    font-size: 0.74rem;
+    padding: 7px 9px;
+  }
+
+  .dl-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .dl-box {
+    padding: 20px 18px;
+    gap: 16px;
+  }
+
+  .dl-box.recommended {
+    order: -1;
+  }
+
+  .faq-wrap {
+    margin-top: 34px;
+  }
+
+  .faq-item summary {
+    padding: 16px 2px;
+    font-size: 0.94rem;
+    line-height: 1.45;
+    align-items: flex-start;
+  }
+
+  .faq-plus {
+    line-height: 1.2;
+  }
+
+  .faq-body {
+    font-size: 0.88rem;
+    padding: 0 2px 18px;
+  }
+
+  .cmd-inline {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .cmd-inline code {
+    font-size: 0.78rem;
+    white-space: nowrap;
+    text-align: center;
+    padding: 2px 0;
+  }
+
+  .cmd-inline .btn,
+  #copy-prompt {
+    width: 100%;
+  }
+
+  .footer {
+    padding: 26px 0 36px;
+  }
+
+  .footer-inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .footer-links {
+    gap: 10px 18px;
+  }
+}
+
+@media (max-width: 480px) {
+  .gesture-chips {
+    grid-template-columns: 1fr;
   }
 }
