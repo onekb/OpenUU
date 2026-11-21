@@ -31,13 +31,21 @@ final class MultiWindowCaptureManager {
         var lastTitle: String
     }
 
+    private struct WindowIconState {
+        var iconB64: String?
+        var dockTitle: String?
+        var lastTitle: String
+        var attempts: Int
+        var nextRetryAt: CFAbsoluteTime
+    }
+
     private var sharedBundleIDs: Set<String> = []
     private var primaryWindowByBundle: [String: UInt32] = [:]
     private var suppressedWindows: [UInt32: SuppressedWindowState] = [:]
     private var engines: [UInt32: ScreenCaptureEngine] = [:]
     private var isSharingFullDesktop = false
     private var fullDesktopSize = CGSize(width: 1920, height: 1080)
-    private var pidIconCache: [pid_t: (b64: String, fetchedAt: CFAbsoluteTime, refreshCount: Int)] = [:]
+    private var windowIconStates: [UInt32: WindowIconState] = [:]
     private var windowContentInsets: [UInt32: CGPoint] = [:]
     private var windowCroppedSizes: [UInt32: CGSize] = [:]
     private var lastAppWindows: [SCWindow] = []
@@ -165,6 +173,9 @@ final class MultiWindowCaptureManager {
     private func canonicalSharedBundleID(for rawBundleID: String?) -> String? {
         guard let bid = rawBundleID, !bid.isEmpty else { return nil }
         if sharedBundleIDs.contains(bid) { return bid }
+        if sharedBundleIDs.contains(WindowCatalog.weChatBundleID) && bid.localizedCaseInsensitiveContains("WeChatAppEx") {
+            return WindowCatalog.weChatBundleID
+        }
         // Match helper / extension child processes (e.g. `com.tencent.xinWeChat.WeChatAppEx`)
         return sharedBundleIDs.first { shared in
             !shared.isEmpty && bid.hasPrefix(shared + ".")
@@ -194,6 +205,7 @@ final class MultiWindowCaptureManager {
         }
         windowContentInsets.removeValue(forKey: windowID)
         windowCroppedSizes.removeValue(forKey: windowID)
+        windowIconStates.removeValue(forKey: windowID)
 
         // Identify the owning bundle of `windowID`. Only remove the bundle from `sharedBundleIDs` if `windowID`
         // is its primary window OR if no other normal (`windowLayer == 0`) windows remain for that bundle.
@@ -221,6 +233,7 @@ final class MultiWindowCaptureManager {
                 }
                 windowContentInsets.removeValue(forKey: win.windowID)
                 windowCroppedSizes.removeValue(forKey: win.windowID)
+                windowIconStates.removeValue(forKey: win.windowID)
             }
         }
 
@@ -298,7 +311,7 @@ final class MultiWindowCaptureManager {
         primaryWindowByBundle.removeAll()
         suppressedWindows.removeAll()
         isSharingFullDesktop = false
-        pidIconCache.removeAll()
+        windowIconStates.removeAll()
         lastTopology = []
     }
 
@@ -372,6 +385,7 @@ final class MultiWindowCaptureManager {
             }
             let wid = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
             guard wid != 0 else { continue }
+            let winName = (info[kCGWindowName as String] as? String) ?? ""
             visibleIDs.insert(wid)
             sig.append(Int(wid))
             sig.append(layer)
@@ -379,6 +393,7 @@ final class MultiWindowCaptureManager {
             sig.append(Int(rect.origin.y))
             sig.append(Int(rect.size.width))
             sig.append(Int(rect.size.height))
+            sig.append(winName.hashValue)
         }
         return (sig, visibleIDs)
     }
@@ -390,9 +405,12 @@ final class MultiWindowCaptureManager {
         }
 
         // Fast-path check: avoid heavy XPC calls to `replayd` (`SCShareableContent.excludingDesktopWindows`)
-        // during steady-state 60fps video playback when no window has opened, closed, moved, or resized!
+        // during steady-state 60fps video playback when no window has opened, closed, moved, resized,
+        // or changed title, AND no helper window is awaiting a delayed live Dock icon refresh.
+        let now = CFAbsoluteTimeGetCurrent()
+        let hasPendingIconRefresh = windowIconStates.values.contains { $0.attempts < 4 && now >= $0.nextRetryAt }
         let cgSnap = currentOnScreenWindowSnapshot()
-        if !forcePublish && !lastAppWindows.isEmpty && !cgSnap.signature.isEmpty && cgSnap.signature == lastCGWindowSignature {
+        if !forcePublish && !hasPendingIconRefresh && !lastAppWindows.isEmpty && !cgSnap.signature.isEmpty && cgSnap.signature == lastCGWindowSignature {
             return
         }
 
@@ -514,7 +532,9 @@ final class MultiWindowCaptureManager {
             }
             windowContentInsets.removeValue(forKey: id)
             windowCroppedSizes.removeValue(forKey: id)
+            windowIconStates.removeValue(forKey: id)
         }
+        windowIconStates = windowIconStates.filter { currentIDs.contains($0.key) }
 
         let prevSizesByID: [UInt32: CGSize] = Dictionary(uniqueKeysWithValues: lastAppWindows.map { ($0.windowID, $0.frame.size) })
         for win in appWindows where win.windowLayer > 0 && trackedIDs.contains(win.windowID) {
@@ -525,9 +545,11 @@ final class MultiWindowCaptureManager {
             }
         }
 
+        await refreshHelperWindowIcons(for: appWindows)
+
         lastAppWindows = appWindows
         // Publish topology BEFORE starting new engines so the Client knows each window's `kind` (floating popover vs
-        // normal window) and relative offset `(rel_x, rel_y)` before its first video frame arrives.
+        // normal window), live Dock icon, original title, and relative offset `(rel_x, rel_y)` before its first video frame arrives.
         publishTopology(from: appWindows, force: forcePublish)
 
         // 2. Start engines for newly opened windows across all shared apps, and sync size for existing windows
@@ -567,7 +589,6 @@ final class MultiWindowCaptureManager {
 
     private func publishTopology(from windows: [SCWindow], force: Bool) {
         let frameByID: [UInt32: CGRect] = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0.frame) })
-        let pidByID: [UInt32: pid_t] = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0.owningApplication?.processID ?? 0) })
         let normalWindowsByBundle = Dictionary(grouping: windows.filter { $0.windowLayer == 0 }) { win in
             canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) ?? (win.owningApplication?.bundleIdentifier ?? "")
         }
@@ -598,17 +619,9 @@ final class MultiWindowCaptureManager {
             let size = windowCroppedSizes[win.windowID] ?? win.frame.size
             let relX = isMain ? Float(0) : Float((win.frame.origin.x + inset.x) - anchorFrame.origin.x)
             let relY = isMain ? Float(0) : Float((win.frame.origin.y + inset.y) - anchorFrame.origin.y)
-            let rawTitle = (win.title ?? "").isEmpty ? appName : "\(appName) - \(win.title ?? "")"
-            // Extract dedicated per-process icon for secondary normal windows owned by a different PID
-            // (e.g. WeChat Mini Programs `WeChatAppEx` / separate webview helpers that set their own Dock icon!).
-            var windowIconB64: String? = nil
-            if !isMain && !isPopover {
-                let winPID = win.owningApplication?.processID ?? 0
-                let primaryPID = pidByID[primaryID] ?? 0
-                if winPID != 0 && winPID != primaryPID {
-                    windowIconB64 = resolveIconBase64(for: winPID)
-                }
-            }
+            let iconState = windowIconStates[win.windowID]
+            let rawTitle = resolveOriginalTitle(for: win, appName: appName, dockTitle: iconState?.dockTitle)
+            let windowIconB64: String? = isPopover ? nil : iconState?.iconB64
             return WindowTopologyItem(
                 window_id: win.windowID,
                 parent_window_id: anchorID,
@@ -647,17 +660,122 @@ final class MultiWindowCaptureManager {
         }
     }
 
-    private func resolveIconBase64(for pid: pid_t) -> String? {
-        let now = CFAbsoluteTimeGetCurrent()
-        // Re-sample once after 2.0s because Mini Programs often load their real logo asynchronously after launch.
-        if let cached = pidIconCache[pid], (cached.refreshCount >= 1 || now - cached.fetchedAt < 2.0) {
-            return cached.b64.isEmpty ? nil : cached.b64
+    private func isHelperOrDistinctIconWindow(_ win: SCWindow, canonicalBundleID: String, primaryPID: pid_t) -> Bool {
+        guard win.windowLayer == 0 else { return false }
+        let rawBid = win.owningApplication?.bundleIdentifier ?? ""
+        let winPID = win.owningApplication?.processID ?? 0
+        if !rawBid.isEmpty && rawBid != canonicalBundleID {
+            return true
         }
-        guard let icon = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
-        let b64 = IconCompositor.encodeIconToBase64PNG(icon, size: 128)
-        let prevCount = pidIconCache[pid]?.refreshCount ?? -1
-        pidIconCache[pid] = (b64: b64, fetchedAt: now, refreshCount: prevCount + 1)
-        return b64.isEmpty ? nil : b64
+        if rawBid.localizedCaseInsensitiveContains("AppEx") {
+            return true
+        }
+        if winPID != 0 && primaryPID != 0 && winPID != primaryPID {
+            return true
+        }
+        return false
+    }
+
+    private func refreshHelperWindowIcons(for windows: [SCWindow]) async {
+        let now = CFAbsoluteTimeGetCurrent()
+        let pidByID: [UInt32: pid_t] = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0.owningApplication?.processID ?? 0) })
+        let retryDelays: [CFAbsoluteTime] = [0.8, 2.0, 4.5]
+
+        var requests: [LiveDockIconExtractor.Request] = []
+        for win in windows where win.windowLayer == 0 {
+            let canonicalBid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier)
+                ?? (win.owningApplication?.bundleIdentifier ?? "")
+            let primaryID = primaryWindowByBundle[canonicalBid] ?? win.windowID
+            let primaryPID = pidByID[primaryID] ?? 0
+            guard isHelperOrDistinctIconWindow(win, canonicalBundleID: canonicalBid, primaryPID: primaryPID) else {
+                continue
+            }
+
+            let curTitle = (win.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if var existing = windowIconStates[win.windowID] {
+                let titleChanged = !curTitle.isEmpty && curTitle != existing.lastTitle
+                if titleChanged {
+                    existing.lastTitle = curTitle
+                    existing.attempts = 0
+                    existing.nextRetryAt = now
+                    windowIconStates[win.windowID] = existing
+                } else if existing.attempts >= 4 || now < existing.nextRetryAt {
+                    continue
+                }
+            }
+
+            let winPID = win.owningApplication?.processID ?? 0
+            guard winPID != 0 else { continue }
+            let primaryApp = NSRunningApplication.runningApplications(withBundleIdentifier: canonicalBid).first
+            let primaryAppName = primaryApp?.localizedName ?? ""
+            let primaryBundlePath = primaryApp?.bundleURL?.path
+
+            requests.append(
+                LiveDockIconExtractor.Request(
+                    windowID: win.windowID,
+                    pid: winPID,
+                    rawBundleID: win.owningApplication?.bundleIdentifier ?? "",
+                    appName: win.owningApplication?.applicationName ?? "",
+                    windowTitle: curTitle,
+                    primaryAppName: primaryAppName,
+                    primaryBundleURLPath: primaryBundlePath
+                )
+            )
+        }
+
+        guard !requests.isEmpty else { return }
+        let captured = await LiveDockIconExtractor.captureBatch(requests: requests)
+
+        for req in requests {
+            let prev = windowIconStates[req.windowID]
+            let prevAttempts = prev?.attempts ?? 0
+            let nextAttemptCount = prevAttempts + 1
+            let delay = prevAttempts < retryDelays.count ? retryDelays[prevAttempts] : 60.0
+            let res = captured[req.windowID]
+            let newB64 = (res?.iconB64?.isEmpty == false) ? res?.iconB64 : prev?.iconB64
+            let newDockTitle = (res?.dockTitle?.isEmpty == false) ? res?.dockTitle : prev?.dockTitle
+
+            windowIconStates[req.windowID] = WindowIconState(
+                iconB64: newB64,
+                dockTitle: newDockTitle,
+                lastTitle: req.windowTitle,
+                attempts: nextAttemptCount,
+                nextRetryAt: now + delay
+            )
+            if let b64 = newB64, b64 != prev?.iconB64 {
+                OpenUULogger.shared.debug("CAPTURE", "updated live dock icon win=\(req.windowID) title='\(newDockTitle ?? req.windowTitle)' bytes=\(b64.count)")
+            }
+        }
+    }
+
+    private func resolveOriginalTitle(for win: SCWindow, appName: String, dockTitle: String?) -> String {
+        let scTitle = (win.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isGenericHelperTitle: (String) -> Bool = { s in
+            let lower = s.lowercased()
+            return lower.isEmpty || lower == "wechatappex" || lower == "wechatappex helper"
+        }
+
+        if !isGenericHelperTitle(scTitle) {
+            return scTitle
+        }
+        if let dt = dockTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !isGenericHelperTitle(dt) {
+            return dt
+        }
+        if let pid = win.owningApplication?.processID,
+           let axWin = AXWindowLookup.find(pid: pid, windowID: win.windowID, frame: win.frame) {
+            var ref: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axWin, kAXTitleAttribute as CFString, &ref) == .success,
+               let axTitle = (ref as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !isGenericHelperTitle(axTitle) {
+                return axTitle
+            }
+        }
+        if let pid = win.owningApplication?.processID,
+           let locName = NSRunningApplication(processIdentifier: pid)?.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !isGenericHelperTitle(locName) {
+            return locName
+        }
+        return !scTitle.isEmpty ? scTitle : (appName.isEmpty ? "远程窗口" : appName)
     }
 
     private func currentNormalWindowZOrder() -> [UInt32: Int] {

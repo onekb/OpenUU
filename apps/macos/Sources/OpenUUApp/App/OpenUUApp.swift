@@ -704,6 +704,9 @@ final class AppState: ObservableObject {
         sess.onUpdateDockIcon = { [weak self] key, icon in
             self?.dockProxyManager.updateIcon(icon, for: key)
         }
+        sess.onUpdateDockTitle = { [weak self] key, title in
+            self?.dockProxyManager.updateTitle(title, for: key)
+        }
         sess.onUpdateDockBadge = { [weak self] key, badge in
             guard let self, self.notificationSyncEnabled else { return }
             self.dockProxyManager.updateBadge(badge, for: key)
@@ -1134,19 +1137,47 @@ final class AppState: ObservableObject {
     private func pushHostAppListToClient() async {
         do {
             let windows = try await WindowCatalog.fetchWindows()
-            var grouped: [String: (name: String, pid: UInt32, count: UInt32)] = [:]
+            var grouped: [String: (name: String, pid: UInt32, count: UInt32, sampleWindowID: UInt32, sampleTitle: String)] = [:]
             for w in windows {
                 if let existing = grouped[w.bundleID] {
-                    grouped[w.bundleID] = (existing.name, existing.pid, existing.count + 1)
+                    grouped[w.bundleID] = (existing.name, existing.pid, existing.count + 1, existing.sampleWindowID, existing.sampleTitle)
                 } else {
                     let pid = UInt32(w.window.owningApplication?.processID ?? 0)
-                    grouped[w.bundleID] = (w.appName, pid, 1)
+                    grouped[w.bundleID] = (w.appName, pid, 1, w.windowID, w.title)
                 }
             }
+            let weChatApp = NSRunningApplication.runningApplications(withBundleIdentifier: WindowCatalog.weChatBundleID).first
+            let helperRequests: [LiveDockIconExtractor.Request] = grouped.compactMap { (bid, val) in
+                guard bid.localizedCaseInsensitiveContains("AppEx"), val.pid != 0 else { return nil }
+                return LiveDockIconExtractor.Request(
+                    windowID: val.sampleWindowID,
+                    pid: pid_t(val.pid),
+                    rawBundleID: bid,
+                    appName: val.name,
+                    windowTitle: val.sampleTitle,
+                    primaryAppName: weChatApp?.localizedName ?? "微信",
+                    primaryBundleURLPath: weChatApp?.bundleURL?.path
+                )
+            }
+            let liveHelperResults = await LiveDockIconExtractor.captureBatch(requests: helperRequests)
+
             var apps: [RemoteAppSummary] = grouped.map { (bid, val) in
-                let rawIcon = NSRunningApplication(processIdentifier: pid_t(val.pid))?.icon
-                let iconB64 = IconCompositor.encodeIconToBase64PNG(rawIcon, size: 128)
-                return RemoteAppSummary(bundle_id: bid, name: val.name, pid: val.pid, window_count: val.count, icon_png_b64: iconB64)
+                let live = liveHelperResults[val.sampleWindowID]
+                let iconB64: String
+                if let liveB64 = live?.iconB64, !liveB64.isEmpty {
+                    iconB64 = liveB64
+                } else {
+                    let rawIcon = NSRunningApplication(processIdentifier: pid_t(val.pid))?.icon
+                    iconB64 = IconCompositor.encodeIconToBase64PNG(rawIcon, size: 128)
+                }
+                let displayName: String = {
+                    if let dt = live?.dockTitle, !dt.isEmpty { return dt }
+                    if bid.localizedCaseInsensitiveContains("AppEx") && !val.sampleTitle.isEmpty {
+                        return val.sampleTitle
+                    }
+                    return val.name
+                }()
+                return RemoteAppSummary(bundle_id: bid, name: displayName, pid: val.pid, window_count: val.count, icon_png_b64: iconB64)
             }.sorted { lhs, rhs in
                 let lWeChat = lhs.bundle_id == WindowCatalog.weChatBundleID
                 let rWeChat = rhs.bundle_id == WindowCatalog.weChatBundleID

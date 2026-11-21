@@ -103,12 +103,25 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
 </plist>
 EOF
 
-SIGN_ID="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "OpenUU Local Signer"; then
-  SIGN_ID="OpenUU Local Signer"
-  echo "==> Signing with persistent certificate: $SIGN_ID"
+SIGN_ID="${OPENUU_CODESIGN_IDENTITY:-}"
+if [ -z "$SIGN_ID" ]; then
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  SIGN_ID="$(printf '%s\n' "$IDENTITIES" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)"
+  if [ -z "$SIGN_ID" ]; then
+    SIGN_ID="$(printf '%s\n' "$IDENTITIES" | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -n 1)"
+  fi
+  if [ -z "$SIGN_ID" ] && printf '%s\n' "$IDENTITIES" | grep -q "OpenUU Local Signer"; then
+    SIGN_ID="OpenUU Local Signer"
+  fi
 fi
-codesign --force --deep --sign "$SIGN_ID" "$APP_DIR" >/dev/null 2>&1 || true
+
+if [ -n "$SIGN_ID" ]; then
+  echo "==> Signing with persistent certificate: $SIGN_ID"
+  codesign --force --deep --sign "$SIGN_ID" "$APP_DIR"
+else
+  echo "==> WARNING: No persistent code-signing certificate found; falling back to ad-hoc signing (TCC permissions will reset on rebuild)."
+  codesign --force --deep --sign - "$APP_DIR"
+fi
 
 echo "==> Done! Standalone app created at:"
 echo "    $APP_DIR"

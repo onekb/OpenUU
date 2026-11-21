@@ -52,6 +52,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     var compositedIcons: [String: NSImage] = [:]
     var openedBundleIDs: Set<String> = []
     var windowToBundleID: [UInt32: String] = [:]
+    private var lastOpenedBundleID: String?
 
     // Callbacks wired by AppState
     var onStateMutated: (() -> Void)?
@@ -63,6 +64,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     var onPresentNotification: ((_ session: RemotePeerSession, _ bundleID: String, _ appName: String, _ title: String, _ subtitle: String, _ body: String, _ icon: NSImage?) -> Void)?
     var onEnsureDockIcon: ((_ dockKey: String, _ title: String, _ icon: NSImage) -> Void)?
     var onUpdateDockIcon: ((_ dockKey: String, _ icon: NSImage) -> Void)?
+    var onUpdateDockTitle: ((_ dockKey: String, _ title: String) -> Void)?
     var onUpdateDockBadge: ((_ dockKey: String, _ badge: String) -> Void)?
     var onRemoveDockIcon: ((_ dockKey: String) -> Void)?
 
@@ -249,11 +251,12 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         locallyClosedWindows.removeAll()
         fastVideoRouter.unsuppressAll()
         openedBundleIDs.insert(app.bundle_id)
+        lastOpenedBundleID = app.bundle_id
         let icon = compositedIcons[app.bundle_id] ?? IconCompositor.compositeWithOpenUUBadge(
             IconCompositor.decodeBase64PNG(app.icon_png_b64 ?? "")
         )
         compositedIcons[app.bundle_id] = icon
-        onEnsureDockIcon?(dockKey(for: app.bundle_id), "\(app.name) · \(alias)", icon)
+        onEnsureDockIcon?(dockKey(for: app.bundle_id), app.name, icon)
         bridge.startRemoteSession(bundleID: app.bundle_id, windowID: 0)
         onStatusLog?("[\(alias)] 正在打开远程应用: \(app.name)...")
     }
@@ -292,13 +295,14 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         knownWindows.removeAll()
         windowToBundleID.removeAll()
         openedBundleIDs.removeAll()
+        lastOpenedBundleID = nil
     }
 
     // MARK: - Window Topology & Proxy Window Management (Scoped to this Remote Host)
 
-    private func decoratedWindowTitle(_ rawTitle: String) -> String {
-        let base = rawTitle.isEmpty ? "远程窗口" : rawTitle
-        return "[\(alias)] \(base)"
+    private func displayWindowTitle(_ rawTitle: String) -> String {
+        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "远程窗口" : trimmed
     }
 
     private func resolveCompositedIcon(for item: WindowTopologyItem) -> NSImage {
@@ -306,12 +310,16 @@ final class RemotePeerSession: ObservableObject, Identifiable {
            let raw = IconCompositor.decodeBase64PNG(customB64) {
             return IconCompositor.compositeWithOpenUUBadge(raw)
         }
+        if let bid = windowToBundleID[item.window_id],
+           let icon = compositedIcons[bid] {
+            return icon
+        }
         if item.parent_window_id != 0,
            let bid = windowToBundleID[item.parent_window_id],
            let icon = compositedIcons[bid] {
             return icon
         }
-        if let app = remoteApps.first(where: { !$0.name.isEmpty && item.title.hasPrefix($0.name) }),
+        if let app = remoteApps.first(where: { !$0.name.isEmpty && (item.title == $0.name || item.title.hasPrefix($0.name)) }),
            let icon = compositedIcons[app.bundle_id] {
             return icon
         }
@@ -319,6 +327,35 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             return first
         }
         return IconCompositor.compositeWithOpenUUBadge(nil)
+    }
+
+    private func bindBundleID(for item: WindowTopologyItem) {
+        if windowToBundleID[item.window_id] != nil { return }
+        if item.window_id == MultiWindowCaptureManager.fullDesktopWindowID {
+            windowToBundleID[item.window_id] = MultiWindowCaptureManager.fullDesktopBundleID
+            return
+        }
+        if item.parent_window_id != 0, let parentBid = windowToBundleID[item.parent_window_id] {
+            windowToBundleID[item.window_id] = parentBid
+            return
+        }
+        if let app = remoteApps.first(where: {
+            openedBundleIDs.contains($0.bundle_id) && !$0.name.isEmpty &&
+            (item.title == $0.name || item.title.hasPrefix($0.name))
+        }) {
+            windowToBundleID[item.window_id] = app.bundle_id
+            return
+        }
+        if openedBundleIDs.count == 1, let sole = openedBundleIDs.first {
+            windowToBundleID[item.window_id] = sole
+            return
+        }
+        if let last = lastOpenedBundleID, openedBundleIDs.contains(last) {
+            let alreadyBound = windowToBundleID.values.contains(last)
+            if !alreadyBound || item.kind == 0 {
+                windowToBundleID[item.window_id] = last
+            }
+        }
     }
 
     private func reconcileRemoteWindows(_ remoteWindows: [WindowTopologyItem]) {
@@ -333,15 +370,45 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             knownWindows.removeValue(forKey: winID)
             onRemoveDockIcon?(dockKey(for: "win-\(winID)"))
         }
+
+        // Bind primary windows first so child/secondary windows can inherit parent_window_id's bundle ID.
+        for item in remoteWindows where item.kind == 0 {
+            bindBundleID(for: item)
+        }
+        for item in remoteWindows where item.kind != 0 {
+            bindBundleID(for: item)
+        }
+
         for item in remoteWindows {
-            let prevIcon = knownWindows[item.window_id]?.icon_png_b64
+            let prevItem = knownWindows[item.window_id]
             knownWindows[item.window_id] = item
+            let dockTitle = displayWindowTitle(item.title)
+
             if item.kind == 1 {
                 let icon = resolveCompositedIcon(for: item)
                 let key = dockKey(for: "win-\(item.window_id)")
-                onEnsureDockIcon?(key, "\(item.title) · \(alias)", icon)
-                if item.icon_png_b64 != nil && item.icon_png_b64 != prevIcon {
+                onEnsureDockIcon?(key, dockTitle, icon)
+                if let b64 = item.icon_png_b64, !b64.isEmpty, b64 != prevItem?.icon_png_b64 {
                     onUpdateDockIcon?(key, icon)
+                }
+                if prevItem != nil && item.title != prevItem?.title && !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    onUpdateDockTitle?(key, dockTitle)
+                }
+            } else if item.kind == 0, let bid = windowToBundleID[item.window_id],
+                      bid != MultiWindowCaptureManager.fullDesktopBundleID {
+                let key = dockKey(for: bid)
+                if let b64 = item.icon_png_b64, !b64.isEmpty {
+                    let icon = resolveCompositedIcon(for: item)
+                    if b64 != prevItem?.icon_png_b64 {
+                        onUpdateDockIcon?(key, icon)
+                    }
+                    // Helper/Mini-Program running as the sole primary window: keep its Dock title synced too.
+                    if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        onUpdateDockTitle?(key, dockTitle)
+                    }
+                } else if bid.localizedCaseInsensitiveContains("AppEx"),
+                          !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    onUpdateDockTitle?(key, dockTitle)
                 }
             }
         }
@@ -388,7 +455,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             initialOrigin = NSPoint(x: x, y: y)
         }
 
-        let title = decoratedWindowTitle(info?.title ?? "")
+        let title = displayWindowTitle(info?.title ?? "")
         let controller = ProxyWindowController(
             bridge: bridge,
             renderer: fastVideoRouter.renderer(for: windowID),
@@ -449,7 +516,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     }
 
     private func applyTopologyToProxyWindow(_ item: WindowTopologyItem, controller: ProxyWindowController) {
-        controller.updateWindowTitle(decoratedWindowTitle(item.title))
+        controller.updateWindowTitle(displayWindowTitle(item.title))
         let isFloatingPopover = item.kind == 2
         let myArea = item.width * item.height
         let isOverlayPreview = isFloatingPopover && knownWindows.values.contains(where: { other in
