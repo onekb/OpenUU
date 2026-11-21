@@ -100,7 +100,7 @@ $publishDir = if ($OutDir) { $OutDir } else { Join-Path $RootDir "build\OpenUU-W
 if (Test-Path $publishDir) {
     Remove-Item -Recurse -Force $publishDir -ErrorAction SilentlyContinue
     if (Test-Path (Join-Path $publishDir "OpenUU.dll")) {
-        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.5.0"
+        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.6.0"
         Write-Host "==> Note: $publishDir is currently in use by a running OpenUU.exe; publishing to $fallbackDir ..."
         $publishDir = $fallbackDir
         if (Test-Path $publishDir) {

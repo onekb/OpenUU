@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 
 if (-not $AppExe) {
-    $candV5 = Join-Path $RootDir "build\OpenUU-Windows-v0.5.0\OpenUU.exe"
+    $candV5 = Join-Path $RootDir "build\OpenUU-Windows-v0.6.0\OpenUU.exe"
     $candDef = Join-Path $RootDir "build\OpenUU-Windows\OpenUU.exe"
     if ((Test-Path $candV5) -and ((-not (Test-Path $candDef)) -or ((Get-Item $candV5).LastWriteTime -gt (Get-Item $candDef).LastWriteTime))) {
         $AppExe = $candV5

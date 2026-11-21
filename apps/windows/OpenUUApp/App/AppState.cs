@@ -524,7 +524,7 @@ public sealed class AppState : ObservableBase, IDisposable
         foreach (var existing in OpenUULogger.Shared.RecentEntries(OpenUULogLevel.Debug, 200))
             LogEntries.Add(existing);
 
-        OpenUULogger.Shared.Info("APP", $"launched platform=windows version=v0.5.0 admin={IsRunningAsAdministrator} fps={_targetFps}");
+        OpenUULogger.Shared.Info("APP", $"launched platform=windows version=v0.6.0 admin={IsRunningAsAdministrator} fps={_targetFps}");
 
         ProbeBridge.OnProbeResults = results =>
         {
@@ -1376,7 +1376,7 @@ public sealed class AppState : ObservableBase, IDisposable
         string snap = $"savedDevices={DeviceBook.Devices.Count} activeSessions={ConnectedHostCount} totalWindows={TotalOpenRemoteWindows}";
 
         string report = OpenUULogger.Shared.BuildDiagnosticReport(
-            "v0.5.0-windows",
+            "v0.6.0-windows",
             role,
             CaptureScheme,
             caps,
