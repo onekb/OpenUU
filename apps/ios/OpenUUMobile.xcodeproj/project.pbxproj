@@ -12,8 +12,10 @@
 		1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */; };
 		F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */; };
 		47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */; };
+		9A52C4B5750BC0C888514BF5 /* MobileSheetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DD4D22A6A4573AF56103D24 /* MobileSheetsView.swift */; };
 		91B633ABEDA61838126D4633 /* OpenUUBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */; };
 		302F454C239F5B53D15F1CA3 /* OpenUUMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */; };
+		7CBEB91EF2B5DB3AE36B66D5 /* RemoteWorkspaceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8A48CA86D293EFCB2858AC /* RemoteWorkspaceViews.swift */; };
 		7FD8A490824D6C5B1C23F3AB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 034EB524EA946A4000C74EBD /* Assets.xcassets */; };
 		93FFAFE6BD46DA8C2AC3313D /* OpenUUCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */; };
 		B56F5DE331671B0BB7E2A0AC /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */; };
@@ -38,8 +40,10 @@
 		7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileMainView.swift; path = Sources/MobileMainView.swift; sourceTree = "<group>"; };
 		4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileRemoteCanvasView.swift; path = Sources/MobileRemoteCanvasView.swift; sourceTree = "<group>"; };
 		F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileSessionViewModel.swift; path = Sources/MobileSessionViewModel.swift; sourceTree = "<group>"; };
+		6DD4D22A6A4573AF56103D24 /* MobileSheetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileSheetsView.swift; path = Sources/MobileSheetsView.swift; sourceTree = "<group>"; };
 		4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OpenUUBridge.swift; path = Sources/OpenUUBridge.swift; sourceTree = "<group>"; };
 		B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OpenUUMobileApp.swift; path = Sources/OpenUUMobileApp.swift; sourceTree = "<group>"; };
+		8B8A48CA86D293EFCB2858AC /* RemoteWorkspaceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RemoteWorkspaceViews.swift; path = Sources/RemoteWorkspaceViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,8 +82,10 @@
 				7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */,
 				4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */,
 				F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */,
+				6DD4D22A6A4573AF56103D24 /* MobileSheetsView.swift */,
 				4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */,
 				B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */,
+				8B8A48CA86D293EFCB2858AC /* RemoteWorkspaceViews.swift */,
 			);
 			name = Sources;
 			sourceTree = "<group>";
@@ -183,8 +189,10 @@
 				1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */,
 				F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */,
 				47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */,
+				9A52C4B5750BC0C888514BF5 /* MobileSheetsView.swift in Sources */,
 				91B633ABEDA61838126D4633 /* OpenUUBridge.swift in Sources */,
 				302F454C239F5B53D15F1CA3 /* OpenUUMobileApp.swift in Sources */,
+				7CBEB91EF2B5DB3AE36B66D5 /* RemoteWorkspaceViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

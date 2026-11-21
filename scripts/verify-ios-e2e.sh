@@ -166,8 +166,8 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-# Give AVSampleBufferDisplayLayer a brief moment to composite latest frame before capturing
-sleep 1
+# Give notification banner time to auto-dismiss & popover renderer (window_id=201) to composite frame
+sleep 2.2
 xcrun simctl io "$SIM_UDID" screenshot "$ARTIFACT_DIR/ios_02_remote_stream.png"
 echo "    Saved screenshot: $ARTIFACT_DIR/ios_02_remote_stream.png ($(wc -c < "$ARTIFACT_DIR/ios_02_remote_stream.png") bytes)"
 
@@ -188,6 +188,7 @@ check_cond "Client connected (connected to host)" grep -q "connected to host" "$
 check_cond "App list received (list_apps_resp)" grep -q "list_apps_resp" "$E2E_LOG"
 check_cond "start_session received by mock-host" grep -q '"type":"start_session"' "$MOCK_LOG"
 check_cond "window_topology received (101, 102)" grep -Eq "window_topology.*101.*102" "$E2E_LOG"
+check_cond "right-click popover topology received (201)" grep -Eq "window_topology.*201" "$E2E_LOG"
 check_cond "IOSVideoDisplayRenderer decoded_frames >= 5" grep -Eq "decoded_frames=([5-9]|[1-9][0-9]+)" "$E2E_LOG"
 check_cond "E2E_ALL_SENT logged" grep -q "E2E_ALL_SENT" "$E2E_LOG"
 check_cond "mock-host MOCK_EVENT mouse" grep -q 'MOCK_EVENT.*"type":"mouse"' "$MOCK_LOG"

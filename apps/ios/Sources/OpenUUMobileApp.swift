@@ -28,7 +28,7 @@ struct OpenUUMobileApp: App {
         WindowGroup {
             MobileMainView(viewModel: viewModel)
                 .preferredColorScheme(.dark)
-                .tint(OpenUUTheme.emerald)
+                .tint(OpenUUTheme.textPrimary)
         }
     }
 }

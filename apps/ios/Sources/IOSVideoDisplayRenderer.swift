@@ -116,6 +116,12 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
         }
     }
 
+    @MainActor
+    func flushAndRemoveImage() {
+        displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        resetStream(resetDecodedCounter: true)
+    }
+
     /// Flushes the display layer, removes the displayed image, and resets decoder state for a new stream.
     func resetStream(resetDecodedCounter: Bool = true) {
         renderQueue.async { [weak self] in

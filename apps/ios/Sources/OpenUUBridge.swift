@@ -146,6 +146,14 @@ struct WindowTopologyItem: Codable, Identifiable, Equatable, Hashable, Sendable 
 
     var id: UInt32 { window_id }
 
+    var displayTitle: String {
+        if window_id == OpenUUConstants.fullDesktopWindowID {
+            return "Mac 整屏桌面"
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "窗口 #\(window_id)" : trimmed
+    }
+
     enum CodingKeys: String, CodingKey {
         case window_id
         case parent_window_id
