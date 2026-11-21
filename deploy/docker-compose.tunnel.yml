@@ -1,0 +1,28 @@
+# Zero-IP-Exposure Public Fallback Relay Stack (Cloudflare Tunnel + Rate-Limited iroh-relay)
+# - Exposes ZERO inbound ports on the host firewall
+# - Enforces per-client 1.5 Mbps rate limit via iroh-relay.toml
+#
+# Usage:
+#   CF_TUNNEL_TOKEN=<your_token> docker compose -f docker-compose.tunnel.yml up -d
+
+services:
+  iroh-relay:
+    image: n0computer/iroh-relay:latest
+    container_name: openuu-iroh-relay
+    restart: unless-stopped
+    command: ["--config-path", "/etc/iroh-relay/config.toml"]
+    volumes:
+      - ./iroh-relay.toml:/etc/iroh-relay/config.toml:ro
+    expose:
+      - "3340"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: openuu-cloudflared
+    restart: unless-stopped
+    network_mode: "service:iroh-relay"
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN:?Please set CF_TUNNEL_TOKEN in .env or environment}
+    depends_on:
+      - iroh-relay

@@ -1,0 +1,12 @@
+name = "openuu-relay"
+main = "src/index.js"
+compatibility_date = "2025-03-01"
+workers_dev = false
+
+routes = [
+  { pattern = "openuu-relay.1kb.ren", custom_domain = true }
+]
+
+[[vpc_services]]
+binding = "RELAY_ORIGIN"
+service_id = "01a1f92c-e98c-74b3-9add-a77000adba3a"

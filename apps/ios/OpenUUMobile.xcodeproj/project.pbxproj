@@ -1,0 +1,328 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */; };
+		EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */; };
+		1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */; };
+		F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */; };
+		47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */; };
+		91B633ABEDA61838126D4633 /* OpenUUBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */; };
+		302F454C239F5B53D15F1CA3 /* OpenUUMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */; };
+		7FD8A490824D6C5B1C23F3AB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 034EB524EA946A4000C74EBD /* Assets.xcassets */; };
+		93FFAFE6BD46DA8C2AC3313D /* OpenUUCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */; };
+		B56F5DE331671B0BB7E2A0AC /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */; };
+		6A4BC17E305FA2C487B0B3B1 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2764245D9BE180B6C4638433 /* CoreMedia.framework */; };
+		F5388E14546F775C8DDBC417 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */; };
+		93858CF0F053C86BCF4F7023 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E15AB25BC8F1374D38CCF85F /* Security.framework */; };
+		A383CE73A2D10F5852666A13 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69F4B1A4D23EBE5690C49BC5 /* SystemConfiguration.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		6EE34F4F2B9658E4933CAA3A /* OpenUUMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenUUMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		334A3870CF146450CFF51650 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		034EB524EA946A4000C74EBD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = OpenUUCore.xcframework; path = Frameworks/OpenUUCore.xcframework; sourceTree = "<group>"; };
+		603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		2764245D9BE180B6C4638433 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
+		ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
+		E15AB25BC8F1374D38CCF85F /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		69F4B1A4D23EBE5690C49BC5 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeviceBookStore.swift; path = Sources/DeviceBookStore.swift; sourceTree = "<group>"; };
+		F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IOSVideoDisplayRenderer.swift; path = Sources/IOSVideoDisplayRenderer.swift; sourceTree = "<group>"; };
+		7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileMainView.swift; path = Sources/MobileMainView.swift; sourceTree = "<group>"; };
+		4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileRemoteCanvasView.swift; path = Sources/MobileRemoteCanvasView.swift; sourceTree = "<group>"; };
+		F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileSessionViewModel.swift; path = Sources/MobileSessionViewModel.swift; sourceTree = "<group>"; };
+		4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OpenUUBridge.swift; path = Sources/OpenUUBridge.swift; sourceTree = "<group>"; };
+		B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OpenUUMobileApp.swift; path = Sources/OpenUUMobileApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		3803088D596169E401DC22A8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				93FFAFE6BD46DA8C2AC3313D /* OpenUUCore.xcframework in Frameworks */,
+				B56F5DE331671B0BB7E2A0AC /* AVFoundation.framework in Frameworks */,
+				6A4BC17E305FA2C487B0B3B1 /* CoreMedia.framework in Frameworks */,
+				F5388E14546F775C8DDBC417 /* VideoToolbox.framework in Frameworks */,
+				93858CF0F053C86BCF4F7023 /* Security.framework in Frameworks */,
+				A383CE73A2D10F5852666A13 /* SystemConfiguration.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C026EB5F91C7E19B94A3D8FA = {
+			isa = PBXGroup;
+			children = (
+				AFF90418527DD5103EEE62E3 /* Sources */,
+				9CE99B267288447A6333D541 /* Resources */,
+				334A3870CF146450CFF51650 /* Info.plist */,
+				A34CE84A94790DA5B67B1E55 /* Frameworks */,
+				C87FB9EF4B5D19D8696F1C28 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AFF90418527DD5103EEE62E3 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */,
+				F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */,
+				7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */,
+				4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */,
+				F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */,
+				4B7BCEC52946C13F95837879 /* OpenUUBridge.swift */,
+				B7242DC233F15C1F99FCCD36 /* OpenUUMobileApp.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		9CE99B267288447A6333D541 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				034EB524EA946A4000C74EBD /* Assets.xcassets */,
+			);
+			name = Resources;
+			sourceTree = "<group>";
+		};
+		A34CE84A94790DA5B67B1E55 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				87255DAF551D5502C9B88220 /* OpenUUCore.xcframework */,
+				603CCFC9A8F02DF2CAAE1D29 /* AVFoundation.framework */,
+				2764245D9BE180B6C4638433 /* CoreMedia.framework */,
+				ADDC51C5CE415E3A93EFD09C /* VideoToolbox.framework */,
+				E15AB25BC8F1374D38CCF85F /* Security.framework */,
+				69F4B1A4D23EBE5690C49BC5 /* SystemConfiguration.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C87FB9EF4B5D19D8696F1C28 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6EE34F4F2B9658E4933CAA3A /* OpenUUMobile.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		34BCF2ECD98E4EAAD6628218 /* OpenUUMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E15CDC8E8CEC35D2C8700E47 /* Build configuration list for PBXNativeTarget "OpenUUMobile" */;
+			buildPhases = (
+				97509E5A3421EFA294DA3716 /* Sources */,
+				3803088D596169E401DC22A8 /* Frameworks */,
+				AEE36AB313ACCCB263DA6E2D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OpenUUMobile;
+			productName = OpenUUMobile;
+			productReference = 6EE34F4F2B9658E4933CAA3A /* OpenUUMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BCF58F787B6DCF8FACAD8AF3 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 12235FF1D9FD5FE62772162D /* Build configuration list for PBXProject "OpenUUMobile" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = C026EB5F91C7E19B94A3D8FA;
+			productRefGroup = C87FB9EF4B5D19D8696F1C28 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				34BCF2ECD98E4EAAD6628218 /* OpenUUMobile */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AEE36AB313ACCCB263DA6E2D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7FD8A490824D6C5B1C23F3AB /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		97509E5A3421EFA294DA3716 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */,
+				EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */,
+				1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */,
+				F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */,
+				47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */,
+				91B633ABEDA61838126D4633 /* OpenUUBridge.swift in Sources */,
+				302F454C239F5B53D15F1CA3 /* OpenUUMobileApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A8A99CC0153474A09273F041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 6.0;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		215C04B2C230D1642C00EE7C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 6.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		73F8D249F856B8C8BD7F7236 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-lresolv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ren.onekb.openuu;
+				PRODUCT_NAME = OpenUUMobile;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		0DCA816296863C55C8E7E8B1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-lresolv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ren.onekb.openuu;
+				PRODUCT_NAME = OpenUUMobile;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		12235FF1D9FD5FE62772162D /* Build configuration list for PBXProject "OpenUUMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A8A99CC0153474A09273F041 /* Debug */,
+				215C04B2C230D1642C00EE7C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E15CDC8E8CEC35D2C8700E47 /* Build configuration list for PBXNativeTarget "OpenUUMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				73F8D249F856B8C8BD7F7236 /* Debug */,
+				0DCA816296863C55C8E7E8B1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BCF58F787B6DCF8FACAD8AF3 /* Project object */;
+}

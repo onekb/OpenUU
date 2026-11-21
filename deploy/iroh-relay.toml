@@ -1,0 +1,17 @@
+# Official iroh-relay public fallback configuration
+# - Plain HTTP/WebSocket on [::]:3340 (TLS terminated at Cloudflare Tunnel / Caddy)
+# - Per-client rate limit enabled (1.5 Mbps steady / 512 KB keyframe burst) so public fallback
+#   remains responsive for office/desktop control without letting heavy video streams saturate bandwidth.
+
+enable_relay = true
+http_bind_addr = "[::]:3340"
+enable_quic_addr_discovery = false
+enable_metrics = false
+
+[limits]
+accept_conn_limit = 20.0
+accept_conn_burst = 60
+
+[limits.client.rx]
+bytes_per_second = 196608
+max_burst_bytes = 524288

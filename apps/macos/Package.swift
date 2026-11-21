@@ -2,24 +2,24 @@
 import PackageDescription
 
 let package = Package(
-    name: "ChameyeMacOS",
+    name: "OpenUUMacOS",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "ChameyeApp", targets: ["ChameyeApp"])
+        .executable(name: "OpenUUApp", targets: ["OpenUUApp"])
     ],
     targets: [
         .systemLibrary(
-            name: "CChameyeCore",
-            path: "Sources/CChameyeCore"
+            name: "COpenUUCore",
+            path: "Sources/COpenUUCore"
         ),
         .executableTarget(
-            name: "ChameyeApp",
-            dependencies: ["CChameyeCore"],
-            path: "Sources/ChameyeApp",
+            name: "OpenUUApp",
+            dependencies: ["COpenUUCore"],
+            path: "Sources/OpenUUApp",
             linkerSettings: [
-                .unsafeFlags(["-L../../target/release", "-lchameye_core"]),
+                .unsafeFlags(["-L../../target/release", "-lopenuu_core"]),
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("CoreMedia"),
@@ -28,6 +28,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Security"),
+                .linkedFramework("SystemConfiguration"),
                 .linkedFramework("IOKit"),
             ]
         )

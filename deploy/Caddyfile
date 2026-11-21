@@ -1,0 +1,10 @@
+# Replace `relay.example.com` and `coord.example.com` with your Hong Kong server domain(s)
+# (Or use `tls internal` / self-signed certs if deploying on a bare IP with "允许自签证书" enabled in OpenUU Settings!)
+
+{$OPENUU_RELAY_DOMAIN:relay.example.com} {
+    reverse_proxy iroh-relay:3340
+}
+
+{$OPENUU_COORD_DOMAIN:coord.example.com} {
+    reverse_proxy openuu-coord:8787
+}

@@ -1,4 +1,0 @@
-module CChameyeCore {
-    header "../../../../crates/chameye-core/include/chameye_core.h"
-    export *
-}

@@ -1,0 +1,4 @@
+module COpenUUCore {
+    header "../../../../crates/openuu-core/include/openuu_core.h"
+    export *
+}

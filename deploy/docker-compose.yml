@@ -1,0 +1,55 @@
+services:
+  openuu-coord:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.coord
+    container_name: openuu-coord
+    restart: unless-stopped
+    environment:
+      - OPENUU_COORD_BIND=0.0.0.0:8787
+      - OPENUU_COORD_DATA=/app/data/devices.json
+      - RUST_LOG=info
+    volumes:
+      - coord_data:/app/data
+    expose:
+      - "8787"
+    ports:
+      # Optional direct port if testing via bare IP (`http://<HK_IP>:8787`) before binding a domain
+      - "8787:8787"
+
+  iroh-relay:
+    image: n0computer/iroh-relay:latest
+    container_name: openuu-iroh-relay
+    restart: unless-stopped
+    command: ["--dev"]
+    ports:
+      # `--dev` listens HTTP/WebSocket relay on 3340 (proxied over HTTPS 443 by Caddy, or reachable directly by IP:3340) + STUN/QAD UDP
+      - "3340:3340"
+      - "3478:3478/udp"
+      - "7842:7842/udp"
+    expose:
+      - "3340"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: openuu-caddy
+    restart: unless-stopped
+    environment:
+      - OPENUU_RELAY_DOMAIN=${OPENUU_RELAY_DOMAIN:-relay.example.com}
+      - OPENUU_COORD_DOMAIN=${OPENUU_COORD_DOMAIN:-coord.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - openuu-coord
+      - iroh-relay
+
+volumes:
+  coord_data:
+  caddy_data:
+  caddy_config:
