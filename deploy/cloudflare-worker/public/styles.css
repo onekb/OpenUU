@@ -160,6 +160,92 @@ a {
   background: #dedee5;
 }
 
+.btn-dark {
+  background: #1d1d1f;
+  color: #ffffff;
+}
+
+.btn-dark:hover {
+  background: #323236;
+}
+
+.btn-gh {
+  background: rgba(0, 0, 0, 0.055);
+  color: var(--ink);
+  gap: 6px;
+}
+
+.btn-gh:hover {
+  background: rgba(0, 0, 0, 0.095);
+}
+
+.gh-star-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  background: rgba(255, 255, 255, 0.88);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.gh-star-pill[hidden] {
+  display: none;
+}
+
+.hero-oss-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 6px 14px;
+  margin-bottom: 20px;
+  border-radius: 999px;
+  background: #f2f2f7;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  max-width: 100%;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.hero-oss-pill svg {
+  flex-shrink: 0;
+  color: var(--ink);
+}
+
+.hero-oss-pill span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hero-oss-pill:hover {
+  background: #e8e8ee;
+  color: var(--ink);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.ver-release-link {
+  white-space: nowrap;
+}
+
+.ver-release-link:hover b {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inline-link {
+  color: var(--blue);
+  font-weight: 500;
+}
+
+.inline-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .link-more {
   color: var(--blue);
   font-size: 0.96rem;
@@ -1999,6 +2085,84 @@ a {
   overflow-y: auto;
 }
 
+.dl-sub-links {
+  margin-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 16px;
+  font-size: 0.86rem;
+  color: var(--ink-secondary);
+  text-align: center;
+}
+
+.dl-sub-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 16px;
+}
+
+.dl-sub-actions a {
+  color: var(--blue);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dl-sub-actions a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.oss-cta-card {
+  max-width: 780px;
+  margin: 40px auto 0;
+  padding: 26px 28px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.oss-cta-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.oss-cta-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 1.06rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.oss-cta-title svg {
+  flex-shrink: 0;
+}
+
+.oss-cta-copy p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink-secondary);
+  line-height: 1.62;
+}
+
+.oss-cta-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 /* ============================================================================
    FOOTER
    ============================================================================ */
@@ -2075,6 +2239,11 @@ a {
     padding: 28px 24px;
     gap: 26px;
   }
+
+  .oss-cta-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 640px) {
@@ -2084,14 +2253,29 @@ a {
 
   .nav-inner {
     height: 50px;
+    gap: 10px;
   }
 
   .nav-links {
     display: none;
   }
 
+  .nav-cta {
+    gap: 8px;
+  }
+
+  .btn-gh {
+    padding: 6px 11px;
+  }
+
   .hero {
-    padding: 34px 0 26px;
+    padding: 28px 0 26px;
+  }
+
+  .hero-oss-pill {
+    font-size: 0.76rem;
+    padding: 5px 12px;
+    margin-bottom: 14px;
   }
 
   .hero h1 {
@@ -2293,6 +2477,38 @@ a {
 
   .cmd-inline .btn,
   #copy-prompt {
+    width: 100%;
+  }
+
+  .dl-sub-links {
+    margin-top: 16px;
+    font-size: 0.82rem;
+  }
+
+  .oss-cta-card {
+    margin-top: 30px;
+    padding: 22px 18px;
+    border-radius: 20px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  .oss-cta-title {
+    font-size: 0.98rem;
+    align-items: flex-start;
+  }
+
+  .oss-cta-copy p {
+    font-size: 0.85rem;
+  }
+
+  .oss-cta-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .oss-cta-buttons .btn {
     width: 100%;
   }
 

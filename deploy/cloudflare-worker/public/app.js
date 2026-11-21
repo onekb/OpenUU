@@ -493,8 +493,27 @@
     }
   }
 
-  // 4. Keep download URLs synced with latest GitHub Release
+  // 4. Keep download URLs & GitHub star badge synced
   async function syncRelease() {
+    try {
+      const repoResp = await fetch("https://api.github.com/repos/onekb/OpenUU", {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (repoResp.ok) {
+        const repo = await repoResp.json();
+        const stars = Number(repo && repo.stargazers_count);
+        if (Number.isFinite(stars) && stars > 0) {
+          const formatted = stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : String(stars);
+          document.querySelectorAll("[data-gh-stars]").forEach((el) => {
+            el.textContent = `★ ${formatted}`;
+            el.hidden = false;
+          });
+        }
+      }
+    } catch {
+      // Optional star count badge
+    }
+
     try {
       const resp = await fetch("https://api.github.com/repos/onekb/OpenUU/releases/latest", {
         headers: { Accept: "application/vnd.github+json" },
