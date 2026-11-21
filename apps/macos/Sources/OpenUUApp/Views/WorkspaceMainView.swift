@@ -113,6 +113,10 @@ private struct WorkspaceBodyView: View {
                 }
             )
         }
+        .sheet(isPresented: $state.showingAntiFraudSheet) {
+            HostAntiFraudWarningSheet(state: state)
+                .interactiveDismissDisabled(true)
+        }
         .sheet(isPresented: $state.showingPermissionGuideSheet) {
             HostPermissionGuideSheet(state: state)
         }
@@ -1652,6 +1656,143 @@ struct DeviceEditorSheet: View {
         }
         .padding(22)
         .frame(width: 460)
+    }
+}
+
+// ============================================================================
+// Host Anti-Fraud Security Warning Modal Sheet (3s Mandatory Countdown)
+// ============================================================================
+
+private struct HostAntiFraudWarningSheet: View {
+    @ObservedObject var state: AppState
+    @State private var remainingSeconds: Int = 3
+    @State private var dontShowAgain: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.red.opacity(0.14))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 23, weight: .bold))
+                        .foregroundStyle(Color.red)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("防诈骗安全警示")
+                        .font(.system(size: 16.5, weight: .bold))
+                    Text("开启被控后远端可查看屏幕并操作本机，请务必仔细阅读以下反诈提醒")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "megaphone.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.red)
+                    .padding(.top, 1)
+                Text("凡是陌生人要求你下载或使用本程序开启被控的，100% 是电信网络诈骗！")
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(Color.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(Color.red.opacity(0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.32), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 10) {
+                warningItem(
+                    icon: "building.columns.fill",
+                    title: "公检法等公权力机关绝不会要求远控",
+                    detail: "公安、检察院、法院、税务、金融监管等任何国家机关，绝不会以“配合调查”“安全账户清查”“征信修复”等名义要求你使用远程控制软件。"
+                )
+
+                warningItem(
+                    icon: "person.wave.2.fill",
+                    title: "假冒客服指导操作均为骗局",
+                    detail: "凡是以“关闭百万保障 / 免密扣费”“机票退改签理赔”“平台客服协助退款”为由让你开启被控的，均是为了偷看验证码并转走资金。"
+                )
+
+                warningItem(
+                    icon: "hand.raised.fill",
+                    title: "谨防受骗，切勿向陌生人透露设备代码与密码",
+                    detail: "请仅对本人名下设备或完全信任的亲友开启被控！如遇可疑要求，请立即挂断电话并放弃开启。"
+                )
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                Toggle("下次不再弹出此提示", isOn: $dontShowAgain)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("放弃开启") {
+                    state.cancelAntiFraudWarning()
+                }
+
+                Button {
+                    guard remainingSeconds == 0 else { return }
+                    state.confirmAntiFraudWarning(dontShowAgain: dontShowAgain)
+                } label: {
+                    Text(remainingSeconds > 0 ? "我知道了（\(remainingSeconds)s）" : "我知道了")
+                        .font(.system(size: 13, weight: .semibold))
+                        .monospacedDigit()
+                        .frame(minWidth: 96)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(remainingSeconds > 0)
+            }
+        }
+        .padding(22)
+        .frame(width: 500)
+        .task {
+            remainingSeconds = 3
+            while remainingSeconds > 0 && !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { break }
+                remainingSeconds -= 1
+            }
+        }
+    }
+
+    private func warningItem(icon: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 20)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+        )
     }
 }
 

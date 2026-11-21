@@ -69,6 +69,7 @@ final class AppState: ObservableObject {
         static let debugHUD = "openuu.client.showDebugHUD"
         static let remoteAudioSync = "openuu.host.remoteAudioSync"
         static let muteHostAudio = "openuu.host.muteHostAudio"
+        static let suppressAntiFraudWarning = "openuu.host.suppressAntiFraudWarning"
     }
 
     enum CaptureScheme: String, CaseIterable, Identifiable {
@@ -181,9 +182,16 @@ final class AppState: ObservableObject {
     @Published var hasAccessibilityPermission: Bool = InputInjector.hasAccessibilityPermission(prompt: false)
     @Published var hasScreenRecordingPermission: Bool = CGPreflightScreenCaptureAccess()
     @Published var hasDirectCapturePermission: Bool = false
+    @Published var showingAntiFraudSheet: Bool = false
+    @Published var suppressAntiFraudWarning: Bool = UserDefaults.standard.bool(forKey: PrefKey.suppressAntiFraudWarning) {
+        didSet {
+            UserDefaults.standard.set(suppressAntiFraudWarning, forKey: PrefKey.suppressAntiFraudWarning)
+        }
+    }
     @Published var showingPermissionGuideSheet: Bool = false
     @Published var pendingStartHostAfterPermission: Bool = false
     @Published var permissionCheckFeedback: String = ""
+    private var antiFraudConfirmedForCurrentAttempt: Bool = false
 
     var hasEffectiveScreenRecordingPermission: Bool {
         hasScreenRecordingPermission || hasDirectCapturePermission
@@ -903,8 +911,42 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Checks required macOS permissions before starting Host mode; if missing, guides the user to System Settings.
+    /// Shows anti-fraud warning first (unless user opted out), then checks required macOS permissions before starting Host mode.
     func requestStartHost() {
+        if !suppressAntiFraudWarning {
+            showingAntiFraudSheet = true
+            return
+        }
+        continueStartHostAfterWarning()
+    }
+
+    func confirmAntiFraudWarning(dontShowAgain: Bool) {
+        if dontShowAgain {
+            suppressAntiFraudWarning = true
+        }
+        antiFraudConfirmedForCurrentAttempt = true
+        showingAntiFraudSheet = false
+
+        hasAccessibilityPermission = InputInjector.hasAccessibilityPermission(prompt: false)
+        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+        if hasAllHostPermissions {
+            antiFraudConfirmedForCurrentAttempt = false
+            startHost()
+        } else {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                self?.continueStartHostAfterWarning()
+            }
+        }
+    }
+
+    func cancelAntiFraudWarning() {
+        antiFraudConfirmedForCurrentAttempt = false
+        showingAntiFraudSheet = false
+        statusLog = "[被控端] 已取消开启本机被控"
+    }
+
+    private func continueStartHostAfterWarning() {
         hasAccessibilityPermission = InputInjector.hasAccessibilityPermission(prompt: false)
         hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
 
@@ -937,6 +979,7 @@ final class AppState: ObservableObject {
     func dismissPermissionGuide() {
         showingPermissionGuideSheet = false
         pendingStartHostAfterPermission = false
+        antiFraudConfirmedForCurrentAttempt = false
         permissionCheckFeedback = ""
     }
 
@@ -977,8 +1020,14 @@ final class AppState: ObservableObject {
             pendingStartHostAfterPermission = false
             showingPermissionGuideSheet = false
             if shouldStart && !isHostRunning {
-                startHost()
-                statusLog = "[被控端] 权限已就绪，已自动开启本机被控服务"
+                if suppressAntiFraudWarning || antiFraudConfirmedForCurrentAttempt {
+                    antiFraudConfirmedForCurrentAttempt = false
+                    startHost()
+                    statusLog = "[被控端] 权限已就绪，已自动开启本机被控服务"
+                } else {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    showingAntiFraudSheet = true
+                }
             }
         }
     }
