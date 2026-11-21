@@ -776,6 +776,24 @@ private struct ActiveSessionQuickPanel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button {
+                    session.isAudioMuted.toggle()
+                } label: {
+                    Label(
+                        session.isAudioMuted ? "已静音" : "远端声音",
+                        systemImage: session.isAudioMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                    )
+                }
+                .controlSize(.small)
+                .help("开关本机接收远端电脑的声音")
+                .disabled(!session.phase.isConnected)
+
+                Toggle("被控端静音", isOn: $session.muteHostSpeakers)
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .help("开启后远控播放声音时被控端电脑扬声器自动静音，断开后自动恢复")
+                    .disabled(!session.phase.isConnected || session.isAudioMuted)
+
                 Button("刷新应用") {
                     session.refreshApps()
                 }

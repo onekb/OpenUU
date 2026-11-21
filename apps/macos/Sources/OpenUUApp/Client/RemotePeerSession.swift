@@ -26,6 +26,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     let sessionIndex: Int
     let bridge: OpenUUBridge
     let fastVideoRouter = FastVideoRouter()
+    let audioPlayer = AudioStreamPlayer()
 
     @Published var alias: String
     @Published var target: String
@@ -36,6 +37,24 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     @Published var remoteHostName: String = ""
     @Published var remoteApps: [RemoteAppSummary] = []
     @Published var openWindowCount: Int = 0
+    @Published var isAudioMuted: Bool = false {
+        didSet {
+            audioPlayer.setMuted(isAudioMuted)
+            for ctrl in proxyWindows.values {
+                ctrl.setAudioMuted(isAudioMuted)
+            }
+            if phase.isConnected {
+                bridge.sendAudioControl(enabled: !isAudioMuted, muteHost: muteHostSpeakers)
+            }
+        }
+    }
+    @Published var muteHostSpeakers: Bool = true {
+        didSet {
+            if phase.isConnected {
+                bridge.sendAudioControl(enabled: !isAudioMuted, muteHost: muteHostSpeakers)
+            }
+        }
+    }
 
     var autoOpenFullDesktopOnConnect: Bool = false
     var showDebugHUD: Bool = false {
@@ -106,6 +125,8 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? self.alias
                     self.remoteHostName = rawName
                     self.phase = .connected
+                    self.audioPlayer.setMuted(self.isAudioMuted)
+                    self.bridge.sendAudioControl(enabled: !self.isAudioMuted, muteHost: self.muteHostSpeakers)
                     self.bridge.requestAppList()
                     let remoteDevID = self.bridge.getIdentitySnapshot()?.trusted_peers.first?.device_id ?? ""
                     self.onConnected?(self, rawName, remoteDevID)
@@ -225,6 +246,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                 }
             }
         }
+
+        let player = audioPlayer
+        bridge.onAudioFrame = { packet in
+            player.enqueue(packet)
+        }
     }
 
     func connect(password: String, autoOpenDesktop: Bool = false) {
@@ -277,6 +303,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     }
 
     func cleanupSessionWindows() {
+        audioPlayer.stop()
         remoteApps = []
         linkBadge = ""
         fastVideoRouter.setWanJitterMode(false)
@@ -469,6 +496,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             }
         )
         controller.setDebugHUDVisible(showDebugHUD)
+        controller.setAudioMuted(isAudioMuted)
+        controller.onToggleAudioMute = { [weak self] in
+            guard let self else { return }
+            self.isAudioMuted.toggle()
+        }
         controller.onWindowMovedByUser = { [weak self] in
             self?.refreshFloatingPopoversPlacement()
         }

@@ -53,9 +53,14 @@ struct SecurityAndQualityView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // 2. Interaction & Multi-Host Sync
-                GroupBox("多机键鼠与剪贴板无缝协同") {
+                // 2. Interaction, Audio & Multi-Host Sync
+                GroupBox("多机键鼠、远端音频与剪贴板无缝协同") {
                     VStack(alignment: .leading, spacing: 10) {
+                        Toggle("远端音频实时传输（将当前远控应用或整屏桌面声音实时传至控制端）", isOn: $state.remoteAudioEnabled)
+                            .toggleStyle(.checkbox)
+                        Toggle("远控传声时被控端电脑自动静音（单窗口模式仅静音对应应用，断开后自动恢复外放）", isOn: $state.muteHostAudioDuringRemote)
+                            .toggleStyle(.checkbox)
+                            .disabled(!state.remoteAudioEnabled)
                         Toggle("跨多机双向剪贴板同步（复制文字 / 图片 / 文件自动同步至所有已连设备）", isOn: $state.clipboardSyncEnabled)
                             .toggleStyle(.checkbox)
                         Toggle("远端消息通知横幅与本地 Dock 图标未读红点同步", isOn: $state.notificationSyncEnabled)

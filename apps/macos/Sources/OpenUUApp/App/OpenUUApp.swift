@@ -67,6 +67,8 @@ final class AppState: ObservableObject {
         static let dynamicRes = "openuu.host.dynamicResolutionBoost"
         static let targetFPS = "openuu.host.targetFPS"
         static let debugHUD = "openuu.client.showDebugHUD"
+        static let remoteAudioSync = "openuu.host.remoteAudioSync"
+        static let muteHostAudio = "openuu.host.muteHostAudio"
     }
 
     enum CaptureScheme: String, CaseIterable, Identifiable {
@@ -155,6 +157,21 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(notificationSyncEnabled, forKey: PrefKey.notificationSync)
         }
     }
+    @Published var remoteAudioEnabled: Bool = UserDefaults.standard.object(forKey: PrefKey.remoteAudioSync) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(remoteAudioEnabled, forKey: PrefKey.remoteAudioSync)
+            syncHostAudioPreferences()
+        }
+    }
+    @Published var muteHostAudioDuringRemote: Bool = UserDefaults.standard.object(forKey: PrefKey.muteHostAudio) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(muteHostAudioDuringRemote, forKey: PrefKey.muteHostAudio)
+            clientRequestedMuteHost = nil
+            syncHostAudioPreferences()
+        }
+    }
+    private var clientRequestedAudioEnabled: Bool = true
+    private var clientRequestedMuteHost: Bool? = nil
     @Published var captureScheme: CaptureScheme = CaptureScheme(rawValue: UserDefaults.standard.string(forKey: PrefKey.captureScheme) ?? "main") ?? .mainScreen {
         didSet {
             UserDefaults.standard.set(captureScheme.rawValue, forKey: PrefKey.captureScheme)
@@ -264,6 +281,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.hostBridge.stopHost()
+                self.captureManager.audioStreamer.stopSynchronously()
                 for s in self.sessions.values {
                     s.disconnect()
                 }
@@ -296,18 +314,29 @@ final class AppState: ObservableObject {
         setupSharedManagers()
     }
 
+    private func syncHostAudioPreferences() {
+        let effectiveEnabled = remoteAudioEnabled && clientRequestedAudioEnabled
+        let effectiveMuteHost = clientRequestedMuteHost ?? muteHostAudioDuringRemote
+        captureManager.setAudioPreferences(enabled: effectiveEnabled, muteHost: effectiveMuteHost)
+    }
+
     private func setupHostCallbacks() {
         hostBridge.onStatus = { [weak self] msg in
             Task { @MainActor in
                 guard let self else { return }
                 self.statusLog = "[被控端] \(msg)"
                 if msg.hasPrefix("client connected:") {
+                    self.clientRequestedAudioEnabled = true
+                    self.clientRequestedMuteHost = nil
+                    self.syncHostAudioPreferences()
                     self.refreshIdentitySnapshot()
                     self.clipboardSync.start()
                     await self.pushHostAppListToClient()
                     self.notificationMonitor.start()
                     self.captureManager.requestAllKeyframes()
                 } else if msg.contains("disconnected") {
+                    self.clientRequestedAudioEnabled = true
+                    self.clientRequestedMuteHost = nil
                     self.hostLinkBadge = ""
                     self.captureManager.networkTier = .lan
                     self.notificationMonitor.stop()
@@ -350,8 +379,17 @@ final class AppState: ObservableObject {
                     }
                 }
             case "request_keyframe":
+                let targetWinID = evt.window_id ?? 0
                 Task { @MainActor in
-                    self.captureManager.requestAllKeyframes()
+                    self.captureManager.requestKeyframe(windowID: targetWinID)
+                }
+            case "audio_control":
+                let enabled = evt.audio_enabled ?? true
+                let muteHost = evt.mute_host
+                Task { @MainActor in
+                    self.clientRequestedAudioEnabled = enabled
+                    self.clientRequestedMuteHost = muteHost
+                    self.syncHostAudioPreferences()
                 }
             case "clipboard_sync":
                 Task { @MainActor in
@@ -393,6 +431,17 @@ final class AppState: ObservableObject {
                 data: data
             )
         }
+        captureManager.onEncodedAudio = { codec, flags, channels, sampleRate, ptsUS, data in
+            hBridge.sendAudioFrame(
+                codec: codec,
+                flags: flags,
+                channels: channels,
+                sampleRate: sampleRate,
+                timestampUS: ptsUS,
+                data: data
+            )
+        }
+        syncHostAudioPreferences()
         captureManager.onTopologyChanged = { [weak self] items in
             self?.activeStreamCount = items.count
             self?.hostBridge.sendWindowTopology(items)

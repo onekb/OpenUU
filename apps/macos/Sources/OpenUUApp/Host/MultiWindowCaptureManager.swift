@@ -55,9 +55,11 @@ final class MultiWindowCaptureManager {
     private var lastTopology: [WindowTopologyItem] = []
 
     var onEncodedFrame: ((_ codec: UInt8, _ flags: UInt8, _ windowID: UInt32, _ ptsUS: UInt64, _ width: UInt16, _ height: UInt16, _ data: Data) -> Void)?
+    var onEncodedAudio: ((_ codec: UInt8, _ flags: UInt8, _ channels: UInt8, _ sampleRate: UInt32, _ ptsUS: UInt64, _ data: Data) -> Void)?
     var onTopologyChanged: (([WindowTopologyItem]) -> Void)?
     var onStatus: ((String) -> Void)?
     var onWindowContentInset: ((UInt32, CGPoint) -> Void)?
+    let audioStreamer = HostAudioStreamer()
     var virtualDisplayManager: VirtualDisplayManager?
     var useVirtualDisplayMode: Bool = false
     var isRelocationPaused: Bool = false
@@ -82,7 +84,18 @@ final class MultiWindowCaptureManager {
             for engine in engines.values {
                 engine.setNetworkTier(networkTier)
             }
+            audioStreamer.setNetworkTier(networkTier)
         }
+    }
+
+    init() {
+        audioStreamer.onEncodedAudio = { [weak self] codec, flags, channels, sampleRate, ptsUS, data in
+            self?.onEncodedAudio?(codec, flags, channels, sampleRate, ptsUS, data)
+        }
+    }
+
+    func setAudioPreferences(enabled: Bool, muteHost: Bool) {
+        audioStreamer.updatePreferences(enabled: enabled, muteHost: muteHost)
     }
 
     /// Start (or add) sharing an app by its bundle ID (requested by Client or selected on Host).
@@ -281,16 +294,29 @@ final class MultiWindowCaptureManager {
         }
     }
 
+    func requestKeyframe(windowID: UInt32) {
+        if windowID != 0, let engine = engines[windowID] {
+            engine.requestKeyframe()
+        } else {
+            requestAllKeyframes()
+        }
+    }
+
     func notifyWindowResized(windowID: UInt32) {
         engines[windowID]?.checkWindowSizeNow()
     }
 
     func notifyNormalWindowInteracted(windowID: UInt32) {
-        lastInteractedWindowID = windowID
+        if windowID != 0 {
+            lastInteractedWindowID = windowID
+        }
         interactionSyncTask?.cancel()
         interactionSyncTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(110))
+            try? await Task.sleep(for: .milliseconds(45))
             guard !Task.isCancelled, let self else { return }
+            await self.syncAppWindows(forcePublish: false)
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
             await self.syncAppWindows(forcePublish: false)
         }
     }
@@ -300,6 +326,7 @@ final class MultiWindowCaptureManager {
         pollTask = nil
         interactionSyncTask?.cancel()
         interactionSyncTask = nil
+        audioStreamer.stop()
         for engine in engines.values {
             await engine.stopCapture()
         }
@@ -349,10 +376,9 @@ final class MultiWindowCaptureManager {
         engines[window.windowID] = engine
     }
 
-    /// Filters out tiny transient system overlays while always capturing compact WeChat right-click menus (~72x54pt).
+    /// Filters out tiny transient system overlays while always capturing compact context menus (including single-item Copy/Paste ~52x26pt).
     private static func isCapturablePopoverFrame(_ frame: CGRect) -> Bool {
-        guard frame.width >= 52, frame.height >= 28 else { return false }
-        return frame.width >= 68 || frame.height >= 48
+        frame.width >= 42 && frame.height >= 22 && (frame.width >= 50 || frame.height >= 36)
     }
 
     private func currentOnScreenWindowSnapshot() -> (signature: [Int], visibleIDs: Set<UInt32>) {
@@ -373,7 +399,7 @@ final class MultiWindowCaptureManager {
                 continue
             }
             let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
-            guard layer >= 0 && layer <= 500 else { continue }
+            guard layer >= 0 && layer <= 1000 else { continue }
             guard let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: boundsDict) else {
                 continue
@@ -400,9 +426,11 @@ final class MultiWindowCaptureManager {
 
     private func syncAppWindows(forcePublish: Bool) async {
         guard !sharedBundleIDs.isEmpty else {
+            audioStreamer.updateScope(isFullDesktop: isSharingFullDesktop, sharedBundleIDs: sharedBundleIDs)
             publishTopology(from: [], force: false)
             return
         }
+        audioStreamer.updateScope(isFullDesktop: isSharingFullDesktop, sharedBundleIDs: sharedBundleIDs)
 
         // Fast-path check: avoid heavy XPC calls to `replayd` (`SCShareableContent.excludingDesktopWindows`)
         // during steady-state 60fps video playback when no window has opened, closed, moved, resized,
@@ -502,14 +530,24 @@ final class MultiWindowCaptureManager {
             }
         }
 
+        var pidToSharedBundle: [pid_t: String] = [:]
+        for win in content.windows {
+            if let pid = win.owningApplication?.processID, pid != 0,
+               let bid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) {
+                pidToSharedBundle[pid] = bid
+            }
+        }
+
         let appWindows = content.windows.filter { win in
             guard suppressedWindows[win.windowID] == nil else { return false }
             guard visibleOnScreenIDs.isEmpty || visibleOnScreenIDs.contains(win.windowID) else { return false }
-            guard canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) != nil else { return false }
+            let resolvedBid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier)
+                ?? win.owningApplication.flatMap { pidToSharedBundle[$0.processID] }
+            guard resolvedBid != nil else { return false }
             if win.windowLayer == 0 {
                 return win.frame.width >= 140 && win.frame.height >= 120
             }
-            if win.windowLayer > 0 && win.windowLayer <= 500 {
+            if win.windowLayer > 0 && win.windowLayer <= 1000 {
                 return Self.isCapturablePopoverFrame(win.frame)
             }
             return false
@@ -658,6 +696,7 @@ final class MultiWindowCaptureManager {
             lastTopology = items
             onTopologyChanged?(items)
         }
+        audioStreamer.updateScope(isFullDesktop: isSharingFullDesktop, sharedBundleIDs: sharedBundleIDs)
     }
 
     private func isHelperOrDistinctIconWindow(_ win: SCWindow, canonicalBundleID: String, primaryPID: pid_t) -> Bool {

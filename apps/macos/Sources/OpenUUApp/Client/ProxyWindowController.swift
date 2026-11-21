@@ -17,6 +17,10 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
     private var popoverPlacement: (parentFrame: NSRect, relX: CGFloat, relY: CGFloat, fallbackSize: CGSize)?
     var onWindowClosedByUser: ((UInt32) -> Void)?
     var onWindowMovedByUser: (() -> Void)?
+    var onToggleAudioMute: (() -> Void)? {
+        get { interactiveView.onToggleAudioMute }
+        set { interactiveView.onToggleAudioMute = newValue }
+    }
     var onBeforePasteShortcut: (() -> Void)? {
         get { interactiveView.onBeforePasteShortcut }
         set { interactiveView.onBeforePasteShortcut = newValue }
@@ -246,6 +250,10 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         interactiveView.setDebugHUDVisible(visible)
     }
 
+    func setAudioMuted(_ muted: Bool) {
+        interactiveView.setAudioMuted(muted)
+    }
+
     func deliverDragOutFiles(_ urls: [URL]) -> Bool {
         interactiveView.deliverDragOutFiles(urls)
     }
@@ -257,6 +265,7 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     private let renderer: VideoDisplayRenderer
     private let onDebugLog: ((String) -> Void)?
     var onBeforePasteShortcut: (() -> Void)?
+    var onToggleAudioMute: (() -> Void)?
     var remoteWindowID: UInt32 = 0 {
         didSet {
             hoverBar.setFullDesktopMode(remoteWindowID == MultiWindowCaptureManager.fullDesktopWindowID)
@@ -329,11 +338,18 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
             self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: true, isRepeat: false, modifiers: 8 /* Cmd */)
             self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: false, isRepeat: false, modifiers: 8 /* Cmd */)
         }
+        hoverBar.onMuteClicked = { [weak self] in
+            self?.onToggleAudioMute?()
+        }
         addSubview(hoverBar)
     }
 
     func updateTitle(_ title: String) {
         hoverBar.setTitle(title)
+    }
+
+    func setAudioMuted(_ muted: Bool) {
+        hoverBar.setAudioMuted(muted)
     }
 
     func setDebugHUDVisible(_ visible: Bool) {
@@ -762,9 +778,11 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
 private final class HoverTitlebarView: NSVisualEffectView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeRemoteButton = NSButton()
+    private let muteButton = NSButton()
     private let closeButton = NSButton()
     var onCloseClicked: (() -> Void)?
     var onCloseRemoteClicked: (() -> Void)?
+    var onMuteClicked: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -795,6 +813,17 @@ private final class HoverTitlebarView: NSVisualEffectView {
         closeRemoteButton.action = #selector(handleCloseRemote)
         addSubview(closeRemoteButton)
 
+        muteButton.bezelStyle = .inline
+        muteButton.isBordered = false
+        muteButton.title = ""
+        muteButton.image = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "切换远端声音")
+        muteButton.imagePosition = .imageOnly
+        muteButton.toolTip = "远端声音已开启（点击静音）"
+        muteButton.contentTintColor = .systemGreen
+        muteButton.target = self
+        muteButton.action = #selector(handleMute)
+        addSubview(muteButton)
+
         closeButton.bezelStyle = .inline
         closeButton.isBordered = false
         closeButton.title = " 关投屏"
@@ -816,6 +845,15 @@ private final class HoverTitlebarView: NSVisualEffectView {
         titleLabel.stringValue = title
     }
 
+    func setAudioMuted(_ muted: Bool) {
+        muteButton.image = NSImage(
+            systemSymbolName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+            accessibilityDescription: muted ? "取消静音远端声音" : "静音远端声音"
+        )
+        muteButton.contentTintColor = muted ? .secondaryLabelColor : .systemGreen
+        muteButton.toolTip = muted ? "远端声音已静音（点击开启声音）" : "远端声音已开启（点击静音）"
+    }
+
     func setFullDesktopMode(_ isDesktop: Bool) {
         closeRemoteButton.isHidden = isDesktop
         closeButton.title = isDesktop ? " 退出远程" : " 关投屏"
@@ -828,12 +866,18 @@ private final class HoverTitlebarView: NSVisualEffectView {
 
     override func layout() {
         super.layout()
-        let leftBtnW: CGFloat = 74
+        let leftBtnW: CGFloat = closeRemoteButton.isHidden ? 0 : 74
+        let muteBtnW: CGFloat = 24
         let rightBtnW: CGFloat = 64
         let btnH: CGFloat = 20
-        closeRemoteButton.frame = NSRect(x: 8, y: (bounds.height - btnH) / 2, width: leftBtnW, height: btnH)
+        if !closeRemoteButton.isHidden {
+            closeRemoteButton.frame = NSRect(x: 8, y: (bounds.height - btnH) / 2, width: leftBtnW, height: btnH)
+        }
         closeButton.frame = NSRect(x: bounds.width - rightBtnW - 8, y: (bounds.height - btnH) / 2, width: rightBtnW, height: btnH)
-        titleLabel.frame = NSRect(x: leftBtnW + 14, y: (bounds.height - 15) / 2, width: max(40, bounds.width - leftBtnW - rightBtnW - 28), height: 15)
+        muteButton.frame = NSRect(x: closeButton.frame.minX - muteBtnW - 4, y: (bounds.height - btnH) / 2, width: muteBtnW, height: btnH)
+        let titleStartX = closeRemoteButton.isHidden ? 12 : (leftBtnW + 14)
+        let titleEndX = muteButton.frame.minX - 6
+        titleLabel.frame = NSRect(x: titleStartX, y: (bounds.height - 15) / 2, width: max(40, titleEndX - titleStartX), height: 15)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -846,6 +890,10 @@ private final class HoverTitlebarView: NSVisualEffectView {
 
     @objc private func handleCloseRemote() {
         onCloseRemoteClicked?()
+    }
+
+    @objc private func handleMute() {
+        onMuteClicked?()
     }
 }
 

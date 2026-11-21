@@ -117,6 +117,8 @@ struct ControlEventMessage: Codable, Sendable {
     let link_mode: String?
     let rtt_ms: UInt32?
     let remote_addr: String?
+    let audio_enabled: Bool?
+    let mute_host: Bool?
     let windows: [WindowTopologyItem]?
     let apps: [RemoteAppSummary]?
 }
@@ -131,10 +133,20 @@ struct EncodedVideoPacket: Sendable {
     let data: Data
 }
 
+struct EncodedAudioPacket: Sendable {
+    let codec: UInt8
+    let flags: UInt8
+    let channels: UInt8
+    let sampleRate: UInt32
+    let timestampUS: UInt64
+    let data: Data
+}
+
 final class OpenUUBridge: @unchecked Sendable {
     private let runtime: OpaquePointer
     var onControlEvent: ((ControlEventMessage) -> Void)?
     var onVideoFrame: ((EncodedVideoPacket) -> Void)?
+    var onAudioFrame: ((EncodedAudioPacket) -> Void)?
     var onStatus: ((String) -> Void)?
     var onProbeResults: (([DeviceProbeResultModel]) -> Void)?
 
@@ -143,9 +155,12 @@ final class OpenUUBridge: @unchecked Sendable {
             fatalError("Failed to create OpenUURuntime")
         }
         self.runtime = rt
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        _ = openuu_set_audio_callback(rt, openuuAudioTrampoline, ctx)
     }
 
     deinit {
+        _ = openuu_set_audio_callback(runtime, nil, nil)
         openuu_disconnect(runtime)
         openuu_runtime_destroy(runtime)
     }
@@ -298,6 +313,33 @@ final class OpenUUBridge: @unchecked Sendable {
                 data.count
             )
         }
+    }
+
+    func sendAudioFrame(
+        codec: UInt8,
+        flags: UInt8,
+        channels: UInt8,
+        sampleRate: UInt32,
+        timestampUS: UInt64,
+        data: Data
+    ) {
+        data.withUnsafeBytes { rawBuf in
+            guard let ptr = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return }
+            _ = openuu_send_audio_frame(
+                runtime,
+                codec,
+                flags,
+                channels,
+                sampleRate,
+                timestampUS,
+                ptr,
+                data.count
+            )
+        }
+    }
+
+    func sendAudioControl(enabled: Bool, muteHost: Bool) {
+        _ = openuu_send_audio_control(runtime, enabled, muteHost)
     }
 
     func sendMouse(
@@ -471,6 +513,30 @@ private func openuuVideoTrampoline(
         data: payload
     )
     bridge.onVideoFrame?(packet)
+}
+
+private func openuuAudioTrampoline(
+    ctx: UnsafeMutableRawPointer?,
+    codec: UInt8,
+    flags: UInt8,
+    channels: UInt8,
+    sampleRate: UInt32,
+    timestampUS: UInt64,
+    dataPtr: UnsafePointer<UInt8>?,
+    dataLen: Int
+) {
+    guard let ctx, let dataPtr, dataLen > 0 else { return }
+    let bridge = Unmanaged<OpenUUBridge>.fromOpaque(ctx).takeUnretainedValue()
+    let payload = Data(bytes: dataPtr, count: dataLen)
+    let packet = EncodedAudioPacket(
+        codec: codec,
+        flags: flags,
+        channels: channels,
+        sampleRate: sampleRate,
+        timestampUS: timestampUS,
+        data: payload
+    )
+    bridge.onAudioFrame?(packet)
 }
 
 private func openuuStatusTrampoline(ctx: UnsafeMutableRawPointer?, statusPtr: UnsafePointer<CChar>?) {

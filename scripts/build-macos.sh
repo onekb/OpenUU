@@ -38,6 +38,7 @@ cat > "$APP_DIR/Contents/Resources/zh-Hans.lproj/InfoPlist.strings" << 'EOF'
 "CFBundleName" = "OpenUU";
 "NSLocalNetworkUsageDescription" = "OpenUU 需要在局域网内自动发现并连接你的另一台 Mac。";
 "NSScreenCaptureUsageDescription" = "OpenUU 需要屏幕录制权限以实时捕获你选择的单个应用窗口。";
+"NSAudioCaptureUsageDescription" = "OpenUU 需要系统音频采集权限，以便在远控时将应用声音传到控制端并自动静音被控电脑外放。";
 EOF
 
 cat > "$APP_DIR/Contents/Resources/zh-Hant.lproj/InfoPlist.strings" << 'EOF'
@@ -45,6 +46,7 @@ cat > "$APP_DIR/Contents/Resources/zh-Hant.lproj/InfoPlist.strings" << 'EOF'
 "CFBundleName" = "OpenUU";
 "NSLocalNetworkUsageDescription" = "OpenUU 需要在區域網路內自動發現並連接你的另一台 Mac。";
 "NSScreenCaptureUsageDescription" = "OpenUU 需要螢幕錄製權限以即時擷取你選擇的單個應用程式視窗。";
+"NSAudioCaptureUsageDescription" = "OpenUU 需要系統音訊擷取權限，以便在遠端控制時將應用程式聲音傳至控制端並自動靜音被控電腦喇叭。";
 EOF
 
 cat > "$APP_DIR/Contents/Resources/en.lproj/InfoPlist.strings" << 'EOF'
@@ -52,6 +54,7 @@ cat > "$APP_DIR/Contents/Resources/en.lproj/InfoPlist.strings" << 'EOF'
 "CFBundleName" = "OpenUU";
 "NSLocalNetworkUsageDescription" = "OpenUU needs local network access to discover and connect to your other Mac.";
 "NSScreenCaptureUsageDescription" = "OpenUU needs Screen Recording permission to stream the application windows you select.";
+"NSAudioCaptureUsageDescription" = "OpenUU needs System Audio Recording permission to stream remote app audio and mute the host speaker while connected.";
 EOF
 
 cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
@@ -99,6 +102,8 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     </array>
     <key>NSScreenCaptureUsageDescription</key>
     <string>OpenUU needs Screen Recording permission to stream the application windows you select.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>OpenUU needs System Audio Recording permission to stream remote app audio and mute the host speaker while connected.</string>
 </dict>
 </plist>
 EOF

@@ -120,13 +120,13 @@ final class InputInjector: @unchecked Sendable {
         return list.contains { info in
             guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == targetPID else { return false }
             let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
-            guard layer > 0 && layer <= 500 else { return false }
+            guard layer > 0 && layer <= 1000 else { return false }
             if let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha <= 0.01 {
                 return false
             }
             guard let dict = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: dict) else { return false }
-            return rect.width >= 50 && rect.height >= 50 && (rect.width >= 110 || rect.height >= 95)
+            return rect.width >= 42 && rect.height >= 22 && (rect.width >= 50 || rect.height >= 36)
         }
     }
 
@@ -221,9 +221,9 @@ final class InputInjector: @unchecked Sendable {
         self.targetWindowID = effectiveWinID
         self.targetPID = resolved.pid
         self.fallbackFrame = resolved.frame
-        if resolved.layer == 0,
-           msg.type == "mouse" && (msg.event_type == 1 || msg.event_type == 2 || msg.event_type == 3) || msg.type == "scroll" || msg.type == "key" || msg.type == "text_commit" {
-            onNormalWindowInteracted?(effectiveWinID)
+        if msg.type == "mouse" && (msg.event_type == 1 || msg.event_type == 2 || msg.event_type == 3) ||
+            msg.type == "scroll" || msg.type == "key" || msg.type == "text_commit" {
+            onNormalWindowInteracted?(resolved.layer == 0 ? effectiveWinID : 0)
         }
         let inset = windowContentInsets[effectiveWinID] ?? .zero
 
@@ -276,6 +276,7 @@ final class InputInjector: @unchecked Sendable {
         case "key":
             let keyCode = CGKeyCode(msg.key_code ?? 0)
             let isDown = msg.is_down ?? true
+            let isRepeat = msg.is_repeat ?? false
             let flags = cgFlags(from: msg.modifiers ?? 0)
             // Give a just-arrived pre-paste ClipboardSync 15ms to commit to NSPasteboard on main thread.
             if isDown && keyCode == 9 /* V */ && flags.contains(.maskCommand) {
@@ -283,11 +284,20 @@ final class InputInjector: @unchecked Sendable {
             }
             if let ev = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: isDown) {
                 ev.flags = flags
-                // Esc (53) during an active drag must go to cghidEventTap so AppKit's modal drag loop cancels it.
-                if silentMode && !(keyCode == 53 && isRemoteMouseButtonDown) {
+                if isRepeat {
+                    ev.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+                }
+                let isSystemGlobalShortcut =
+                    (flags.contains(.maskCommand) && (keyCode == 49 /* Space */ || keyCode == 48 /* Tab */)) ||
+                    (flags.contains(.maskControl) && (keyCode == 123 || keyCode == 124 || keyCode == 125 || keyCode == 126)) ||
+                    (flags.contains(.maskCommand) && flags.contains(.maskShift) && (keyCode == 20 || keyCode == 21 || keyCode == 23))
+                let requiresHIDTap =
+                    isSystemGlobalShortcut ||
+                    (keyCode == 53 && (isRemoteMouseButtonDown || targetAppHasOpenFloatingPopover()))
+                if silentMode && !requiresHIDTap {
                     ev.postToPid(targetPID)
                 } else {
-                    if !isRemoteMouseButtonDown {
+                    if !isRemoteMouseButtonDown && !isSystemGlobalShortcut {
                         bringTargetWindowToFront(windowID: effectiveWinID, rawFrame: resolved.frame, windowLayer: resolved.layer, clickPoint: nil)
                     }
                     ev.post(tap: .cghidEventTap)
@@ -387,11 +397,15 @@ final class InputInjector: @unchecked Sendable {
         case "key":
             let keyCode = CGKeyCode(msg.key_code ?? 0)
             let isDown = msg.is_down ?? true
+            let isRepeat = msg.is_repeat ?? false
             if isDown && keyCode == 9 && flags.contains(.maskCommand) {
                 usleep(15_000)
             }
             if let ev = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: isDown) {
                 ev.flags = flags
+                if isRepeat {
+                    ev.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+                }
                 ev.post(tap: .cghidEventTap)
             }
 

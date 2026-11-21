@@ -41,17 +41,34 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var currentFPS: Int = 60
     private var lastTrackedSize: CGSize = .zero
     private var isFloatingPopover: Bool = false
+    private var isNativeMenuPopover: Bool = false
     private var hasDetectedAlphaTrim: Bool = false
     private var captureScaleFactor: CGFloat = 2.0
     var dynamicResolutionEnabled: Bool = true
     var networkTier: StreamNetworkTier = .lan
     private var pixelCropRect: (x: Int, y: Int, w: Int, h: Int)?
     private var croppedPixelBuffer: CVPixelBuffer?
+    private var lastEncodedPixelBuffer: CVPixelBuffer?
+    private var lastEncodedPTS: CMTime = .invalid
+    private var encodedFrameCount: UInt64 = 0
+    private var resizeDropBudget: Int = 0
     private var expectedCaptureWidth: Int = 0
     private var expectedCaptureHeight: Int = 0
 
     var onEncodedFrame: ((_ codec: UInt8, _ flags: UInt8, _ windowID: UInt32, _ ptsUS: UInt64, _ width: UInt16, _ height: UInt16, _ data: Data) -> Void)?
     var onContentInsetDetected: ((_ windowID: UInt32, _ insetOrigin: CGPoint, _ croppedLogicalSize: CGSize) -> Void)?
+
+    /// Ensures small floating popovers/context menus meet hardware H.264/HEVC encoder & decoder minimum dimensions.
+    private static func ensureMinimumEncodeDimensions(width: Int, height: Int, isPopover: Bool) -> (w: Int, h: Int) {
+        var w = max(2, width & ~1)
+        var h = max(2, height & ~1)
+        if isPopover && (w < 128 || h < 128) {
+            let scale = max(128.0 / CGFloat(w), 128.0 / CGFloat(h))
+            w = max(128, Int(ceil(CGFloat(w) * scale)) & ~1)
+            h = max(128, Int(ceil(CGFloat(h) * scale)) & ~1)
+        }
+        return (w, h)
+    }
 
     /// Computes steady, non-oscillating pixel dimensions for capture & H.264/HEVC encoding.
     private func effectiveEncodeDimensions(for logicalSize: CGSize) -> (w: Int, h: Int) {
@@ -69,9 +86,9 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         } else {
             effScale = baseScale
         }
-        let w = max(2, Int(logicalSize.width * effScale) & ~1)
-        let h = max(2, Int(logicalSize.height * effScale) & ~1)
-        return (w, h)
+        let rawW = max(2, Int(logicalSize.width * effScale) & ~1)
+        let rawH = max(2, Int(logicalSize.height * effScale) & ~1)
+        return Self.ensureMinimumEncodeDimensions(width: rawW, height: rawH, isPopover: isFloatingPopover)
     }
 
     private func effectiveTargetFPS(baseFPS: Int) -> Int {
@@ -84,17 +101,32 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     func startCapture(window: SCWindow, fps: Int = 60, scaleFactor: CGFloat = 2.0) async throws {
         await stopCapture()
+        // Build filter first so we can read the window's true backing `pointPixelScale` (1.0 on 1x Mac mini
+        // external monitors, 2.0 on Retina displays) instead of assuming 2.0 and mismatching buffer dimensions!
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let filterScale = CGFloat(max(1.0, filter.pointPixelScale))
+
         self.targetWindowID = window.windowID
         self.currentFPS = fps
         self.isFloatingPopover = window.windowLayer > 0
-        self.hasDetectedAlphaTrim = false
+        // Native macOS context/popup menus (`NSMenu`, `kCGPopUpMenuWindowLevel` == 101) use `NSVisualEffectView`
+        // (`CABackdropLayer`) without custom outer transparent shadow margins. Capturing them with
+        // `shouldBeOpaque = true` ensures ScreenCaptureKit renders an opaque system menu material in both
+        // Light Mode and Dark Mode instead of leaving the backdrop transparent black!
+        self.isNativeMenuPopover = window.windowLayer >= 100
+        self.hasDetectedAlphaTrim = isNativeMenuPopover
         self.pixelCropRect = nil
         self.croppedPixelBuffer = nil
-        self.captureScaleFactor = scaleFactor
+        self.lastEncodedPixelBuffer = nil
+        self.lastEncodedPTS = .invalid
+        self.encodedFrameCount = 0
+        self.resizeDropBudget = 0
+        self.captureScaleFactor = min(scaleFactor, max(1.0, filterScale))
         self.lastTrackedSize = window.frame.size
 
-        let reportedW = max(2, Int(window.frame.width * scaleFactor) & ~1)
-        let reportedH = max(2, Int(window.frame.height * scaleFactor) & ~1)
+        // Wire headers always carry 2x Retina-equivalent logical dimensions so Clients compute `logical = header / 2`.
+        let reportedW = max(2, Int(window.frame.width * 2.0) & ~1)
+        let reportedH = max(2, Int(window.frame.height * 2.0) & ~1)
         self.encodedWidth = UInt16(reportedW)
         self.encodedHeight = UInt16(reportedH)
         self.forceNextKeyframe = true
@@ -104,27 +136,29 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         self.expectedCaptureHeight = encH
         try activateEncoder(width: Int32(encW), height: Int32(encH), fps: fps)
 
+        let useBGRA = isFloatingPopover && !isNativeMenuPopover
         let config = SCStreamConfiguration()
         config.width = encW
         config.height = encH
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
-        // For floating popovers (windowLayer > 0), use BGRA so we can auto-trim transparent custom shadow margins!
-        // For normal windows, use full-range YCbCr ('420f') for crisp text and minimal bandwidth.
-        config.pixelFormat = isFloatingPopover
+        // For custom floating popovers (`0 < windowLayer < 100`, e.g. WeChat emoji picker), use BGRA so we can
+        // auto-trim transparent custom shadow margins! For native menus (`>= 100`) and normal windows, use `420f`.
+        config.pixelFormat = useBGRA
             ? kCVPixelFormatType_32BGRA
             : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        Self.applyCanonicalSRGBStreamConfig(config, isBGRA: isFloatingPopover)
+        Self.applyCanonicalSRGBStreamConfig(config, isBGRA: useBGRA)
         config.showsCursor = false
         config.queueDepth = 6
         config.scalesToFit = true
         if #available(macOS 14.0, *) {
-            config.captureResolution = .automatic
+            config.captureResolution = isFloatingPopover ? .best : .automatic
             config.ignoreShadowsDisplay = true
             config.ignoreShadowsSingleWindow = true
             config.ignoreGlobalClipDisplay = true
             config.ignoreGlobalClipSingleWindow = true
-            // Do NOT force solid white background on transparent popover shadow margins!
-            config.shouldBeOpaque = !isFloatingPopover
+            // Keep opaque backing for normal windows and native `NSMenu` context menus; keep transparent
+            // only for custom app popovers (`0 < windowLayer < 100`) until shadow-trim check completes.
+            config.shouldBeOpaque = !useBGRA
             config.presenterOverlayPrivacyAlertSetting = .never
         }
         if #available(macOS 14.2, *) {
@@ -133,10 +167,6 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             config.includeChildWindows = false
         }
 
-        // Always use `SCContentFilter(desktopIndependentWindow: window)` so that each window (e.g., WeChat main
-        // window vs WeChat Mini Program window vs floating emoji popover) captures ONLY its own backing store
-        // and overlapping windows on the Virtual Display NEVER bleed into each other's video stream!
-        let filter = SCContentFilter(desktopIndependentWindow: window)
         self.currentConfig = config
 
         let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
@@ -151,15 +181,20 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         self.targetWindowID = windowID
         self.currentFPS = fps
         self.isFloatingPopover = false
+        self.isNativeMenuPopover = false
         self.hasDetectedAlphaTrim = false
         self.pixelCropRect = nil
         self.croppedPixelBuffer = nil
+        self.lastEncodedPixelBuffer = nil
+        self.lastEncodedPTS = .invalid
+        self.encodedFrameCount = 0
+        self.resizeDropBudget = 0
         self.captureScaleFactor = scaleFactor
         let logicalSize = CGSize(width: CGFloat(display.width), height: CGFloat(display.height))
         self.lastTrackedSize = logicalSize
 
-        let reportedW = max(2, Int(logicalSize.width * scaleFactor) & ~1)
-        let reportedH = max(2, Int(logicalSize.height * scaleFactor) & ~1)
+        let reportedW = max(2, Int(logicalSize.width * 2.0) & ~1)
+        let reportedH = max(2, Int(logicalSize.height * 2.0) & ~1)
         self.encodedWidth = UInt16(reportedW)
         self.encodedHeight = UInt16(reportedH)
         self.forceNextKeyframe = true
@@ -217,8 +252,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     private func handleDetectedWindowLogicalSize(_ newLogicalSize: CGSize, fps: Int, forceReconfigure: Bool = false) {
-        let minW: CGFloat = isFloatingPopover ? 44 : 60
-        let minH: CGFloat = isFloatingPopover ? 28 : 60
+        let minW: CGFloat = isFloatingPopover ? 40 : 60
+        let minH: CGFloat = isFloatingPopover ? 22 : 60
         guard newLogicalSize.width >= minW,
               newLogicalSize.height >= minH,
               let stream = self.stream,
@@ -229,9 +264,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                           abs(newLogicalSize.height - self.lastTrackedSize.height) > 2
         guard sizeChanged || forceReconfigure else { return }
         self.lastTrackedSize = newLogicalSize
-        let fullScale = max(1.0, self.captureScaleFactor)
-        let reportedW = max(2, Int(newLogicalSize.width * fullScale) & ~1)
-        let reportedH = max(2, Int(newLogicalSize.height * fullScale) & ~1)
+        let reportedW = max(2, Int(newLogicalSize.width * 2.0) & ~1)
+        let reportedH = max(2, Int(newLogicalSize.height * 2.0) & ~1)
         self.encodedWidth = UInt16(reportedW)
         self.encodedHeight = UInt16(reportedH)
 
@@ -242,7 +276,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         if isFloatingPopover {
             self.pixelCropRect = nil
             self.croppedPixelBuffer = nil
-            self.hasDetectedAlphaTrim = false
+            self.hasDetectedAlphaTrim = isNativeMenuPopover
+            self.resizeDropBudget = sizeChanged ? 6 : 0
         }
         self.expectedCaptureWidth = encW
         self.expectedCaptureHeight = encH
@@ -330,7 +365,29 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     func requestKeyframe() {
         captureQueue.async { [weak self] in
-            self?.forceNextKeyframe = true
+            guard let self else { return }
+            self.forceNextKeyframe = true
+            // Static windows and right-click context menus stop emitting SCStream frames once painted (.idle).
+            // Immediately re-encode the latest captured buffer as an IDR keyframe so newly attached client surfaces
+            // render static menus and dialogs instantaneously without waiting for screen damage!
+            if let session = self.compressionSession, let buf = self.lastEncodedPixelBuffer {
+                self.forceNextKeyframe = false
+                let baseSec = (self.lastEncodedPTS.isValid && self.lastEncodedPTS.timescale > 0)
+                    ? self.lastEncodedPTS.seconds
+                    : CFAbsoluteTimeGetCurrent()
+                let nextPTS = CMTime(seconds: baseSec + 0.002, preferredTimescale: 1_000_000)
+                self.lastEncodedPTS = nextPTS
+                let props = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+                VTCompressionSessionEncodeFrame(
+                    session,
+                    imageBuffer: buf,
+                    presentationTimeStamp: nextPTS,
+                    duration: .invalid,
+                    frameProperties: props,
+                    sourceFrameRefcon: nil,
+                    infoFlagsOut: nil
+                )
+            }
         }
     }
 
@@ -340,12 +397,18 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             try? await stream.stopCapture()
             self.stream = nil
         }
+        captureQueue.sync {
+            self.lastEncodedPixelBuffer = nil
+            self.croppedPixelBuffer = nil
+        }
         invalidateAllEncoders()
     }
 
-    private func activateEncoder(width: Int32, height: Int32, fps: Int) throws {
+    private func activateEncoder(width: Int32, height: Int32, fps: Int, forceH264: Bool = false) throws {
         let effFPS = effectiveTargetFPS(baseFPS: fps)
-        let wantHEVC = networkTier.prefersHEVC
+        // Always prefer universally-compatible H.264 for compact floating popovers/context menus so small
+        // menu dimensions never hit hardware HEVC minimum-dimension quirks on Apple Silicon or mobile decoders.
+        let wantHEVC = !forceH264 && !isFloatingPopover && networkTier.prefersHEVC
         let codecTag = wantHEVC ? "hevc" : "h264"
         let key = "\(codecTag)-\(networkTier.rawValue)-\(width)x\(height)"
         if let cached = encoderCache[key] {
@@ -375,7 +438,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             compressionSessionOut: &session
         )
         if status != noErr || session == nil {
-            // Graceful fallback to H.264 if HEVC hardware encoder is unavailable
+            // Graceful fallback to H.264 if HEVC or hardware encoder is unavailable
             usingHEVC = false
             status = VTCompressionSessionCreate(
                 allocator: kCFAllocatorDefault,
@@ -399,7 +462,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
-        if networkTier == .wanRelay {
+        if networkTier == .wanRelay && !isFloatingPopover {
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         }
         // Explicitly signal canonical sRGB / ITU-R BT.709 colorimetry in H.264/HEVC SPS VUI so client decoders
@@ -439,17 +502,19 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             return
         }
 
-        // Drop stale frames from before an in-flight SCStream.updateConfiguration resize completes,
-        // otherwise alpha-trim detection would lock onto the old dimensions.
-        if isFloatingPopover && expectedCaptureWidth > 0 && expectedCaptureHeight > 0 {
+        // Briefly skip pre-resize frames right after a dynamic popover resize (`resizeDropBudget > 0`),
+        // but NEVER drop indefinitely on 1x external monitors where SCStream delivers native 1x buffers!
+        if isFloatingPopover && resizeDropBudget > 0 && expectedCaptureWidth > 0 && expectedCaptureHeight > 0 {
             let bufW = CVPixelBufferGetWidth(imageBuffer)
             let bufH = CVPixelBufferGetHeight(imageBuffer)
             if abs(bufW - expectedCaptureWidth) > 2 || abs(bufH - expectedCaptureHeight) > 2 {
+                resizeDropBudget -= 1
                 return
             }
+            resizeDropBudget = 0
         }
 
-        // On the first frame of a floating popover (e.g. WeChat emoji picker / sticker preview / search dropdown),
+        // On the first frame of a custom floating popover (e.g. WeChat emoji picker / sticker preview / search dropdown),
         // auto-detect transparent custom-shadow padding via the BGRA alpha channel and crop directly!
         if isFloatingPopover && !hasDetectedAlphaTrim {
             hasDetectedAlphaTrim = true
@@ -465,13 +530,19 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         Self.tagBufferWithCanonicalSRGB(bufferToEncode)
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard let activeSession = compressionSession else { return }
+        self.lastEncodedPixelBuffer = bufferToEncode
+        self.lastEncodedPTS = pts
+        let wasFirstFrame = (self.encodedFrameCount == 0)
+        self.encodedFrameCount += 1
+
+        guard var activeSession = compressionSession else { return }
+        let wasForcedKeyframe = forceNextKeyframe
         var frameProps: CFDictionary?
         if forceNextKeyframe {
             forceNextKeyframe = false
             frameProps = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
         }
-        VTCompressionSessionEncodeFrame(
+        let encodeStatus = VTCompressionSessionEncodeFrame(
             activeSession,
             imageBuffer: bufferToEncode,
             presentationTimeStamp: pts,
@@ -480,6 +551,36 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             sourceFrameRefcon: nil,
             infoFlagsOut: nil
         )
+        if encodeStatus != noErr {
+            invalidateAllEncoders()
+            let fallbackW = max(128, activeEncoderWidth > 0 ? activeEncoderWidth : Int32(CVPixelBufferGetWidth(bufferToEncode) & ~1))
+            let fallbackH = max(128, activeEncoderHeight > 0 ? activeEncoderHeight : Int32(CVPixelBufferGetHeight(bufferToEncode) & ~1))
+            if (try? activateEncoder(width: fallbackW, height: fallbackH, fps: currentFPS, forceH264: true)) != nil,
+               let retrySession = compressionSession {
+                activeSession = retrySession
+                let retryProps = (wasForcedKeyframe || wasFirstFrame)
+                    ? ([kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary)
+                    : nil
+                VTCompressionSessionEncodeFrame(
+                    activeSession,
+                    imageBuffer: bufferToEncode,
+                    presentationTimeStamp: pts,
+                    duration: .invalid,
+                    frameProperties: retryProps,
+                    sourceFrameRefcon: nil,
+                    infoFlagsOut: nil
+                )
+            }
+        }
+
+        // For static floating popovers/context menus, proactively echo a second frame shortly after Frame #1
+        // so mobile decoders with 1-frame DPB latency or async Surface creation always render immediately.
+        if isFloatingPopover && wasFirstFrame {
+            captureQueue.asyncAfter(deadline: .now() + .milliseconds(75)) { [weak self] in
+                guard let self, self.encodedFrameCount == 1 else { return }
+                self.requestKeyframe()
+            }
+        }
     }
 
     private func detectAndTrimTransparentShadowMargin(_ pixelBuffer: CVPixelBuffer) {
@@ -493,10 +594,12 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
         let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        guard w > 40, h > 40 else { return }
+        guard w > 40, h > 28 else { return }
 
         let ptr = base.assumingMemoryBound(to: UInt8.self)
-        let alphaThreshold: UInt8 = 235
+        // Use alphaThreshold = 64 so transparent/soft-shadow outer margins (`alpha == 0..60`) are cleanly trimmed,
+        // while semi-transparent vibrancy menus (`alpha ~ 170..230`) are never falsely cropped!
+        let alphaThreshold: UInt8 = 64
         let midY = h / 2
         let midX = w / 2
 
@@ -513,28 +616,46 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         var bottomPx = 0
         while bottomPx < h / 3 && alphaAt(midX, h - 1 - bottomPx) < alphaThreshold { bottomPx += 1 }
 
-        // Only crop if there is meaningful transparent shadow padding (>= 4px on any side)
-        guard max(leftPx, rightPx, topPx, bottomPx) >= 4 else { return }
+        // If there is NO custom outer shadow margin (`< 4px`) AND the interior is translucent (`alpha < 245`),
+        // this popover uses macOS `CABackdropLayer` / `NSVisualEffectView` vibrancy — switch `shouldBeOpaque = true`
+        // so ScreenCaptureKit composites an opaque system material backdrop!
+        if max(leftPx, rightPx, topPx, bottomPx) < 4 {
+            if alphaAt(midX, midY) < 245, let stream = self.stream, let cfg = self.currentConfig {
+                if #available(macOS 14.0, *), !cfg.shouldBeOpaque {
+                    cfg.shouldBeOpaque = true
+                    self.forceNextKeyframe = true
+                    Task {
+                        try? await stream.updateConfiguration(cfg)
+                    }
+                }
+            }
+            return
+        }
 
         let cropW = (w - leftPx - rightPx) & ~1
         let cropH = (h - topPx - bottomPx) & ~1
-        guard cropW >= 60, cropH >= 60 else { return }
+        guard cropW >= 40, cropH >= 24 else { return }
+
+        // Compute true buffer-to-logical ratio directly from `w x h` vs `lastTrackedSize` so 1x and 2x monitors both match!
+        let scaleX = lastTrackedSize.width > 1 ? (CGFloat(w) / lastTrackedSize.width) : max(1.0, captureScaleFactor)
+        let scaleY = lastTrackedSize.height > 1 ? (CGFloat(h) / lastTrackedSize.height) : max(1.0, captureScaleFactor)
+        let croppedLogicalW = CGFloat(cropW) / max(1.0, scaleX)
+        let croppedLogicalH = CGFloat(cropH) / max(1.0, scaleY)
 
         self.pixelCropRect = (x: leftPx, y: topPx, w: cropW, h: cropH)
-        self.encodedWidth = UInt16(cropW)
-        self.encodedHeight = UInt16(cropH)
+        self.encodedWidth = UInt16(max(2, Int(croppedLogicalW * 2.0) & ~1))
+        self.encodedHeight = UInt16(max(2, Int(croppedLogicalH * 2.0) & ~1))
         self.forceNextKeyframe = true
 
-        let scale = max(1.0, captureScaleFactor)
         onContentInsetDetected?(
             targetWindowID,
-            CGPoint(x: CGFloat(leftPx) / scale, y: CGFloat(topPx) / scale),
-            CGSize(width: CGFloat(cropW) / scale, height: CGFloat(cropH) / scale)
+            CGPoint(x: CGFloat(leftPx) / max(1.0, scaleX), y: CGFloat(topPx) / max(1.0, scaleY)),
+            CGSize(width: croppedLogicalW, height: croppedLogicalH)
         )
 
-        // Reconfigure hardware encoder to exact cropped dimensions (100% deterministic, independent of SCStream.sourceRect!)
+        let (encW, encH) = Self.ensureMinimumEncodeDimensions(width: cropW, height: cropH, isPopover: true)
         invalidateAllEncoders()
-        try? activateEncoder(width: Int32(cropW), height: Int32(cropH), fps: currentFPS)
+        try? activateEncoder(width: Int32(encW), height: Int32(encH), fps: currentFPS)
     }
 
     private func cropBGRAPixelBuffer(_ src: CVPixelBuffer, crop: (x: Int, y: Int, w: Int, h: Int)) -> CVPixelBuffer? {
