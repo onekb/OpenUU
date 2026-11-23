@@ -45,6 +45,11 @@ ditto "$ROOT_DIR/build/OpenUUMobile-iOS.app" "$IPA_STAGE/Payload/OpenUUMobile.ap
 )
 rm -rf "$IPA_STAGE"
 
+if [ -f "$ROOT_DIR/build/OpenUU-Windows-x64-Setup.exe" ]; then
+  echo "==> Including OpenUU-v${VERSION}-Windows-x64-Setup.exe ..."
+  cp "$ROOT_DIR/build/OpenUU-Windows-x64-Setup.exe" "$REL_DIR/OpenUU-v${VERSION}-Windows-x64-Setup.exe"
+fi
+
 if [ -f "$ROOT_DIR/build/OpenUU-Windows-x64.zip" ]; then
   echo "==> Including OpenUU-v${VERSION}-Windows-x64.zip ..."
   cp "$ROOT_DIR/build/OpenUU-Windows-x64.zip" "$REL_DIR/OpenUU-v${VERSION}-Windows-x64.zip"

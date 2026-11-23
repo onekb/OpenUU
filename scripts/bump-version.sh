@@ -68,14 +68,18 @@ replace_in("scripts/build-macos.sh", [
     (r'^APP_BUILD="[^"]*"', f'APP_BUILD="{build}"'),
 ])
 
-# 3. Windows csproj, manifest, scripts
+# 3. Windows csproj, manifest, Inno Setup, and scripts
 replace_in("apps/windows/OpenUUApp/OpenUUApp.csproj", [
     (r'(<Version>)[0-9]+\.[0-9]+\.[0-9]+(</Version>)', rf'\g<1>{ver}\2'),
 ])
 replace_in("apps/windows/OpenUUApp/app.manifest", [
     (r'(assemblyIdentity\s+version=")[0-9]+\.[0-9]+\.[0-9]+\.0(")', rf'\g<1>{ver}.0\2'),
 ])
+replace_in("apps/windows/installer/OpenUU.iss", [
+    (r'(#define\s+MyAppVersion\s+")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+])
 replace_in("scripts/build-windows.ps1", [
+    (r'(\$appVersion\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
     (r'OpenUU-Windows-v[0-9]+\.[0-9]+\.[0-9]+', f'OpenUU-Windows-v{ver}'),
 ])
 replace_in("scripts/verify-windows-e2e.ps1", [

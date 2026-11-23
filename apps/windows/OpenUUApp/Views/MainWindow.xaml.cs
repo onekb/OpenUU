@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private bool _syncingUi;
     private string _selectedGroupFilter = "全部";
     private bool _isDrawerCollapsed;
+    private bool _isShowingAntiFraudDialog;
     public bool AllowTrueClose { get; set; }
 
     public MainWindow(AppState state)
@@ -113,6 +114,8 @@ public partial class MainWindow : Window
             int roundPref = Win32Interop.DWMWCP_ROUND;
             Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_WINDOW_CORNER_PREFERENCE, ref roundPref, sizeof(int));
         };
+
+        StateChanged += (_, _) => UpdateMaxRestoreIcon();
 
         Loaded += (_, _) =>
         {
@@ -283,10 +286,14 @@ public partial class MainWindow : Window
                 AdminStatusText.Text = "✅  管理员窗口控制权限 (UIPI)：已处于管理员权限（可操控本机所有管理员窗口与系统工具）";
                 AdminStatusText.Foreground = (SolidColorBrush)FindResource("OnlineGreen");
                 RelaunchAdminBtn.Visibility = Visibility.Collapsed;
+                HomeAdminBadge.Visibility = Visibility.Visible;
+                HomeElevateBtn.Visibility = Visibility.Collapsed;
             }
             else
             {
                 RelaunchAdminBtn.Visibility = Visibility.Visible;
+                HomeAdminBadge.Visibility = Visibility.Collapsed;
+                HomeElevateBtn.Visibility = Visibility.Visible;
             }
 
             RebuildTrustedPeersCard();
@@ -763,16 +770,18 @@ public partial class MainWindow : Window
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 Margin = new Thickness(0, 10, 0, 0)
             };
+            UiAssist.SetHorizontalWheelScroll(scroller, true);
             var appRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
             foreach (var app in sess.RemoteApps)
             {
                 var chip = new System.Windows.Controls.Button
                 {
-                    Margin = new Thickness(0, 0, 8, 0),
-                    Padding = new Thickness(10, 5, 10, 5),
+                    Margin = new Thickness(0, 0, 8, 2),
+                    Padding = new Thickness(11, 5, 11, 5),
                     Style = (Style)FindResource("SecondaryButtonStyle"),
-                    Background = (SolidColorBrush)FindResource("AccentSoftBg"),
-                    BorderThickness = new Thickness(0)
+                    Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(240, 249, 255)),
+                    BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(186, 230, 253)),
+                    BorderThickness = new Thickness(1)
                 };
                 var chipContent = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
                 if (app.DisplayIcon != null)
@@ -889,7 +898,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            DrawerSplitterRow.Height = new GridLength(6);
+            DrawerSplitterRow.Height = new GridLength(8);
             DrawerContentRow.Height = _isDrawerCollapsed ? new GridLength(42) : new GridLength(Math.Max(140, _state.DrawerHeight));
             DrawerCollapseBtn.Content = _isDrawerCollapsed ? "▴" : "▾";
             RebuildDrawerContents();
@@ -958,24 +967,22 @@ public partial class MainWindow : Window
         var starBtn = new System.Windows.Controls.Button
         {
             Content = dev.IsFavorite ? "★" : "☆",
+            ToolTip = dev.IsFavorite ? "取消星标置顶" : "星标置顶",
             Foreground = dev.IsFavorite ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(234, 179, 8)) : (SolidColorBrush)FindResource("TextSecondary"),
-            Background = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            FontSize = 15,
-            Cursor = System.Windows.Input.Cursors.Hand,
-            Margin = new Thickness(0, 0, 4, 0)
+            Style = (Style)FindResource("IconActionButtonStyle"),
+            FontSize = 14.5,
+            Margin = new Thickness(0, -2, 2, 0)
         };
         starBtn.Click += (_, _) => _state.DeviceBook.ToggleFavorite(dev.Id);
 
         var delBtn = new System.Windows.Controls.Button
         {
-            Content = "🗑",
-            ToolTip = "从设备列表删除",
-            Background = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            FontSize = 12.5,
+            Content = "✕",
+            ToolTip = "从设备列表移除",
+            Style = (Style)FindResource("IconActionButtonStyle"),
+            FontSize = 11.5,
             Foreground = (SolidColorBrush)FindResource("TextSecondary"),
-            Cursor = System.Windows.Input.Cursors.Hand
+            Margin = new Thickness(0, -1, 0, 0)
         };
         delBtn.Click += (_, _) => _state.DeleteManagedDevice(dev);
 
@@ -1377,7 +1384,16 @@ public partial class MainWindow : Window
     private void MaxRestoreWindow_Click(object sender, RoutedEventArgs e)
     {
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-        MaxRestoreBtn.Content = WindowState == WindowState.Maximized ? "❐" : "☐";
+        UpdateMaxRestoreIcon();
+    }
+
+    private void UpdateMaxRestoreIcon()
+    {
+        MaxRestoreIconPath.Data = Geometry.Parse(
+            WindowState == WindowState.Maximized
+                ? "M 2.5,0.5 H 9.5 V 7.5 M 0.5,2.5 H 7.5 V 9.5 H 0.5 Z"
+                : "M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z"
+        );
     }
 
     private void CloseWindow_Click(object sender, RoutedEventArgs e) => Close();
@@ -1387,9 +1403,59 @@ public partial class MainWindow : Window
     private void NavSecurityBtn_Click(object sender, RoutedEventArgs e) => _state.SelectedTab = SidebarTab.SecurityQuality;
     private void NavNetworkBtn_Click(object sender, RoutedEventArgs e) => _state.SelectedTab = SidebarTab.NetworkLogs;
 
-    private void ToggleHostBtn_Click(object sender, RoutedEventArgs e) => _state.ToggleHostService();
-    private void StartHostBtn_Click(object sender, RoutedEventArgs e) => _state.StartHost();
+    private void ToggleHostBtn_Click(object sender, RoutedEventArgs e) => ToggleHostWithAntiFraudCheck();
+    private void StartHostBtn_Click(object sender, RoutedEventArgs e) => StartHostWithAntiFraudCheck();
     private void DisconnectAllBtn_Click(object sender, RoutedEventArgs e) => _state.DisconnectAllClientSessions();
+
+    public void ToggleHostWithAntiFraudCheck()
+    {
+        if (_state.IsHostRunning)
+            _state.StopHostService();
+        else
+            StartHostWithAntiFraudCheck();
+    }
+
+    public void StartHostWithAntiFraudCheck()
+    {
+        if (_state.IsHostRunning || _isShowingAntiFraudDialog)
+            return;
+
+        if (!_state.SuppressAntiFraudWarning)
+        {
+            _isShowingAntiFraudDialog = true;
+            try
+            {
+                var dlg = new AntiFraudWarningDialog();
+                if (IsVisible && WindowState != WindowState.Minimized)
+                {
+                    dlg.Owner = this;
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                }
+                else
+                {
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                    dlg.Topmost = true;
+                }
+
+                if (dlg.ShowDialog() != true)
+                {
+                    _state.StatusLog = "已取消开启本机被控";
+                    return;
+                }
+
+                if (dlg.DontShowAgain)
+                {
+                    _state.SuppressAntiFraudWarning = true;
+                }
+            }
+            finally
+            {
+                _isShowingAntiFraudDialog = false;
+            }
+        }
+
+        _state.StartHost();
+    }
 
     private void CopyMyCodeBtn_Click(object sender, RoutedEventArgs e) => _state.CopyMyDeviceCode();
     private void CopyInviteBtn_Click(object sender, RoutedEventArgs e) => _state.CopyInvitationBundle();

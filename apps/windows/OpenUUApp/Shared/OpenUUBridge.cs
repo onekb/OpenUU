@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace OpenUU.Shared;
 
@@ -10,6 +11,10 @@ namespace OpenUU.Shared;
 /// </summary>
 public sealed unsafe class OpenUUBridge : IDisposable
 {
+    private static readonly JsonSerializerOptions WireJsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
     private static readonly OpenUUNativeMethods.ControlCallback StaticControlCb = OnControlTrampoline;
     private static readonly OpenUUNativeMethods.VideoCallback StaticVideoCb = OnVideoTrampoline;
     private static readonly OpenUUNativeMethods.AudioCallback StaticAudioCb = OnAudioTrampoline;
@@ -199,7 +204,7 @@ public sealed unsafe class OpenUUBridge : IDisposable
     public bool SetWanConfig(WanConfigModel config)
     {
         if (_disposed || _runtime == IntPtr.Zero) return false;
-        string json = JsonSerializer.Serialize(config);
+        string json = JsonSerializer.Serialize(config, WireJsonOptions);
         var bytes = ToNullTerminatedUtf8(json);
         fixed (byte* p = bytes)
         {
@@ -235,7 +240,7 @@ public sealed unsafe class OpenUUBridge : IDisposable
     public void ProbeDevicesOnline(IReadOnlyCollection<DeviceProbeQueryModel> queries)
     {
         if (_disposed || _runtime == IntPtr.Zero || queries.Count == 0) return;
-        string json = JsonSerializer.Serialize(queries);
+        string json = JsonSerializer.Serialize(queries, WireJsonOptions);
         var bytes = ToNullTerminatedUtf8(json);
         fixed (byte* p = bytes)
         {
@@ -457,11 +462,15 @@ public sealed unsafe class OpenUUBridge : IDisposable
     public void SendWindowTopology(IReadOnlyList<WindowTopologyItem> items)
     {
         if (_disposed || _runtime == IntPtr.Zero) return;
-        string json = JsonSerializer.Serialize(items);
+        string json = JsonSerializer.Serialize(items, WireJsonOptions);
         var bytes = ToNullTerminatedUtf8(json);
         fixed (byte* p = bytes)
         {
-            OpenUUNativeMethods.openuu_send_window_topology_json(_runtime, p);
+            int rc = OpenUUNativeMethods.openuu_send_window_topology_json(_runtime, p);
+            if (rc != 0)
+            {
+                OpenUULogger.Shared.Warn("TOPO", $"openuu_send_window_topology_json returned {rc} (count={items.Count})");
+            }
         }
     }
 
@@ -474,11 +483,15 @@ public sealed unsafe class OpenUUBridge : IDisposable
     public void SendAppList(IReadOnlyList<RemoteAppSummary> apps)
     {
         if (_disposed || _runtime == IntPtr.Zero) return;
-        string json = JsonSerializer.Serialize(apps);
+        string json = JsonSerializer.Serialize(apps, WireJsonOptions);
         var bytes = ToNullTerminatedUtf8(json);
         fixed (byte* p = bytes)
         {
-            OpenUUNativeMethods.openuu_send_app_list_json(_runtime, p);
+            int rc = OpenUUNativeMethods.openuu_send_app_list_json(_runtime, p);
+            if (rc != 0)
+            {
+                OpenUULogger.Shared.Warn("HOST", $"openuu_send_app_list_json returned {rc} (count={apps.Count})");
+            }
         }
     }
 

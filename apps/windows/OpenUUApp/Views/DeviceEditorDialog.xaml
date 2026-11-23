@@ -1,120 +1,176 @@
 <Window x:Class="OpenUU.Views.DeviceEditorDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:views="clr-namespace:OpenUU.Views"
         Title="管理受控端设备"
-        Width="480"
+        Width="496"
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
         ResizeMode="NoResize"
+        ShowInTaskbar="False"
         Background="{StaticResource CardBg}"
-        UseLayoutRounding="True">
-    <StackPanel Margin="24">
-        <TextBlock x:Name="DialogHeading"
-                   Text="添加受控端设备"
-                   FontSize="17"
-                   FontWeight="Bold"
-                   Foreground="{StaticResource TextPrimary}"
-                   Margin="0,0,0,16" />
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            ResizeBorderThickness="0"
+                            GlassFrameThickness="1"
+                            CornerRadius="12"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
 
-        <TextBlock Text="设备备注名称" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-        <TextBox x:Name="AliasBox"
-                 Style="{StaticResource RoundedTextBoxStyle}"
-                 ToolTip="例如：家里主机 / 公司 Mac Studio / 工作室电脑"
-                 Margin="0,0,0,12" />
+    <Border BorderBrush="{StaticResource ControlBorder}"
+            BorderThickness="1"
+            CornerRadius="12"
+            Background="{StaticResource CardBg}"
+            ClipToBounds="True">
+        <StackPanel>
+            <!-- Top Draggable Dialog Header -->
+            <Grid Background="#F8FAFC"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-        <Grid Margin="0,0,0,12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="12" />
-                <ColumnDefinition Width="92" />
-            </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="22,15,12,13">
+                    <TextBlock x:Name="DialogHeading"
+                               Text="添加受控端设备"
+                               FontSize="16.5"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimary}" />
+                    <TextBlock Text="保存设备代码或连接串与密码后，支持随时一键免输并发操控"
+                               FontSize="11.5"
+                               Foreground="{StaticResource TextSecondary}"
+                               Margin="0,2,0,0" />
+                </StackPanel>
 
-            <StackPanel Grid.Column="0">
-                <TextBlock Text="设备代码 / openuu://直连串 / IP或域名" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                <views:SmartTargetTextBox x:Name="TargetBox"
-                                          Style="{StaticResource RoundedTextBoxStyle}" />
-            </StackPanel>
+                <Button Grid.Column="1"
+                        VerticalAlignment="Top"
+                        Style="{StaticResource WindowCloseBtnStyle}"
+                        ToolTip="关闭"
+                        Click="CancelBtn_Click">
+                    <Canvas Width="10" Height="10">
+                        <Path Data="M 0.5,0.5 L 9.5,9.5 M 9.5,0.5 L 0.5,9.5"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.3" />
+                    </Canvas>
+                </Button>
+            </Grid>
 
-            <StackPanel Grid.Column="2">
-                <TextBlock Text="端口" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                <TextBox x:Name="PortBox"
-                         Text="39481"
-                         FontFamily="Consolas"
-                         Style="{StaticResource RoundedTextBoxStyle}" />
-            </StackPanel>
-        </Grid>
+            <Border Height="1" Background="{StaticResource DividerBrush}" />
 
-        <Grid Margin="0,0,0,12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="12" />
-                <ColumnDefinition Width="120" />
-            </Grid.ColumnDefinitions>
+            <!-- Form Body -->
+            <StackPanel Margin="22,18,22,20">
+                <TextBlock Text="设备备注名称" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                <TextBox x:Name="AliasBox"
+                         Style="{StaticResource RoundedTextBoxStyle}"
+                         views:UiAssist.Placeholder="例如：家里主机 / 公司 Mac Studio / 工作室电脑"
+                         ToolTip="例如：家里主机 / 公司 Mac Studio / 工作室电脑"
+                         Margin="0,0,0,12" />
 
-            <StackPanel Grid.Column="0">
-                <TextBlock Text="保存访问密码（保存后一键免输连接）" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                <Grid>
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="6" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="92" />
                     </Grid.ColumnDefinitions>
-                    <PasswordBox x:Name="PasswordSecureBox"
-                                 Grid.Column="0"
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="设备代码 / openuu://直连串 / IP或域名" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                        <views:SmartTargetTextBox x:Name="TargetBox"
+                                                  Style="{StaticResource RoundedTextBoxStyle}"
+                                                  views:UiAssist.Placeholder="输入 9 位设备码或 IP" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="端口" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                        <TextBox x:Name="PortBox"
+                                 Text="39481"
                                  FontFamily="Consolas"
-                                 Style="{StaticResource RoundedPasswordBoxStyle}"
-                                 PasswordChanged="PasswordSecureBox_PasswordChanged" />
-                    <TextBox x:Name="PasswordBox"
-                             Grid.Column="0"
-                             Visibility="Collapsed"
-                             FontFamily="Consolas"
-                             Style="{StaticResource RoundedTextBoxStyle}"
-                             TextChanged="PasswordBox_TextChanged" />
-                    <Button x:Name="ToggleDialogPwEyeBtn"
-                            Grid.Column="2"
-                            Content="👁"
-                            ToolTip="点击显示/隐藏访问密码"
-                            Padding="9,5"
-                            FontSize="12"
-                            Style="{StaticResource SecondaryButtonStyle}"
-                            Click="ToggleDialogPwEyeBtn_Click" />
+                                 Style="{StaticResource RoundedTextBoxStyle}" />
+                    </StackPanel>
                 </Grid>
+
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="128" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="保存访问密码（保存后一键免输连接）" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <PasswordBox x:Name="PasswordSecureBox"
+                                         Grid.Column="0"
+                                         FontFamily="Consolas"
+                                         Style="{StaticResource RoundedPasswordBoxStyle}"
+                                         PasswordChanged="PasswordSecureBox_PasswordChanged" />
+                            <TextBox x:Name="PasswordBox"
+                                     Grid.Column="0"
+                                     Visibility="Collapsed"
+                                     FontFamily="Consolas"
+                                     Style="{StaticResource RoundedTextBoxStyle}"
+                                     views:UiAssist.Placeholder="可留空"
+                                     TextChanged="PasswordBox_TextChanged" />
+                            <Button x:Name="ToggleDialogPwEyeBtn"
+                                    Grid.Column="2"
+                                    Content="👁"
+                                    ToolTip="点击显示/隐藏访问密码"
+                                    Padding="9,5"
+                                    FontSize="12"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="ToggleDialogPwEyeBtn_Click" />
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="所属分组" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                        <ComboBox x:Name="GroupCombo"
+                                  Height="35"
+                                  VerticalContentAlignment="Center"
+                                  IsEditable="True" />
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="备注说明（可选）" FontSize="12" FontWeight="Medium" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
+                <TextBox x:Name="NotesBox"
+                         Style="{StaticResource RoundedTextBoxStyle}"
+                         views:UiAssist.Placeholder="可选备注信息"
+                         Margin="0,0,0,14" />
+
+                <CheckBox x:Name="FavoriteCheck"
+                          Style="{StaticResource ModernToggleSwitchStyle}"
+                          Content="星标置顶到常用列表首位"
+                          Foreground="{StaticResource TextPrimary}"
+                          FontSize="12.5"
+                          Margin="0,0,0,18" />
+
+                <Border Height="1" Background="{StaticResource DividerBrush}" Margin="0,0,0,16" />
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="取消"
+                            IsCancel="True"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Width="88"
+                            Margin="0,0,10,0"
+                            Click="CancelBtn_Click" />
+                    <Button x:Name="SaveBtn"
+                            Content="保存设备"
+                            IsDefault="True"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            Width="108"
+                            Click="SaveBtn_Click" />
+                </StackPanel>
             </StackPanel>
-
-            <StackPanel Grid.Column="2">
-                <TextBlock Text="所属分组" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                <ComboBox x:Name="GroupCombo"
-                          Height="34"
-                          VerticalContentAlignment="Center"
-                          IsEditable="True" />
-            </StackPanel>
-        </Grid>
-
-        <TextBlock Text="备注说明（可选）" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-        <TextBox x:Name="NotesBox"
-                 Style="{StaticResource RoundedTextBoxStyle}"
-                 Margin="0,0,0,12" />
-
-        <CheckBox x:Name="FavoriteCheck"
-                  Content="星标置顶到常用列表首位"
-                  Foreground="{StaticResource TextPrimary}"
-                  FontSize="12.5"
-                  Margin="0,0,0,18" />
-
-        <Border Height="1" Background="{StaticResource DividerBrush}" Margin="0,0,0,16" />
-
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="取消"
-                    Style="{StaticResource SecondaryButtonStyle}"
-                    Width="84"
-                    Margin="0,0,10,0"
-                    Click="CancelBtn_Click" />
-            <Button x:Name="SaveBtn"
-                    Content="保存设备"
-                    Style="{StaticResource PrimaryButtonStyle}"
-                    Width="104"
-                    Click="SaveBtn_Click" />
         </StackPanel>
-    </StackPanel>
+    </Border>
 </Window>

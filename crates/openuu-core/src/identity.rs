@@ -36,6 +36,13 @@ pub fn default_relay_auth_token() -> String {
     DEFAULT_RELAY_AUTH_TOKEN.to_string()
 }
 
+fn deserialize_null_string<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// Multi-layer WAN & Relay configuration (supports CF Tunnel zero-IP relay, HK private server + public n0 fallback).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WanConfig {
@@ -46,7 +53,7 @@ pub struct WanConfig {
     #[serde(default = "default_relay_url")]
     pub relay_url: String,
     /// Optional Bearer token sent to private `relay_url` (`Authorization: Bearer <token>`).
-    #[serde(default = "default_relay_auth_token")]
+    #[serde(default = "default_relay_auth_token", deserialize_with = "deserialize_null_string")]
     pub relay_auth_token: String,
     /// Keep public n0 relays & Pkarr/DNS lookup enabled as ultimate fallback behind custom relay.
     #[serde(default = "default_true")]

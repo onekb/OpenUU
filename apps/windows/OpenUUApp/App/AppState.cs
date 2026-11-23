@@ -30,6 +30,7 @@ public sealed class UserPrefsModel
     public bool MapCtrlToMacCommand { get; set; } = true;
     public string CaptureScheme { get; set; } = "main";
     public double DrawerHeight { get; set; } = 215.0;
+    public bool SuppressAntiFraudWarning { get; set; } = false;
     public string UpdatePolicy { get; set; } = "launch_and_daily";
     public long LastUpdateCheckEpoch { get; set; } = 0;
     public string SkippedUpdateVersion { get; set; } = "";
@@ -367,6 +368,20 @@ public sealed class AppState : ObservableBase, IDisposable
         }
     }
 
+    private bool _suppressAntiFraudWarning;
+    public bool SuppressAntiFraudWarning
+    {
+        get => _suppressAntiFraudWarning;
+        set
+        {
+            if (SetField(ref _suppressAntiFraudWarning, value))
+            {
+                _prefs.SuppressAntiFraudWarning = value;
+                SavePrefs();
+            }
+        }
+    }
+
     public bool IsRunningAsAdministrator { get; } = CheckIsAdmin();
 
     // Quick Connect Fields
@@ -595,6 +610,7 @@ public sealed class AppState : ObservableBase, IDisposable
         _showDebugHud = _prefs.DebugHud;
         _mapCtrlToMacCommand = _prefs.MapCtrlToMacCommand;
         _captureScheme = string.IsNullOrWhiteSpace(_prefs.CaptureScheme) ? "main" : _prefs.CaptureScheme;
+        _suppressAntiFraudWarning = _prefs.SuppressAntiFraudWarning;
         Updater.Policy = UpdateCheckPolicyExtensions.FromCode(_prefs.UpdatePolicy);
         Updater.LastCheckEpochSeconds = _prefs.LastUpdateCheckEpoch;
         Updater.SkippedVersion = _prefs.SkippedUpdateVersion ?? "";
@@ -612,7 +628,7 @@ public sealed class AppState : ObservableBase, IDisposable
         }
     }
 
-    private static bool CheckIsAdmin()
+    internal static bool CheckIsAdmin()
     {
         try
         {
@@ -789,6 +805,7 @@ public sealed class AppState : ObservableBase, IDisposable
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => StatusLog = $"[被控端] {msg}");
         };
 
+        InputInjector.IsCurrentProcessAdmin = IsRunningAsAdministrator;
         InputInjector.SilentMode = _silentClickMode;
         InputInjector.HoverCursorSync = _hoverCursorSync;
         InputInjector.OnDebugLog = msg =>
@@ -1287,21 +1304,43 @@ public sealed class AppState : ObservableBase, IDisposable
         StateMutated?.Invoke();
     }
 
+    private readonly SemaphoreSlim _appListPushGate = new(1, 1);
+
     private void PushHostAppListToClient()
     {
-        try
+        _ = Task.Run(async () =>
         {
-            var apps = WindowCatalog.BuildHostAppSummaries();
-            NotificationMonitor.UpdateWatchedApps(
-                apps.Where(a => a.BundleId != MultiWindowCaptureManager.FullDesktopBundleId)
-                    .Select(a => (a.BundleId, a.Name))
-            );
-            HostBridge.SendAppList(apps);
-        }
-        catch (Exception ex)
-        {
-            StatusLog = $"[被控端] 获取应用列表失败: {ex.Message}";
-        }
+            await _appListPushGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var apps = WindowCatalog.BuildHostAppSummaries();
+                HostBridge.SendAppList(apps);
+                OpenUULogger.Shared.Info("HOST", $"sent app list count={apps.Count} admin={IsRunningAsAdministrator}");
+
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    NotificationMonitor.UpdateWatchedApps(
+                        apps.Where(a => a.BundleId != MultiWindowCaptureManager.FullDesktopBundleId)
+                            .Select(a => (a.BundleId, a.Name))
+                    );
+                });
+            }
+            catch (Exception ex)
+            {
+                string detail = string.IsNullOrWhiteSpace(ex.Message)
+                    ? ex.GetType().FullName ?? "UnknownError"
+                    : $"{ex.GetType().Name}: {ex.Message}";
+                OpenUULogger.Shared.Error("HOST", $"PushHostAppListToClient failed: {ex}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    StatusLog = $"[被控端] 获取应用列表失败: {detail}";
+                });
+            }
+            finally
+            {
+                _appListPushGate.Release();
+            }
+        });
     }
 
     private void EnqueueClipboardFile(string filePath)
@@ -1466,14 +1505,22 @@ public sealed class AppState : ObservableBase, IDisposable
     {
         string? exe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) return;
+        bool wasHostRunning = IsHostRunning;
         try
         {
-            Process.Start(new ProcessStartInfo(exe)
+            var proc = Process.Start(new ProcessStartInfo(exe)
             {
                 UseShellExecute = true,
-                Verb = "runas"
+                Verb = "runas",
+                Arguments = wasHostRunning ? "--relaunch-admin --autostart-host" : "--relaunch-admin"
             });
-            System.Windows.Application.Current?.Shutdown();
+            if (proc != null)
+            {
+                if (System.Windows.Application.Current is OpenUUApplication app)
+                    app.ShutdownCleanly();
+                else
+                    System.Windows.Application.Current?.Shutdown();
+            }
         }
         catch
         {

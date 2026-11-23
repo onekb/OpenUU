@@ -1,8 +1,11 @@
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Interop;
 
 namespace OpenUU.Views;
 
 using OpenUU.Client;
+using OpenUU.Shared;
 
 public partial class DeviceEditorDialog : Window
 {
@@ -19,6 +22,13 @@ public partial class DeviceEditorDialog : Window
     public DeviceEditorDialog(ManagedRemoteDevice? existing = null)
     {
         InitializeComponent();
+
+        SourceInitialized += (_, _) =>
+        {
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            int roundPref = Win32Interop.DWMWCP_ROUND;
+            Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_WINDOW_CORNER_PREFERENCE, ref roundPref, sizeof(int));
+        };
 
         foreach (var g in DeviceBookStore.DefaultGroups)
             GroupCombo.Items.Add(g);
@@ -45,6 +55,14 @@ public partial class DeviceEditorDialog : Window
 
         TargetBox.TextChanged += (_, _) => UpdateSaveEnabled();
         UpdateSaveEnabled();
+    }
+
+    private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            try { DragMove(); } catch { }
+        }
     }
 
     private void UpdateSaveEnabled()

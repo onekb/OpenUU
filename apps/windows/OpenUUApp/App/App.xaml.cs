@@ -1,5 +1,9 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -12,9 +16,15 @@ using OpenUU.Views;
 
 public partial class OpenUUApplication : System.Windows.Application
 {
+    private const string ActivateEventName = @"Local\OpenUU.ActivateWindow.v1";
+    private const string TakeoverExitEventName = @"Local\OpenUU.TakeoverExit.v1";
+
     private AppState? _state;
     private MainWindow? _mainWindow;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private EventWaitHandle? _activateEvent;
+    private EventWaitHandle? _takeoverExitEvent;
+    private CancellationTokenSource? _ipcCts;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -23,6 +33,9 @@ public partial class OpenUUApplication : System.Windows.Application
         string[] args = e.Args;
         string? configDir = ParseFlag(args, "--config-dir");
         string? logDir = ParseFlag(args, "--log-dir");
+        bool isE2E = args.Any(a => a.StartsWith("--e2e-", StringComparison.OrdinalIgnoreCase));
+        bool autoStartHost = HasFlag(args, "--autostart-host");
+
         if (!string.IsNullOrWhiteSpace(logDir))
             Environment.SetEnvironmentVariable("OPENUU_LOG_DIR", logDir.Trim());
 
@@ -31,6 +44,17 @@ public partial class OpenUUApplication : System.Windows.Application
             string cacheDir = Path.Combine(configDir.Trim(), "cache");
             Directory.CreateDirectory(cacheDir);
             OpenUUBridge.SetGlobalAppDirs(configDir.Trim(), cacheDir);
+        }
+
+        // Coordinate single-instance ownership in normal desktop mode so a tray-minimized non-admin instance
+        // never holds UDP port 39481 when the user launches OpenUU as Administrator (or double-clicks shortcut).
+        if (string.IsNullOrWhiteSpace(configDir) && !isE2E)
+        {
+            if (!AcquireSingleInstanceOrYield())
+            {
+                Shutdown(0);
+                return;
+            }
         }
 
         Win32Interop.SetCurrentProcessExplicitAppUserModelID("ren.onekb.openuu.windows");
@@ -48,7 +72,185 @@ public partial class OpenUUApplication : System.Windows.Application
         SetupSystemTrayIcon();
         _mainWindow.Show();
 
+        if (autoStartHost)
+        {
+            Dispatcher.BeginInvoke(async () =>
+            {
+                for (int attempt = 0; attempt < 6; attempt++)
+                {
+                    if (_state.StartHost())
+                    {
+                        _state.StatusLog = "[被控端] 已以管理员权限自动恢复本机被控监听";
+                        break;
+                    }
+                    await Task.Delay(250);
+                }
+            });
+        }
+
         ConfigureCliAutomationIfPresent(args);
+    }
+
+    private bool AcquireSingleInstanceOrYield()
+    {
+        bool isAdmin = AppState.CheckIsAdmin();
+        int myPid = Environment.ProcessId;
+        int mySession = -1;
+        try { mySession = Process.GetCurrentProcess().SessionId; } catch { }
+
+        var otherProcs = GetOtherInteractiveOpenUUProcesses(myPid, mySession);
+
+        if (otherProcs.Count > 0)
+        {
+            if (isAdmin)
+            {
+                // Elevated launch (via "以管理员权限重启" or right-click "以管理员身份运行"):
+                // Ask any existing instance in this session to exit cleanly so port 39481 & identity are handed over.
+                TrySignalNamedEvent(TakeoverExitEventName);
+                var sw = Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 1400)
+                {
+                    if (otherProcs.All(HasProcessExitedSafe))
+                        break;
+                    Thread.Sleep(80);
+                }
+
+                // Clean up any legacy stuck tray instance that predates TakeoverExitEventName
+                foreach (var p in otherProcs.Where(p => !HasProcessExitedSafe(p)))
+                {
+                    try { p.Kill(); } catch { }
+                    try { p.WaitForExit(500); } catch { }
+                }
+            }
+            else
+            {
+                // Non-elevated duplicate launch: bring the already-running instance's MainWindow to front and exit.
+                TrySignalNamedEvent(ActivateEventName);
+                return false;
+            }
+        }
+
+        foreach (var p in otherProcs)
+        {
+            try { p.Dispose(); } catch { }
+        }
+
+        SetupSingleInstanceListeners();
+        return true;
+    }
+
+    private static List<Process> GetOtherInteractiveOpenUUProcesses(int myPid, int mySession)
+    {
+        var list = new List<Process>();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("OpenUU"))
+            {
+                if (p.Id == myPid)
+                {
+                    p.Dispose();
+                    continue;
+                }
+                try
+                {
+                    if (mySession >= 0 && p.SessionId != mySession)
+                    {
+                        p.Dispose();
+                        continue;
+                    }
+                }
+                catch
+                {
+                }
+                list.Add(p);
+            }
+        }
+        catch
+        {
+        }
+        return list;
+    }
+
+    private static bool HasProcessExitedSafe(Process p)
+    {
+        try { return p.HasExited; }
+        catch { return true; }
+    }
+
+    private static void TrySignalNamedEvent(string name)
+    {
+        try
+        {
+            using var ev = EventWaitHandle.OpenExisting(name);
+            ev.Set();
+        }
+        catch
+        {
+        }
+    }
+
+    private static EventWaitHandle? CreatePermissiveAutoResetEvent(string name)
+    {
+        try
+        {
+            var sec = new EventWaitHandleSecurity();
+            sec.AddAccessRule(new EventWaitHandleAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                EventWaitHandleRights.Modify | EventWaitHandleRights.Synchronize,
+                AccessControlType.Allow
+            ));
+            return EventWaitHandleAcl.Create(false, EventResetMode.AutoReset, name, out _, sec);
+        }
+        catch
+        {
+            try { return new EventWaitHandle(false, EventResetMode.AutoReset, name); }
+            catch { return null; }
+        }
+    }
+
+    private void SetupSingleInstanceListeners()
+    {
+        _activateEvent = CreatePermissiveAutoResetEvent(ActivateEventName);
+        _takeoverExitEvent = CreatePermissiveAutoResetEvent(TakeoverExitEventName);
+        _ipcCts = new CancellationTokenSource();
+        var ct = _ipcCts.Token;
+
+        if (_activateEvent is { } actEv)
+        {
+            _ = Task.Factory.StartNew(() =>
+            {
+                var handles = new WaitHandle[] { actEv, ct.WaitHandle };
+                while (!ct.IsCancellationRequested)
+                {
+                    int idx = WaitHandle.WaitAny(handles);
+                    if (idx == 0 && !ct.IsCancellationRequested)
+                        Dispatcher.BeginInvoke(ShowMainWindow);
+                    else
+                        break;
+                }
+            }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        if (_takeoverExitEvent is { } exitEv)
+        {
+            _ = Task.Factory.StartNew(() =>
+            {
+                var handles = new WaitHandle[] { exitEv, ct.WaitHandle };
+                int idx = WaitHandle.WaitAny(handles);
+                if (idx == 0 && !ct.IsCancellationRequested)
+                    Dispatcher.BeginInvoke(ShutdownCleanly);
+            }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+    }
+
+    private void DisposeIpcListeners()
+    {
+        try { _ipcCts?.Cancel(); } catch { }
+        try { _activateEvent?.Dispose(); } catch { }
+        try { _takeoverExitEvent?.Dispose(); } catch { }
+        _ipcCts = null;
+        _activateEvent = null;
+        _takeoverExitEvent = null;
     }
 
     private void SetupSystemTrayIcon()
@@ -64,12 +266,36 @@ public partial class OpenUUApplication : System.Windows.Application
                 winIcon = new Icon(s);
             }
 
-            var menu = new System.Windows.Forms.ContextMenuStrip();
-            menu.Items.Add("打开 OpenUU 主面板", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
-            menu.Items.Add("开启 / 关闭本机被控", null, (_, _) => Dispatcher.Invoke(() => _state?.ToggleHostService()));
-            menu.Items.Add("断开所有远控连接", null, (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
-            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            menu.Items.Add("退出 OpenUU", null, (_, _) => Dispatcher.Invoke(ShutdownCleanly));
+            var menu = new System.Windows.Forms.ContextMenuStrip
+            {
+                ShowImageMargin = false,
+                BackColor = System.Drawing.Color.White,
+                ForeColor = System.Drawing.Color.FromArgb(15, 23, 42),
+                Font = new System.Drawing.Font("Microsoft YaHei UI", 9.25f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point),
+                Padding = new System.Windows.Forms.Padding(5),
+                Renderer = new ModernTrayMenuRenderer()
+            };
+
+            void AddTrayItem(string label, EventHandler onClick, bool danger = false)
+            {
+                var item = new System.Windows.Forms.ToolStripMenuItem(label)
+                {
+                    Padding = new System.Windows.Forms.Padding(10, 5, 10, 5),
+                    ForeColor = danger ? System.Drawing.Color.FromArgb(220, 38, 38) : System.Drawing.Color.FromArgb(15, 23, 42)
+                };
+                item.Click += onClick;
+                menu.Items.Add(item);
+            }
+
+            AddTrayItem("打开 OpenUU 主面板", (_, _) => Dispatcher.Invoke(ShowMainWindow));
+            AddTrayItem("开启 / 关闭本机被控", (_, _) => Dispatcher.Invoke(() => _mainWindow?.ToggleHostWithAntiFraudCheck()));
+            if (_state != null && !_state.IsRunningAsAdministrator)
+            {
+                AddTrayItem("以管理员权限重启 (支持操控管理员窗口)", (_, _) => Dispatcher.Invoke(() => _state?.RelaunchAsAdministrator()));
+            }
+            AddTrayItem("断开所有远控连接", (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
+            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator { Margin = new System.Windows.Forms.Padding(6, 3, 6, 3) });
+            AddTrayItem("退出 OpenUU", (_, _) => Dispatcher.Invoke(ShutdownCleanly), danger: true);
 
             _trayIcon = new System.Windows.Forms.NotifyIcon
             {
@@ -99,6 +325,7 @@ public partial class OpenUUApplication : System.Windows.Application
 
     public void ShutdownCleanly()
     {
+        DisposeIpcListeners();
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;
@@ -118,6 +345,7 @@ public partial class OpenUUApplication : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        DisposeIpcListeners();
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;
@@ -359,5 +587,57 @@ public partial class OpenUUApplication : System.Windows.Application
         {
             return OpenUUNativeMethods.openuu_aac_encoder_encode_pcm16(enc, pIn, 1024, pts, pOut, aacOut.Length);
         }
+    }
+
+    private sealed class ModernTrayMenuRenderer : System.Windows.Forms.ToolStripProfessionalRenderer
+    {
+        public ModernTrayMenuRenderer() : base(new ModernTrayColorTable())
+        {
+            RoundedEdges = true;
+        }
+
+        protected override void OnRenderMenuItemBackground(System.Windows.Forms.ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected)
+                return;
+
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var rect = new System.Drawing.Rectangle(2, 1, e.Item.Width - 4, e.Item.Height - 2);
+            using var path = BuildRoundRect(rect, 6);
+            bool isDanger = e.Item.ForeColor.R > 180 && e.Item.ForeColor.G < 80;
+            using var fill = new System.Drawing.SolidBrush(
+                isDanger ? System.Drawing.Color.FromArgb(254, 226, 226) : System.Drawing.Color.FromArgb(224, 242, 254)
+            );
+            g.FillPath(fill, path);
+        }
+
+        protected override void OnRenderSeparator(System.Windows.Forms.ToolStripSeparatorRenderEventArgs e)
+        {
+            using var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(226, 232, 240), 1f);
+            int y = e.Item.Height / 2;
+            e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath BuildRoundRect(System.Drawing.Rectangle r, int radius)
+        {
+            int d = radius * 2;
+            var p = new System.Drawing.Drawing2D.GraphicsPath();
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+    }
+
+    private sealed class ModernTrayColorTable : System.Windows.Forms.ProfessionalColorTable
+    {
+        public override System.Drawing.Color ToolStripDropDownBackground => System.Drawing.Color.White;
+        public override System.Drawing.Color MenuBorder => System.Drawing.Color.FromArgb(203, 213, 225);
+        public override System.Drawing.Color ImageMarginGradientBegin => System.Drawing.Color.White;
+        public override System.Drawing.Color ImageMarginGradientMiddle => System.Drawing.Color.White;
+        public override System.Drawing.Color ImageMarginGradientEnd => System.Drawing.Color.White;
     }
 }

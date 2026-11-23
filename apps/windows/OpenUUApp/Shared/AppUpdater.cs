@@ -403,20 +403,37 @@ public sealed class AppUpdater : ObservableBase
         }
     }
 
+    private static bool IsInnoSetupInstallation()
+    {
+        try
+        {
+            string baseDir = AppContext.BaseDirectory;
+            return File.Exists(Path.Combine(baseDir, "unins000.exe")) ||
+                   File.Exists(Path.Combine(baseDir, "unins001.exe"));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static GithubAssetDto? PickWindowsAsset(List<GithubAssetDto>? assets)
     {
         if (assets == null) return null;
         var valid = assets.Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.BrowserDownloadUrl)).ToList();
-        return valid.FirstOrDefault(a =>
-               {
-                   string n = a.Name!.ToLowerInvariant();
-                   return n.Contains("windows") && n.EndsWith(".zip");
-               })
-               ?? valid.FirstOrDefault(a =>
-               {
-                   string n = a.Name!.ToLowerInvariant();
-                   return n.Contains("windows") && (n.EndsWith(".exe") || n.EndsWith(".msi"));
-               });
+        var setupExe = valid.FirstOrDefault(a =>
+        {
+            string n = a.Name!.ToLowerInvariant();
+            return n.Contains("windows") && (n.EndsWith(".exe") || n.EndsWith(".msi"));
+        });
+        var portableZip = valid.FirstOrDefault(a =>
+        {
+            string n = a.Name!.ToLowerInvariant();
+            return n.Contains("windows") && n.EndsWith(".zip");
+        });
+        return IsInnoSetupInstallation()
+            ? (setupExe ?? portableZip)
+            : (portableZip ?? setupExe);
     }
 
     public void OpenReleaseInBrowser()
@@ -519,8 +536,35 @@ public sealed class AppUpdater : ObservableBase
 
             if (!archivePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
-                InstallStatusText = "正在启动安装程序...";
-                Process.Start(new ProcessStartInfo(archivePath) { UseShellExecute = true });
+                InstallStatusText = $"正在静默升级新版本 ({info.TagName}) 并自动重启...";
+                string targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string targetExe = Path.Combine(targetDir, "OpenUU.exe");
+                int currentPid = Environment.ProcessId;
+                string setupCmdPath = Path.Combine(Path.GetTempPath(), $"openuu-setup-update-{currentPid}.cmd");
+                var setupScript = new StringBuilder();
+                setupScript.AppendLine("@echo off");
+                setupScript.AppendLine("chcp 65001 >nul");
+                setupScript.AppendLine("for /L %%i in (1,1,40) do (");
+                setupScript.AppendLine($"  tasklist /FI \"PID eq {currentPid}\" 2>nul | find \"{currentPid}\" >nul");
+                setupScript.AppendLine("  if errorlevel 1 goto run_setup");
+                setupScript.AppendLine("  timeout /t 1 /nobreak >nul");
+                setupScript.AppendLine(")");
+                setupScript.AppendLine(":run_setup");
+                setupScript.AppendLine($"\"{archivePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS");
+                setupScript.AppendLine($"if exist \"{targetExe}\" start \"\" \"{targetExe}\"");
+                setupScript.AppendLine($"rmdir /S /Q \"{workDir}\" 2>nul");
+                setupScript.AppendLine("del \"%~f0\" 2>nul");
+                await File.WriteAllTextAsync(setupCmdPath, setupScript.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/C \"\"{setupCmdPath}\"\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+                await Task.Delay(200, ct);
                 OnRequestShutdownForUpdate?.Invoke();
                 return;
             }

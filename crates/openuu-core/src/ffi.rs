@@ -236,6 +236,14 @@ struct IdentitySnapshotJson {
     trusted_peers: Vec<TrustedPeer>,
 }
 
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Serialize, Deserialize)]
 struct WindowSummaryJson {
     window_id: u32,
@@ -251,19 +259,23 @@ struct WindowSummaryJson {
     width: f32,
     #[serde(default)]
     height: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     icon_png_b64: String,
 }
 
 #[derive(Serialize, Deserialize)]
 struct AppSummaryJson {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     bundle_id: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     name: String,
-    pid: u32,
-    window_count: u32,
     #[serde(default)]
+    pid: u32,
+    #[serde(default)]
+    window_count: u32,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     icon_png_b64: String,
 }
 
@@ -511,8 +523,9 @@ fn emit_control_json(cb: Option<OpenUUControlCallback>, ctx: SendPtr, evt: &Cont
     }
 }
 
-/// Spawns control/video callback forwarders AND a periodic link-quality observer (notifying Swift immediately
-/// when an Iroh Relay session upgrades to Direct UDP/IPv6 hole-punching or RTT shifts!).
+/// Installs `session` into `active_session` BEFORE emitting `connected_msg`, ensuring any immediate
+/// `openuu_send_app_list_json` / `openuu_request_app_list` triggered from `on_status` finds the live session,
+/// then spawns control/video/audio forwarders and periodic link-quality observers.
 fn attach_session_callbacks(
     session: Arc<PeerSession>,
     mut channels: IncomingChannels,
@@ -522,12 +535,17 @@ fn attach_session_callbacks(
     on_video: Option<OpenUUVideoCallback>,
     on_status: Option<OpenUUStatusCallback>,
     ctx: SendPtr,
+    connected_msg: &str,
     disconnect_msg: &'static str,
 ) {
     if let Ok(mut guard) = active_session.lock() {
         if let Some(prev) = guard.replace(Arc::clone(&session)) {
             prev.close();
         }
+    }
+
+    if !connected_msg.is_empty() {
+        emit_status(on_status, ctx, connected_msg);
     }
 
     // Emit initial link quality immediately
@@ -901,11 +919,13 @@ pub unsafe extern "C" fn openuu_remove_trusted_peer(
 
 #[derive(Deserialize)]
 struct DeviceProbeQuery {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     id: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     target: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pin: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     endpoint_id: String,
 }
 
@@ -1186,11 +1206,7 @@ pub unsafe extern "C" fn openuu_start_host(
                             });
                         }
                     }
-                    emit_status(
-                        on_status,
-                        ctx,
-                        &format!("client connected: {} (LAN/IP)", hello.device_name),
-                    );
+                    let conn_msg = format!("client connected: {} (LAN/IP)", hello.device_name);
                     attach_session_callbacks(
                         session,
                         channels,
@@ -1200,6 +1216,7 @@ pub unsafe extern "C" fn openuu_start_host(
                         on_video,
                         on_status,
                         ctx,
+                        &conn_msg,
                         "client disconnected",
                     );
                 }
@@ -1428,15 +1445,11 @@ pub unsafe extern "C" fn openuu_start_host(
                             }
                         }
                         let link = session.link_telemetry();
-                        emit_status(
-                            on_status,
-                            ctx,
-                            &format!(
-                                "client connected: {} ({}, {}ms)",
-                                hello.device_name,
-                                link.mode.as_str(),
-                                link.rtt_ms
-                            ),
+                        let conn_msg = format!(
+                            "client connected: {} ({}, {}ms)",
+                            hello.device_name,
+                            link.mode.as_str(),
+                            link.rtt_ms
                         );
                         attach_session_callbacks(
                             session,
@@ -1447,6 +1460,7 @@ pub unsafe extern "C" fn openuu_start_host(
                             on_video,
                             on_status,
                             ctx,
+                            &conn_msg,
                             "client disconnected",
                         );
                     }
@@ -1612,11 +1626,7 @@ unsafe fn openuu_connect_client_inner(
                         last_connected_ms: now_epoch_ms(),
                     });
                 }
-                emit_status(
-                    on_status,
-                    ctx,
-                    &format!("connected to host: {}", ack.device_name),
-                );
+                let conn_msg = format!("connected to host: {}", ack.device_name);
                 attach_session_callbacks(
                     session,
                     channels,
@@ -1626,6 +1636,7 @@ unsafe fn openuu_connect_client_inner(
                     on_video,
                     on_status,
                     ctx,
+                    &conn_msg,
                     "disconnected from host",
                 );
             }
@@ -1783,11 +1794,7 @@ unsafe fn openuu_connect_smart_inner(
                             last_connected_ms: now_epoch_ms(),
                         });
                     }
-                    emit_status(
-                        on_status,
-                        ctx,
-                        &format!("connected to host: {} (局域网直连)", ack.device_name),
-                    );
+                    let conn_msg = format!("connected to host: {} (局域网直连)", ack.device_name);
                     attach_session_callbacks(
                         session,
                         channels,
@@ -1797,6 +1804,7 @@ unsafe fn openuu_connect_smart_inner(
                         on_video,
                         on_status,
                         ctx,
+                        &conn_msg,
                         "disconnected from host",
                     );
                     return;
@@ -2007,11 +2015,7 @@ unsafe fn openuu_connect_smart_inner(
                                 session.close();
                                 return;
                             }
-                            emit_status(
-                                on_status,
-                                ctx,
-                                &format!("connected to host: {}", ack.device_name),
-                            );
+                            let conn_msg = format!("connected to host: {}", ack.device_name);
                             attach_session_callbacks(
                                 session,
                                 channels,
@@ -2021,6 +2025,7 @@ unsafe fn openuu_connect_smart_inner(
                                 on_video,
                                 on_status,
                                 ctx,
+                                &conn_msg,
                                 "disconnected from host",
                             );
                             return;
@@ -2066,11 +2071,7 @@ unsafe fn openuu_connect_smart_inner(
                                     last_connected_ms: now_epoch_ms(),
                                 });
                             }
-                            emit_status(
-                                on_status,
-                                ctx,
-                                &format!("connected to host: {}", ack.device_name),
-                            );
+                            let conn_msg = format!("connected to host: {}", ack.device_name);
                             attach_session_callbacks(
                                 session,
                                 channels,
@@ -2080,6 +2081,7 @@ unsafe fn openuu_connect_smart_inner(
                                 on_video,
                                 on_status,
                                 ctx,
+                                &conn_msg,
                                 "disconnected from host",
                             );
                             return;
@@ -2151,11 +2153,7 @@ unsafe fn openuu_connect_smart_inner(
                                 last_connected_ms: now_epoch_ms(),
                             });
                         }
-                        emit_status(
-                            on_status,
-                            ctx,
-                            &format!("connected to host: {} (局域网直连)", ack.device_name),
-                        );
+                        let conn_msg = format!("connected to host: {} (局域网直连)", ack.device_name);
                         attach_session_callbacks(
                             session,
                             channels,
@@ -2165,6 +2163,7 @@ unsafe fn openuu_connect_smart_inner(
                             on_video,
                             on_status,
                             ctx,
+                            &conn_msg,
                             "disconnected from host",
                         );
                         return;
@@ -2350,13 +2349,9 @@ unsafe fn openuu_connect_smart_inner(
                                             last_connected_ms: now_epoch_ms(),
                                         });
                                     }
-                                    emit_status(
-                                        on_status,
-                                        ctx,
-                                        &format!(
-                                            "connected to host: {} (P2P 直连 {}ms)",
-                                            ack.device_name, link.rtt_ms
-                                        ),
+                                    let conn_msg = format!(
+                                        "connected to host: {} (P2P 直连 {}ms)",
+                                        ack.device_name, link.rtt_ms
                                     );
                                     attach_session_callbacks(
                                         session,
@@ -2367,6 +2362,7 @@ unsafe fn openuu_connect_smart_inner(
                                         on_video,
                                         on_status,
                                         ctx,
+                                        &conn_msg,
                                         "disconnected from host",
                                     );
                                     return;
@@ -2416,13 +2412,9 @@ unsafe fn openuu_connect_smart_inner(
                     crate::wan::LinkMode::WanDirect => "P2P 直连",
                     crate::wan::LinkMode::WanRelay => "中继保底",
                 };
-                emit_status(
-                    on_status,
-                    ctx,
-                    &format!(
-                        "connected to host: {} ({} {}ms)",
-                        ack.device_name, mode_zh, link.rtt_ms
-                    ),
+                let conn_msg = format!(
+                    "connected to host: {} ({} {}ms)",
+                    ack.device_name, mode_zh, link.rtt_ms
                 );
                 attach_session_callbacks(
                     session,
@@ -2433,6 +2425,7 @@ unsafe fn openuu_connect_smart_inner(
                     on_video,
                     on_status,
                     ctx,
+                    &conn_msg,
                     "disconnected from host",
                 );
             }
@@ -3699,7 +3692,7 @@ mod tests {
             );
 
             openuu_disconnect(client_rt);
-            //Drain disconnect event if any
+            // Drain disconnect event if any
             while status_rx.recv_timeout(Duration::from_millis(80)).is_ok() {}
 
             // Verify in-flight cancel (`openuu_disconnect` aborts pending blackhole connect immediately)
@@ -3726,6 +3719,95 @@ mod tests {
                 "cancelled connect attempt must not emit late callbacks"
             );
 
+            openuu_stop_host(host_rt);
+            openuu_runtime_destroy(client_rt);
+            openuu_runtime_destroy(host_rt);
+            let _ = std::fs::remove_dir_all(&tmp_h);
+            let _ = std::fs::remove_dir_all(&tmp_c);
+        }
+    }
+
+    #[test]
+    fn ffi_null_icon_app_list_and_window_topology_roundtrip() {
+        let _guard = FFI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let tmp_h = std::env::temp_dir().join("openuu-null-icon-host");
+            let tmp_c = std::env::temp_dir().join("openuu-null-icon-client");
+            let h_dir = CString::new(tmp_h.to_string_lossy().as_ref()).unwrap();
+            let c_dir = CString::new(tmp_c.to_string_lossy().as_ref()).unwrap();
+            let h_name = CString::new("WinAdminHost").unwrap();
+            let c_name = CString::new("MacClient").unwrap();
+
+            let host_rt = openuu_runtime_create_with_dir(h_name.as_ptr(), h_dir.as_ptr());
+            let client_rt = openuu_runtime_create_with_dir(c_name.as_ptr(), c_dir.as_ptr());
+            assert!(!host_rt.is_null() && !client_rt.is_null());
+
+            let (ctrl_tx, ctrl_rx) = std_mpsc::channel::<String>();
+            let ctrl_tx_ptr = (&ctrl_tx as *const std_mpsc::Sender<String>) as *mut c_void;
+
+            let mut pin_buf = [0 as c_char; 16];
+            let port = openuu_start_host(
+                host_rt,
+                0,
+                pin_buf.as_mut_ptr(),
+                pin_buf.len(),
+                None,
+                None,
+                None,
+                std::ptr::null_mut(),
+            );
+            assert!(port > 0);
+            let pin = CStr::from_ptr(pin_buf.as_ptr()).to_str().unwrap().to_string();
+
+            let ip = CString::new("127.0.0.1").unwrap();
+            let pin_c = CString::new(pin).unwrap();
+            assert_eq!(
+                openuu_connect_client(
+                    client_rt,
+                    ip.as_ptr(),
+                    port,
+                    pin_c.as_ptr(),
+                    Some(test_ctrl_cb),
+                    None,
+                    None,
+                    ctrl_tx_ptr,
+                ),
+                0
+            );
+            std::thread::sleep(Duration::from_millis(250));
+
+            // Simulate C# System.Text.Json output containing explicit `"icon_png_b64":null`
+            let apps_json = CString::new(
+                r#"[{"bundle_id":"win.app.taskmgr","name":"任务管理器","pid":4200,"window_count":1,"icon_png_b64":null}]"#,
+            )
+            .unwrap();
+            assert_eq!(openuu_send_app_list_json(host_rt, apps_json.as_ptr()), 0);
+
+            let topo_json = CString::new(
+                r#"[{"window_id":2147483392,"parent_window_id":0,"kind":0,"rel_x":0.0,"rel_y":0.0,"width":1920.0,"height":1080.0,"title":"远程桌面 - PC","icon_png_b64":null}]"#,
+            )
+            .unwrap();
+            assert_eq!(openuu_send_window_topology_json(host_rt, topo_json.as_ptr()), 0);
+
+            let mut got_apps = false;
+            let mut got_topo = false;
+            for _ in 0..8 {
+                if let Ok(ev) = ctrl_rx.recv_timeout(Duration::from_secs(2)) {
+                    if ev.contains("\"type\":\"list_apps_resp\"") && ev.contains("win.app.taskmgr") {
+                        got_apps = true;
+                    }
+                    if ev.contains("\"type\":\"window_topology\"") && ev.contains("2147483392") {
+                        got_topo = true;
+                    }
+                    if got_apps && got_topo {
+                        break;
+                    }
+                }
+            }
+            assert!(got_apps, "client must receive list_apps_resp even when icon_png_b64 is null");
+            assert!(got_topo, "client must receive window_topology even when icon_png_b64 is null");
+
+            openuu_disconnect(client_rt);
             openuu_stop_host(host_rt);
             openuu_runtime_destroy(client_rt);
             openuu_runtime_destroy(host_rt);

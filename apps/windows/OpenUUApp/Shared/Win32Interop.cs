@@ -22,10 +22,14 @@ public static class Win32Interop
     internal const uint WS_MINIMIZE = 0x20000000;
     internal const uint WS_DISABLED = 0x08000000;
     internal const uint WS_EX_TOOLWINDOW = 0x00000080;
+    internal const uint WS_EX_TOPMOST = 0x00000008;
     internal const uint WS_EX_APPWINDOW = 0x00040000;
     internal const uint WS_EX_NOACTIVATE = 0x08000000;
     internal const uint WS_EX_TRANSPARENT = 0x00000020;
     internal const uint WS_EX_LAYERED = 0x00080000;
+
+    internal static readonly IntPtr HWND_TOPMOST = new(-1);
+    internal static readonly IntPtr HWND_NOTOPMOST = new(-2);
 
     internal const int SW_RESTORE = 9;
     internal const int SW_SHOWNOACTIVATE = 4;
@@ -199,8 +203,36 @@ public static class Win32Interop
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr FindWindowEx(IntPtr hWndParent, IntPtr hWndChildAfter, string? lpszClass, string? lpszWindow);
+
+    internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    internal const uint TOKEN_QUERY = 0x0008;
+    internal const int TokenElevation = 20;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    internal static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    internal static extern bool GetTokenInformation(
+        IntPtr TokenHandle,
+        int TokenInformationClass,
+        out int TokenInformation,
+        int TokenInformationLength,
+        out int ReturnLength
+    );
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll")]
+    internal static extern bool CloseHandle(IntPtr hObject);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
@@ -288,6 +320,41 @@ public static class Win32Interop
     [DllImport("user32.dll")]
     internal static extern bool DestroyIcon(IntPtr hIcon);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern uint PrivateExtractIconsW(
+        string szFileName,
+        int nIconIndex,
+        int cxIcon,
+        int cyIcon,
+        IntPtr[] phicon,
+        uint[] piconid,
+        uint nIcons,
+        uint flags
+    );
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(string lpCmdLine, out int pNumArgs);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr ProcessHandle,
+        int ProcessInformationClass,
+        IntPtr ProcessInformation,
+        int ProcessInformationLength,
+        out int ReturnLength
+    );
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UNICODE_STRING
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
     [DllImport("user32.dll")]
     internal static extern int GetSystemMetrics(int nIndex);
 
@@ -326,11 +393,15 @@ public static class Win32Interop
         public uint pid;
     }
 
-    [StructLayout(LayoutKind.Explicit)]
+    [StructLayout(LayoutKind.Sequential)]
     internal struct PROPVARIANT
     {
-        [FieldOffset(0)] public ushort vt;
-        [FieldOffset(8)] public IntPtr ptrVal;
+        public ushort vt;
+        public ushort wReserved1;
+        public ushort wReserved2;
+        public ushort wReserved3;
+        public IntPtr ptrVal;
+        public IntPtr ptrVal2;
     }
 
     [ComImport]
@@ -338,11 +409,11 @@ public static class Win32Interop
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IPropertyStore
     {
-        int GetCount(out uint cProps);
-        int GetAt(uint iProp, out PROPERTYKEY pkey);
-        int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
-        int SetValue(ref PROPERTYKEY key, ref PROPVARIANT propvar);
-        int Commit();
+        [PreserveSig] int GetCount(out uint cProps);
+        [PreserveSig] int GetAt(uint iProp, out PROPERTYKEY pkey);
+        [PreserveSig] int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+        [PreserveSig] int SetValue(ref PROPERTYKEY key, ref PROPVARIANT propvar);
+        [PreserveSig] int Commit();
     }
 
     [DllImport("shell32.dll")]
@@ -359,11 +430,63 @@ public static class Win32Interop
     private static extern int PropVariantClear(ref PROPVARIANT pvar);
 
     private static readonly Guid IID_IPropertyStore = new("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+    private static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchIconResource = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 3
+    };
+    private static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchDisplayNameResource = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 4
+    };
     private static readonly PROPERTYKEY PKEY_AppUserModel_ID = new()
     {
         fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
         pid = 5
     };
+
+    internal static (string? AppUserModelId, string? RelaunchDisplayName, string? RelaunchIcon) TryGetWindowAppUserModelProperties(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return (null, null, null);
+        try
+        {
+            Guid iid = IID_IPropertyStore;
+            if (SHGetPropertyStoreForWindow(hwnd, ref iid, out var store) != 0 || store == null)
+                return (null, null, null);
+            try
+            {
+                string? ReadProp(PROPERTYKEY key)
+                {
+                    if (store.GetValue(ref key, out var pv) != 0) return null;
+                    try
+                    {
+                        if (pv.vt == 31 /* VT_LPWSTR */ && pv.ptrVal != IntPtr.Zero)
+                            return Marshal.PtrToStringUni(pv.ptrVal)?.Trim();
+                        return null;
+                    }
+                    finally
+                    {
+                        PropVariantClear(ref pv);
+                    }
+                }
+
+                return (
+                    ReadProp(PKEY_AppUserModel_ID),
+                    ReadProp(PKEY_AppUserModel_RelaunchDisplayNameResource),
+                    ReadProp(PKEY_AppUserModel_RelaunchIconResource)
+                );
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(store);
+            }
+        }
+        catch
+        {
+            return (null, null, null);
+        }
+    }
 
     /// <summary>
     /// Assigns an explicit <c>System.AppUserModel.ID</c> to a specific <paramref name="hwnd"/> so Windows Taskbar
@@ -459,5 +582,158 @@ public static class Win32Interop
         var sb = new StringBuilder(256);
         GetClassName(hwnd, sb, sb.Capacity);
         return sb.ToString();
+    }
+
+    internal static string? TryGetProcessExePath(uint pid)
+    {
+        if (pid == 0) return null;
+        IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProc == IntPtr.Zero) return null;
+        try
+        {
+            var sb = new StringBuilder(1024);
+            int size = sb.Capacity;
+            if (QueryFullProcessImageName(hProc, 0, sb, ref size) && size > 0)
+            {
+                return sb.ToString(0, size);
+            }
+            return null;
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
+    }
+
+    /// <summary>
+    /// For Windows 10/11 UWP &amp; WinUI <c>ApplicationFrameWindow</c> containers hosted by <c>ApplicationFrameHost.exe</c>,
+    /// resolves the real child <c>Windows.UI.Core.CoreWindow</c> process ID so Settings, Calculator, Terminal, etc.
+    /// appear with their true application name and bundle ID.
+    /// </summary>
+    internal static uint ResolveEffectiveWindowPid(IntPtr hwnd, uint rawPid, string className)
+    {
+        if (!string.Equals(className, "ApplicationFrameWindow", StringComparison.OrdinalIgnoreCase))
+            return rawPid;
+
+        IntPtr child = IntPtr.Zero;
+        for (int i = 0; i < 16; i++)
+        {
+            child = FindWindowEx(hwnd, child, "Windows.UI.Core.CoreWindow", null);
+            if (child == IntPtr.Zero)
+                break;
+            GetWindowThreadProcessId(child, out uint childPid);
+            if (childPid != 0 && childPid != rawPid)
+                return childPid;
+        }
+        return rawPid;
+    }
+
+    /// <summary>
+    /// Distinguishes transient floating menus/popups (<c>#32768</c>, <c>WS_EX_TOOLWINDOW</c>, <c>WS_EX_NOACTIVATE</c>,
+    /// or untitled <c>WS_POPUP</c> dropdowns) from normal frameless main windows (such as Electron <c>frame: false</c>,
+    /// WeChat, Discord, Spotify) which also set <c>WS_POPUP</c> on their primary application window.
+    /// </summary>
+    internal static bool IsFloatingMenuOrPopup(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        string className = GetWindowClassName(hwnd);
+        if (className == "#32768") return true;
+
+        uint style = GetWindowLong(hwnd, GWL_STYLE);
+        if ((style & WS_POPUP) == 0) return false;
+
+        uint exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        if ((exStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0)
+            return true;
+
+        string title = GetWindowTitle(hwnd).Trim();
+        return string.IsNullOrEmpty(title);
+    }
+
+    internal static bool IsProcessElevated(uint pid)
+    {
+        if (pid == 0) return false;
+        IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProc == IntPtr.Zero) return false;
+        try
+        {
+            if (!OpenProcessToken(hProc, TOKEN_QUERY, out IntPtr hTok))
+                return false;
+            try
+            {
+                if (GetTokenInformation(hTok, TokenElevation, out int elevated, sizeof(int), out _))
+                    return elevated != 0;
+                return false;
+            }
+            finally
+            {
+                CloseHandle(hTok);
+            }
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
+    }
+
+    internal static List<string> TryGetProcessCommandLineArgs(uint pid)
+    {
+        var result = new List<string>();
+        if (pid == 0) return result;
+
+        string? cmdLine = null;
+        IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProc == IntPtr.Zero) return result;
+        try
+        {
+            const int ProcessCommandLineInformation = 60;
+            NtQueryInformationProcess(hProc, ProcessCommandLineInformation, IntPtr.Zero, 0, out int needed);
+            if (needed <= 0 || needed > 65536) needed = 4096;
+
+            IntPtr mem = Marshal.AllocHGlobal(needed);
+            try
+            {
+                if (NtQueryInformationProcess(hProc, ProcessCommandLineInformation, mem, needed, out _) == 0)
+                {
+                    var us = Marshal.PtrToStructure<UNICODE_STRING>(mem);
+                    if (us.Buffer != IntPtr.Zero && us.Length > 0)
+                        cmdLine = Marshal.PtrToStringUni(us.Buffer, us.Length / 2);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(mem);
+            }
+        }
+        catch
+        {
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
+
+        if (string.IsNullOrWhiteSpace(cmdLine)) return result;
+
+        IntPtr argvPtr = CommandLineToArgvW(cmdLine, out int argc);
+        if (argvPtr == IntPtr.Zero) return result;
+        try
+        {
+            for (int i = 0; i < argc; i++)
+            {
+                IntPtr pStr = Marshal.ReadIntPtr(argvPtr, i * IntPtr.Size);
+                if (pStr != IntPtr.Zero)
+                {
+                    string? s = Marshal.PtrToStringUni(pStr);
+                    if (!string.IsNullOrEmpty(s))
+                        result.Add(s);
+                }
+            }
+        }
+        finally
+        {
+            LocalFree(argvPtr);
+        }
+        return result;
     }
 }

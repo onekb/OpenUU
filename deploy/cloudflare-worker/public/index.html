@@ -791,16 +791,25 @@
                 <span class="rec-tag" hidden>适合当前设备</span>
               </div>
               <p class="dl-desc">
-                既能控制别的 Mac / Windows 电脑，也能让别的设备连回来。免安装便携版，解压即用，适合 Windows 10 / 11（64 位）。
+                既能控制别的 Mac / Windows 电脑，也能让别的设备连回来。同时提供标准安装版与免安装便携版，适合 Windows 10 / 11（64 位）。
               </p>
             </div>
-            <a
-              data-dl-link="windows"
-              href="https://github.com/onekb/OpenUU/releases/latest"
-              class="btn btn-secondary"
-            >
-              下载 Windows 版 (.zip)
-            </a>
+            <div class="dl-actions-col">
+              <a
+                data-dl-link="windows"
+                href="https://github.com/onekb/OpenUU/releases/download/v0.7.0/OpenUU-v0.7.0-Windows-x64-Setup.exe"
+                class="btn btn-secondary"
+              >
+                下载安装版 (.exe)
+              </a>
+              <a
+                data-dl-link="windows-zip"
+                href="https://github.com/onekb/OpenUU/releases/download/v0.7.0/OpenUU-v0.7.0-Windows-x64.zip"
+                class="dl-alt-link"
+              >
+                免安装便携版 (.zip) ›
+              </a>
+            </div>
           </div>
 
           <!-- Android -->
@@ -861,7 +870,7 @@
             </summary>
             <div class="faq-body">
               这是因为 OpenUU 是个人免费开源作品（<a href="https://github.com/onekb/OpenUU" target="_blank" rel="noopener noreferrer" class="inline-link">全部源码在 GitHub 公开可查</a>），暂时没有每年付费购买苹果或微软的商业企业签名证书，属于系统的正常首次提醒，软件本身完全安全。<br />
-              <strong>Windows 电脑：</strong>解压后双击 <code>OpenUU.exe</code>，若弹出蓝色 SmartScreen 窗口，点击<strong>「更多信息」→「仍要运行」</strong>即可直接打开（无需安装额外依赖；若需远控以管理员权限运行的软件窗口，可在设置内一键以管理员身份重启）。<br />
+              <strong>Windows 电脑：</strong>双击运行安装版 <code>OpenUU-*-Setup.exe</code>（或解压便携版双击 <code>OpenUU.exe</code>），若弹出蓝色 SmartScreen 窗口，点击<strong>「更多信息」→「仍要运行」</strong>即可直接打开（无需安装额外依赖；若需远控以管理员权限运行的软件窗口，可在设置内一键以管理员身份重启）。<br />
               <strong>Mac 电脑（方式一）：</strong>在弹窗点「完成」，然后打开 Mac 的<strong>「系统设置 → 隐私与安全性」</strong>，滑到最底部点一下<strong>「仍要打开」</strong>即可。<br />
               <strong>Mac 电脑（方式二，最快）：</strong>把 OpenUU 拖进「应用程序」文件夹后，打开「终端」粘贴下面这行命令回车，就能直接打开：
               <div class="cmd-inline">
