@@ -534,12 +534,13 @@ public sealed class AppUpdater : ObservableBase
                     throw new InvalidOperationException("安装包 SHA-256 校验不一致，已中止覆盖更新。");
             }
 
+            string targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string targetExe = Path.Combine(targetDir, "OpenUU.exe");
+            int currentPid = Environment.ProcessId;
+
             if (!archivePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 InstallStatusText = $"正在静默升级新版本 ({info.TagName}) 并自动重启...";
-                string targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                string targetExe = Path.Combine(targetDir, "OpenUU.exe");
-                int currentPid = Environment.ProcessId;
                 string setupCmdPath = Path.Combine(Path.GetTempPath(), $"openuu-setup-update-{currentPid}.cmd");
                 var setupScript = new StringBuilder();
                 setupScript.AppendLine("@echo off");
@@ -550,7 +551,7 @@ public sealed class AppUpdater : ObservableBase
                 setupScript.AppendLine("  timeout /t 1 /nobreak >nul");
                 setupScript.AppendLine(")");
                 setupScript.AppendLine(":run_setup");
-                setupScript.AppendLine($"\"{archivePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS");
+                setupScript.AppendLine($"start \"\" /WAIT \"{archivePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS");
                 setupScript.AppendLine($"if exist \"{targetExe}\" start \"\" \"{targetExe}\"");
                 setupScript.AppendLine($"rmdir /S /Q \"{workDir}\" 2>nul");
                 setupScript.AppendLine("del \"%~f0\" 2>nul");
@@ -581,10 +582,6 @@ public sealed class AppUpdater : ObservableBase
                 if (subDirs.Length == 1 && File.Exists(Path.Combine(subDirs[0], "OpenUU.exe")))
                     payloadDir = subDirs[0];
             }
-
-            string targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string targetExe = Path.Combine(targetDir, "OpenUU.exe");
-            int currentPid = Environment.ProcessId;
 
             string cmdPath = Path.Combine(Path.GetTempPath(), $"openuu-apply-update-{currentPid}.cmd");
             var script = new StringBuilder();

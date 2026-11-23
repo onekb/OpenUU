@@ -1,7 +1,11 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Shapes;
+using System.Windows.Shell;
 
 namespace OpenUU.Views;
 
@@ -22,35 +26,72 @@ public sealed class SoftwareUpdateDialog : Window
     private readonly System.Windows.Controls.Button _browserBtn;
     private readonly System.Windows.Controls.Button _primaryActionBtn;
     private readonly System.Windows.Controls.Button _closeBtn;
+    private readonly System.Windows.Controls.Button _topCloseBtn;
 
     public SoftwareUpdateDialog(AppUpdater updater)
     {
         _updater = updater;
         Title = "OpenUU 版本更新";
-        Width = 540;
-        Height = 450;
-        MinWidth = 480;
-        MinHeight = 400;
+        Width = 556;
+        Height = 468;
+        MinWidth = 496;
+        MinHeight = 410;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
+        ShowInTaskbar = false;
+        UseLayoutRounding = true;
+        SnapsToDevicePixels = true;
         Background = (SolidColorBrush)System.Windows.Application.Current.FindResource("CardBg");
 
-        var root = new Grid { Margin = new Thickness(22) };
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        WindowChrome.SetWindowChrome(this, new WindowChrome
+        {
+            CaptionHeight = 0,
+            ResizeBorderThickness = new Thickness(0),
+            GlassFrameThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            UseAeroCaptionButtons = false
+        });
 
-        // 1. Header
-        var headerRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+        SourceInitialized += (_, _) =>
+        {
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            int roundPref = Win32Interop.DWMWCP_ROUND;
+            Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_WINDOW_CORNER_PREFERENCE, ref roundPref, sizeof(int));
+        };
+
+        var outerGrid = new Grid();
+        outerGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        outerGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        // Top Draggable Header
+        var topHeader = new Grid
+        {
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(248, 250, 252))
+        };
+        topHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        topHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        topHeader.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ButtonState == MouseButtonState.Pressed && !_updater.IsInstalling)
+            {
+                try { DragMove(); } catch { }
+            }
+        };
+
+        var headerRow = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Margin = new Thickness(22, 15, 12, 14)
+        };
         if (IconCompositor.BrandSquircleIcon != null)
         {
             headerRow.Children.Add(new System.Windows.Controls.Image
             {
                 Source = IconCompositor.BrandSquircleIcon,
-                Width = 42,
-                Height = 42,
+                Width = 40,
+                Height = 40,
                 Margin = new Thickness(0, 0, 12, 0)
             });
         }
@@ -58,7 +99,7 @@ public sealed class SoftwareUpdateDialog : Window
         var titleCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         _headingText = new TextBlock
         {
-            FontSize = 16.5,
+            FontSize = 16,
             FontWeight = FontWeights.Bold,
             Foreground = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextPrimary")
         };
@@ -71,36 +112,75 @@ public sealed class SoftwareUpdateDialog : Window
         titleCol.Children.Add(_headingText);
         titleCol.Children.Add(_metaText);
         headerRow.Children.Add(titleCol);
-        Grid.SetRow(headerRow, 0);
-        root.Children.Add(headerRow);
+        Grid.SetColumn(headerRow, 0);
+        topHeader.Children.Add(headerRow);
 
-        // 2. Subtitle
+        _topCloseBtn = new System.Windows.Controls.Button
+        {
+            VerticalAlignment = VerticalAlignment.Top,
+            ToolTip = "关闭",
+            Style = (Style)System.Windows.Application.Current.FindResource("WindowCloseBtnStyle")
+        };
+        var closeCanvas = new Canvas { Width = 10, Height = 10 };
+        var closePath = new Path
+        {
+            Data = Geometry.Parse("M 0.5,0.5 L 9.5,9.5 M 9.5,0.5 L 0.5,9.5"),
+            StrokeThickness = 1.3
+        };
+        closePath.SetBinding(Shape.StrokeProperty, new System.Windows.Data.Binding("Foreground")
+        {
+            RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(System.Windows.Controls.Button), 1)
+        });
+        closeCanvas.Children.Add(closePath);
+        _topCloseBtn.Content = closeCanvas;
+        _topCloseBtn.Click += (_, _) => { if (!_updater.IsInstalling) Close(); };
+        Grid.SetColumn(_topCloseBtn, 1);
+        topHeader.Children.Add(_topCloseBtn);
+
+        Grid.SetRow(topHeader, 0);
+        outerGrid.Children.Add(topHeader);
+
+        var divider = new Border
+        {
+            Height = 1,
+            Background = (SolidColorBrush)System.Windows.Application.Current.FindResource("DividerBrush")
+        };
+        Grid.SetRow(divider, 1);
+        outerGrid.Children.Add(divider);
+
+        var root = new Grid { Margin = new Thickness(22, 16, 22, 20) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        // 1. Subtitle
         var subLabel = new TextBlock
         {
             Text = "更新内容说明",
-            FontSize = 12.5,
+            FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             Foreground = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextSecondary"),
             Margin = new Thickness(0, 0, 0, 6)
         };
-        Grid.SetRow(subLabel, 1);
+        Grid.SetRow(subLabel, 0);
         root.Children.Add(subLabel);
 
-        // 3. Release Notes Scrollable Box
+        // 2. Release Notes Scrollable Box
         _notesBox = new System.Windows.Controls.TextBox
         {
             IsReadOnly = true,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Style = (Style)System.Windows.Application.Current.FindResource("RoundedTextBoxStyle"),
             FontSize = 12.5,
-            Padding = new Thickness(12),
+            Padding = new Thickness(12, 10, 12, 10),
             Background = (SolidColorBrush)System.Windows.Application.Current.FindResource("SubtleSurfaceBg"),
             BorderBrush = (SolidColorBrush)System.Windows.Application.Current.FindResource("CardBorder"),
-            BorderThickness = new Thickness(1),
             Foreground = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextPrimary")
         };
-        Grid.SetRow(_notesBox, 2);
+        Grid.SetRow(_notesBox, 1);
         root.Children.Add(_notesBox);
 
         // 4. Live Progress / Error Banner
@@ -165,10 +245,10 @@ public sealed class SoftwareUpdateDialog : Window
 
         statusHost.Children.Add(_progressCard);
         statusHost.Children.Add(_errorCard);
-        Grid.SetRow(statusHost, 3);
+        Grid.SetRow(statusHost, 2);
         root.Children.Add(statusHost);
 
-        // 5. Action Buttons
+        // 4. Action Buttons
         var footer = new Grid { Margin = new Thickness(0, 14, 0, 0) };
         var leftBtns = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
         _skipBtn = new System.Windows.Controls.Button
@@ -246,10 +326,21 @@ public sealed class SoftwareUpdateDialog : Window
 
         footer.Children.Add(leftBtns);
         footer.Children.Add(rightBtns);
-        Grid.SetRow(footer, 4);
+        Grid.SetRow(footer, 3);
         root.Children.Add(footer);
 
-        Content = root;
+        Grid.SetRow(root, 2);
+        outerGrid.Children.Add(root);
+
+        Content = new Border
+        {
+            BorderBrush = (SolidColorBrush)System.Windows.Application.Current.FindResource("ControlBorder"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Background = (SolidColorBrush)System.Windows.Application.Current.FindResource("CardBg"),
+            ClipToBounds = true,
+            Child = outerGrid
+        };
 
         _updater.PropertyChanged += OnUpdaterPropertyChanged;
         Closed += (_, _) => _updater.PropertyChanged -= OnUpdaterPropertyChanged;
@@ -300,6 +391,7 @@ public sealed class SoftwareUpdateDialog : Window
         _skipBtn.IsEnabled = !busy;
         _browserBtn.IsEnabled = !busy;
         _closeBtn.IsEnabled = !_updater.IsInstalling;
+        _topCloseBtn.IsEnabled = !_updater.IsInstalling;
         _primaryActionBtn.IsEnabled = !busy;
         _primaryActionBtn.Content = hasUpdate
             ? (_updater.IsInstalling ? "正在更新..." : "⬇ 一键下载并重启更新")
