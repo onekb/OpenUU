@@ -279,7 +279,7 @@ final class AppState: ObservableObject {
                 self.logEntries.removeFirst(self.logEntries.count - 400)
             }
         }
-        OpenUULogger.shared.info("APP", "launched version=v0.6.1 multiHost=true scheme=\(captureScheme.rawValue) fps=\(targetFPS)")
+        OpenUULogger.shared.info("APP", "launched version=v0.6.2 multiHost=true scheme=\(captureScheme.rawValue) fps=\(targetFPS)")
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -1309,7 +1309,7 @@ final class AppState: ObservableObject {
         let perms = "Screen=\(hasScreenRecordingPermission), Direct=\(hasDirectCapturePermission), AX=\(hasAccessibilityPermission)"
         let snapshot = "savedDevices=\(deviceBook.devices.count) activeSessions=\(connectedHostCount) totalWindows=\(totalOpenRemoteWindows)"
         let report = OpenUULogger.shared.buildDiagnosticReport(
-            appVersion: "v0.6.1",
+            appVersion: "v0.6.2",
             roleSummary: role.isEmpty ? "Idle" : role,
             schemeSummary: captureScheme.rawValue,
             permissionsSummary: perms,

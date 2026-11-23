@@ -100,7 +100,7 @@ else {
 $csprojPath = Join-Path $RootDir "apps\windows\OpenUUApp\OpenUUApp.csproj"
 [xml]$csprojXml = Get-Content $csprojPath -Encoding UTF8
 $appVersion = ($csprojXml.Project.PropertyGroup.Version | Select-Object -First 1)
-if (-not $appVersion) { $appVersion = "0.6.1" }
+if (-not $appVersion) { $appVersion = "0.6.2" }
 
 function Test-PublishDirLocked([string]$Dir) {
     if (-not (Test-Path $Dir)) { return $false }

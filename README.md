@@ -100,7 +100,7 @@
 | 平台 | 安装包 | 系统要求与说明 |
 | :--- | :--- | :--- |
 | **macOS (Apple Silicon / M 系列芯片)** | `OpenUU-*-macOS-arm64.dmg` | 控制端 + 被控端，需 macOS 14.0+ |
-| **Windows (64 位 · 安装版)** | `OpenUU-*-Windows-x64-Setup.exe` | **推荐** · 控制端 + 被控端，支持免提权单用户或全用户安装、自动创建快捷方式与标准卸载（Windows 10 / 11 `x64`） |
+| **Windows (64 位 · 安装版)** | `OpenUU-*-Windows-x64-Setup.exe` | **推荐** · 控制端 + 被控端，自动创建快捷方式与标准卸载，默认管理员权限启动以无缝操控提权窗口（Windows 10 / 11 `x64`） |
 | **Windows (64 位 · 便携版)** | `OpenUU-*-Windows-x64.zip` | 控制端 + 被控端，免安装解压即用（Windows 10 / 11 `x64`） |
 | **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端，需 Android 8.0+ (`arm64-v8a`) |
 | **iOS / iPadOS** | `OpenUU-*-iOS-unsigned.ipa` | 控制端，需 iOS 17.0+，未签名 IPA（需自签安装） |
@@ -110,7 +110,7 @@
 
 - **🪟 Windows 提示“Windows 已保护你的电脑 (Microsoft Defender SmartScreen)”**：  
   双击运行安装程序 `OpenUU-*-Windows-x64-Setup.exe`（或解压便携版 `.zip` 后双击 `OpenUU.exe`），若弹出蓝色拦截窗口，点击 **「更多信息」** → **「仍要运行」** 即可（内置完整运行时，无需额外安装任何依赖）。  
-  > 作为 **被控端** 时无需额外系统权限即可开箱使用；若需远控操控目标机器上以「管理员身份」运行的软件窗口，可在「安全与画质」页点击 **「以管理员身份重启」**。
+  > 作为 **被控端** 默认请求管理员权限运行，可直接捕获并远程操控本机包含管理员提权软件与无边框 Electron 应用在内的各类窗口。
 
 - **🍎 macOS 提示“已损坏，无法打开”或“无法验证开发者”**：  
   打开 `.dmg` 将 **OpenUU.app** 拖入 `应用程序 (Applications)` 后，打开终端执行一行命令解除浏览器下载隔离标记即可正常打开：
