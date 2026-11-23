@@ -200,6 +200,7 @@ struct HostsHomeView: View {
     @State private var editingDevice: ManagedRemoteDevice?
     @State private var pinPromptHost: UnifiedHostRow?
     @State private var copiedLocalCode = false
+    @State private var isManualPinRevealed = false
     @State private var copyResetTask: Task<Void, Never>?
 
     init(viewModel: MobileSessionViewModel) {
@@ -388,6 +389,9 @@ struct HostsHomeView: View {
         .sheet(isPresented: $showSettingsSheet) {
             SettingsLogsSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.updater.showingUpdateSheet) {
+            MobileUpdateSheet(updater: viewModel.updater)
+        }
     }
 
     // MARK: - Top Bar
@@ -413,10 +417,27 @@ struct HostsHomeView: View {
                         )
                 }
 
-                Text("OpenUU")
-                    .font(.system(size: 18, weight: .bold))
-                    .tracking(-0.4)
-                    .foregroundStyle(OpenUUTheme.textPrimary)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text("OpenUU")
+                            .font(.system(size: 18, weight: .bold))
+                            .tracking(-0.4)
+                            .foregroundStyle(OpenUUTheme.textPrimary)
+                        Text(MobileAppVersion.display)
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(OpenUUTheme.textMuted)
+                    }
+                    if viewModel.updater.hasAvailableUpdate, let rel = viewModel.updater.releaseInfo {
+                        Button {
+                            viewModel.updater.showingUpdateSheet = true
+                        } label: {
+                            Text("⬆ 新版本 \(rel.tagName) · 点击更新")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(OpenUUTheme.warning)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
 
             Spacer(minLength: 8)
@@ -521,24 +542,42 @@ struct HostsHomeView: View {
                 .buttonStyle(.plain)
 
             case .connecting(let detail):
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(OpenUUTheme.textPrimary)
+                TimelineView(.periodic(from: .now, by: 1.0)) { context in
+                    let secs = viewModel.elapsedConnectingSeconds(at: context.date)
+                    HStack(alignment: .center, spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(OpenUUTheme.warning)
 
-                Text(detail)
-                    .font(.system(size: 13))
-                    .foregroundStyle(OpenUUTheme.textPrimary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2.5) {
+                            HStack(spacing: 6) {
+                                Text("正在建立连接")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(OpenUUTheme.warning)
+                                if secs > 0 {
+                                    Text("已等待 \(secs)s")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(OpenUUTheme.textSecondary)
+                                }
+                            }
+                            Text(detail)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(OpenUUTheme.textPrimary)
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button("取消") {
-                    viewModel.disconnect()
+                        Button("取消") {
+                            viewModel.disconnect()
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(OpenUUTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .buttonStyle(.plain)
+                    }
                 }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(OpenUUTheme.textSecondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .buttonStyle(.plain)
 
             case .error(let reason):
                 Image(systemName: "exclamationmark.circle")
@@ -824,7 +863,14 @@ struct HostsHomeView: View {
                 )
 
                 HStack(spacing: 8) {
-                    SecureField("配对码（已信任可留空）", text: $viewModel.pinInput)
+                    HStack(spacing: 4) {
+                        Group {
+                            if isManualPinRevealed {
+                                TextField("配对码（已信任可留空）", text: $viewModel.pinInput)
+                            } else {
+                                SecureField("配对码（已信任可留空）", text: $viewModel.pinInput)
+                            }
+                        }
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(OpenUUTheme.textPrimary)
                         .textInputAutocapitalization(.never)
@@ -833,15 +879,29 @@ struct HostsHomeView: View {
                         .onSubmit {
                             if canConnectManual { viewModel.connectFromForm() }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 11)
-                        .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
-                        )
 
-                    Button("连接") {
+                        Button {
+                            isManualPinRevealed.toggle()
+                        } label: {
+                            Image(systemName: isManualPinRevealed ? "eye.slash" : "eye")
+                                .font(.system(size: 13.5))
+                                .foregroundStyle(OpenUUTheme.textSecondary)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isManualPinRevealed ? "隐藏密码" : "显示密码")
+                    }
+                    .padding(.leading, 12)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 7)
+                    .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+                    )
+
+                    Button(viewModel.phase.isConnecting ? "连接中..." : "连接") {
                         viewModel.connectFromForm()
                     }
                     .font(.system(size: 14, weight: .semibold))

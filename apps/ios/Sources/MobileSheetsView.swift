@@ -9,6 +9,7 @@ struct PinPromptSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var pin = ""
+    @State private var isPinRevealed = false
     @FocusState private var isPinFocused: Bool
 
     var body: some View {
@@ -21,7 +22,14 @@ struct PinPromptSheet: View {
                 .font(.system(size: 12.5))
                 .foregroundStyle(OpenUUTheme.textSecondary)
 
-            SecureField("输入配对码 / 访问密码", text: $pin)
+            HStack(spacing: 6) {
+                Group {
+                    if isPinRevealed {
+                        TextField("输入配对码 / 访问密码", text: $pin)
+                    } else {
+                        SecureField("输入配对码 / 访问密码", text: $pin)
+                    }
+                }
                 .font(.system(size: 15, design: .monospaced))
                 .foregroundStyle(OpenUUTheme.textPrimary)
                 .textInputAutocapitalization(.never)
@@ -29,13 +37,26 @@ struct PinPromptSheet: View {
                 .focused($isPinFocused)
                 .submitLabel(.go)
                 .onSubmit { onConfirm(pin.trimmingCharacters(in: .whitespacesAndNewlines)) }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
-                )
+
+                Button {
+                    isPinRevealed.toggle()
+                } label: {
+                    Image(systemName: isPinRevealed ? "eye.slash" : "eye")
+                        .font(.system(size: 14))
+                        .foregroundStyle(OpenUUTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .background(OpenUUTheme.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+            )
 
             HStack(spacing: 10) {
                 Button("取消") {
@@ -87,6 +108,7 @@ struct DeviceEditorSheet: View {
     @State private var target: String
     @State private var port: String
     @State private var password: String
+    @State private var isPasswordRevealed: Bool = false
     @State private var isFavorite: Bool
     @State private var notes: String
 
@@ -119,7 +141,25 @@ struct DeviceEditorSheet: View {
                         }
                     TextField("端口", text: $port)
                         .keyboardType(.numberPad)
-                    SecureField("保存密码 / PIN（可选）", text: $password)
+                    HStack {
+                        Group {
+                            if isPasswordRevealed {
+                                TextField("保存密码 / PIN（可选）", text: $password)
+                            } else {
+                                SecureField("保存密码 / PIN（可选）", text: $password)
+                            }
+                        }
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        Button {
+                            isPasswordRevealed.toggle()
+                        } label: {
+                            Image(systemName: isPasswordRevealed ? "eye.slash" : "eye")
+                                .foregroundStyle(OpenUUTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .listRowBackground(OpenUUTheme.surface)
 
@@ -303,6 +343,38 @@ struct SettingsLogsSheet: View {
                     }
                     .listRowBackground(OpenUUTheme.surface)
                 }
+
+                Section("版本与自动更新") {
+                    LabeledContent("当前版本", value: MobileAppVersion.display)
+                    LabeledContent("状态", value: viewModel.updater.statusSummary)
+                    Picker("检查策略", selection: $viewModel.updater.policy) {
+                        ForEach(MobileUpdatePolicy.allCases) { p in
+                            Text(p.label).tag(p)
+                        }
+                    }
+                    HStack {
+                        Button(viewModel.updater.isChecking ? "正在检查..." : "立即检查更新") {
+                            Task { await viewModel.updater.checkForUpdates(manual: true) }
+                        }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                        .disabled(viewModel.updater.isChecking)
+
+                        Spacer()
+
+                        if viewModel.updater.releaseInfo != nil {
+                            Button(viewModel.updater.hasAvailableUpdate ? "查看更新 / 一键升级" : "查看更新内容") {
+                                dismiss()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    viewModel.updater.showingUpdateSheet = true
+                                }
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(viewModel.updater.hasAvailableUpdate ? OpenUUTheme.warning : OpenUUTheme.textSecondary)
+                        }
+                    }
+                }
+                .listRowBackground(OpenUUTheme.surface)
 
                 Section("自建专属机房") {
                     Button {

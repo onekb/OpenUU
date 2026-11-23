@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/Windows-控制端%20%26%20被控端-0F172A?style=flat-square&logo=windows&logoColor=00A4EF" alt="Windows" />
   <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-控制端-0F172A?style=flat-square&logo=ios&logoColor=white" alt="iOS" />
   <img src="https://img.shields.io/badge/Android-控制端-0F172A?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-6366F1?style=flat-square" alt="MIT License" /></a>
   <a href="https://github.com/onekb/OpenUU/stargazers"><img src="https://img.shields.io/github/stars/onekb/OpenUU?style=flat-square&color=10B981" alt="GitHub Stars" /></a>
 </p>
 
@@ -221,3 +222,10 @@ chmod +x scripts/build-ios.sh
 
 如果 OpenUU 对你有帮助，欢迎点一个 **Star ⭐** 支持项目持续迭代！  
 遇到问题或想要新功能，欢迎直接提 [Issue](https://github.com/onekb/OpenUU/issues) 或提交 PR。
+
+---
+
+## 📄 开源协议
+
+本项目基于 [MIT License](./LICENSE) 开源协议发布。
+

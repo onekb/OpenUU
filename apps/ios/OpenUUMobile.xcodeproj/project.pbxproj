@@ -10,6 +10,7 @@
 		B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */; };
 		51408B5608BA9E00114B7976 /* IOSAudioStreamPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */; };
 		EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */; };
+		1C49E52D347A63FD32D401F2 /* MobileAppUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE6EAE4C376C83FFCFDA998 /* MobileAppUpdater.swift */; };
 		1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */; };
 		F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */; };
 		47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */; };
@@ -41,6 +42,7 @@
 		AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeviceBookStore.swift; path = Sources/DeviceBookStore.swift; sourceTree = "<group>"; };
 		51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IOSAudioStreamPlayer.swift; path = Sources/IOSAudioStreamPlayer.swift; sourceTree = "<group>"; };
 		F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IOSVideoDisplayRenderer.swift; path = Sources/IOSVideoDisplayRenderer.swift; sourceTree = "<group>"; };
+		3DE6EAE4C376C83FFCFDA998 /* MobileAppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileAppUpdater.swift; path = Sources/MobileAppUpdater.swift; sourceTree = "<group>"; };
 		7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileMainView.swift; path = Sources/MobileMainView.swift; sourceTree = "<group>"; };
 		4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileRemoteCanvasView.swift; path = Sources/MobileRemoteCanvasView.swift; sourceTree = "<group>"; };
 		F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MobileSessionViewModel.swift; path = Sources/MobileSessionViewModel.swift; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 				AA08FFFE75F150F1128BB68A /* DeviceBookStore.swift */,
 				51C36CD047A30C91A65ECDC4 /* IOSAudioStreamPlayer.swift */,
 				F0CA9805802EF058EA206810 /* IOSVideoDisplayRenderer.swift */,
+				3DE6EAE4C376C83FFCFDA998 /* MobileAppUpdater.swift */,
 				7DAEA46A18CBC05EA425A7AA /* MobileMainView.swift */,
 				4E212C3110BA5103B39EF821 /* MobileRemoteCanvasView.swift */,
 				F07AEEFC45A8332971E232A0 /* MobileSessionViewModel.swift */,
@@ -194,6 +197,7 @@
 				B606DEE8576EC6E0C6C6B690 /* DeviceBookStore.swift in Sources */,
 				51408B5608BA9E00114B7976 /* IOSAudioStreamPlayer.swift in Sources */,
 				EB4AF61C48777A7EAC785995 /* IOSVideoDisplayRenderer.swift in Sources */,
+				1C49E52D347A63FD32D401F2 /* MobileAppUpdater.swift in Sources */,
 				1513565E39DCB64F604C8ABE /* MobileMainView.swift in Sources */,
 				F0E3D804DACE8B584DF8C49E /* MobileRemoteCanvasView.swift in Sources */,
 				47568FA47AA20A3C4F57711B /* MobileSessionViewModel.swift in Sources */,
@@ -256,7 +260,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -269,7 +273,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lc++",
@@ -289,7 +293,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -302,7 +306,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lc++",

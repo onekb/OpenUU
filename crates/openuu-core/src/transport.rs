@@ -809,10 +809,105 @@ pub async fn connect_via_iroh(
     pb::HelloAck,
     String,
 )> {
-    let conn = endpoint
-        .connect(target_addr, ALPN_OPENUU)
-        .await
-        .map_err(|e| OpenUUError::Wan(format!("iroh P2P/Relay connect failed: {e}")))?;
+    connect_via_iroh_with_progress(endpoint, client_identity, target_addr, pairing_pin, |_| {}).await
+}
+
+/// Same as [`connect_via_iroh`], emitting real-time step descriptions as NAT hole-punching,
+/// relay fallback, and TLS channel-bound `Hello` authentication progress.
+pub async fn connect_via_iroh_with_progress<F>(
+    endpoint: &iroh::Endpoint,
+    client_identity: &DeviceIdentity,
+    target_addr: EndpointAddr,
+    pairing_pin: &str,
+    mut on_step: F,
+) -> Result<(
+    Arc<PeerSession>,
+    IncomingChannels,
+    pb::HelloAck,
+    String,
+)>
+where
+    F: FnMut(&str),
+{
+    let direct_cnt = target_addr.ip_addrs().count();
+    let ipv6_cnt = target_addr.ip_addrs().filter(|sa| sa.is_ipv6()).count();
+    let relay_cnt = target_addr.relay_urls().count();
+
+    let initial_msg = if direct_cnt > 0 && relay_cnt > 0 {
+        if ipv6_cnt > 0 {
+            format!(
+                "正在并发发起 IPv6 / UDP 打洞（{direct_cnt} 个候选地址）与中继保底握手..."
+            )
+        } else {
+            format!("正在并发发起 P2P 打洞（{direct_cnt} 个候选地址）与加密中继握手...")
+        }
+    } else if direct_cnt > 0 {
+        format!("正在向 {direct_cnt} 个候选直连地址发起 UDP / IPv6 穿透...")
+    } else {
+        "正在通过加密中继节点寻呼远端主机...".to_string()
+    };
+    on_step(&initial_msg);
+
+    let connect_fut = endpoint.connect(target_addr, ALPN_OPENUU);
+    tokio::pin!(connect_fut);
+
+    let checkpoints: &[(u64, &str)] = &[
+        (2500, "正在穿透双端路由器 NAT 防火墙，协商最优低延迟路径..."),
+        (
+            6000,
+            "直连打洞响应较慢，正在并行等待加密中继通道兜底握手（已用时 6s）...",
+        ),
+        (
+            11000,
+            "跨网链路延迟较高，仍在持续重试握手中（已用时 11s）...",
+        ),
+        (
+            16500,
+            "仍在等待远端主机响应（16s / 22s 超时保护，请确认被控端在线）...",
+        ),
+    ];
+    let started = std::time::Instant::now();
+    let mut next_cp = 0usize;
+
+    let conn = loop {
+        if next_cp < checkpoints.len() {
+            let (target_ms, msg) = checkpoints[next_cp];
+            let target_dur = Duration::from_millis(target_ms);
+            let wait_dur = target_dur.saturating_sub(started.elapsed());
+            tokio::select! {
+                biased;
+                res = &mut connect_fut => {
+                    break res.map_err(|e| OpenUUError::Wan(format!("iroh P2P/Relay connect failed: {e}")))?;
+                }
+                _ = tokio::time::sleep(wait_dur) => {
+                    on_step(msg);
+                    next_cp += 1;
+                }
+            }
+        } else {
+            break connect_fut
+                .await
+                .map_err(|e| OpenUUError::Wan(format!("iroh P2P/Relay connect failed: {e}")))?;
+        }
+    };
+
+    let telemetry = inspect_iroh_connection(&conn);
+    let mode_zh = match telemetry.mode {
+        LinkMode::Lan => "局域网直连",
+        LinkMode::WanDirect => "P2P 直连",
+        LinkMode::WanRelay => "加密中继",
+    };
+    if telemetry.rtt_ms > 0 {
+        on_step(&format!(
+            "网络隧道已打通（{mode_zh} · {}ms），正在校验访问密码与设备身份...",
+            telemetry.rtt_ms
+        ));
+    } else {
+        on_step(&format!(
+            "网络隧道已打通（{mode_zh}），正在校验访问密码与设备身份..."
+        ));
+    }
+
     let host_endpoint_id = conn.remote_id().to_string();
     let (ctrl_tx, ctrl_rx) = conn
         .open_bi()

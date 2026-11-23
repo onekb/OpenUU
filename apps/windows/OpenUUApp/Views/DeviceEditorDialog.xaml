@@ -54,9 +54,32 @@
 
             <StackPanel Grid.Column="0">
                 <TextBlock Text="保存访问密码（保存后一键免输连接）" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                <TextBox x:Name="PasswordBox"
-                         FontFamily="Consolas"
-                         Style="{StaticResource RoundedTextBoxStyle}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <PasswordBox x:Name="PasswordSecureBox"
+                                 Grid.Column="0"
+                                 FontFamily="Consolas"
+                                 Style="{StaticResource RoundedPasswordBoxStyle}"
+                                 PasswordChanged="PasswordSecureBox_PasswordChanged" />
+                    <TextBox x:Name="PasswordBox"
+                             Grid.Column="0"
+                             Visibility="Collapsed"
+                             FontFamily="Consolas"
+                             Style="{StaticResource RoundedTextBoxStyle}"
+                             TextChanged="PasswordBox_TextChanged" />
+                    <Button x:Name="ToggleDialogPwEyeBtn"
+                            Grid.Column="2"
+                            Content="👁"
+                            ToolTip="点击显示/隐藏访问密码"
+                            Padding="9,5"
+                            FontSize="12"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Click="ToggleDialogPwEyeBtn_Click" />
+                </Grid>
             </StackPanel>
 
             <StackPanel Grid.Column="2">

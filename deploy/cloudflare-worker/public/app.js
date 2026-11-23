@@ -518,9 +518,12 @@
     }
 
     try {
-      const resp = await fetch("https://api.github.com/repos/onekb/OpenUU/releases/latest", {
-        headers: { Accept: "application/vnd.github+json" },
-      });
+      let resp = await fetch("/v1/latest-release").catch(() => null);
+      if (!resp || !resp.ok) {
+        resp = await fetch("https://api.github.com/repos/onekb/OpenUU/releases/latest", {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+      }
       if (!resp.ok) return;
       const rel = await resp.json();
       if (rel.tag_name) {
@@ -548,7 +551,7 @@
         }
       });
     } catch {
-      // Fallback to v0.6.0 built-in URLs
+      // Fallback to v0.7.0 built-in URLs
     }
   }
 

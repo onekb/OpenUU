@@ -217,6 +217,13 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+    val updater = AppUpdater(
+        appContext = appContext,
+        scope = viewModelScope,
+        coordUrlProvider = { _identity.value.wanConfig.coordUrl.ifBlank { "https://openuu.1kb.ren" } },
+        onLog = { msg -> appendLog(msg) }
+    )
+
     val videoDecoder = VideoDecoderSurface(
         onTelemetry = { telemetry ->
             _videoTelemetry.value = telemetry
@@ -1607,6 +1614,11 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                 msg.contains("disconnected") -> {
                     resetSessionState()
                     _connectionPhase.value = ConnectionPhase.Idle
+                }
+                else -> {
+                    if (_connectionPhase.value.isConnecting) {
+                        _connectionPhase.value = ConnectionPhase.Connecting(msg)
+                    }
                 }
             }
         }

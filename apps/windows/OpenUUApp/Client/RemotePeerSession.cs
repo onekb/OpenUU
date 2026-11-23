@@ -58,12 +58,18 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
             {
                 OnPropertyChanged(nameof(IsConnected));
                 OnPropertyChanged(nameof(IsConnecting));
+                OnPropertyChanged(nameof(IsError));
             }
         }
     }
 
     public bool IsConnected => Phase == RemoteSessionPhase.Connected;
     public bool IsConnecting => Phase == RemoteSessionPhase.Connecting;
+    public bool IsError => Phase == RemoteSessionPhase.Error;
+    public DateTime? ConnectingStartedAtUtc { get; private set; }
+    public int ElapsedConnectingSeconds => ConnectingStartedAtUtc.HasValue
+        ? Math.Max(0, (int)(DateTime.UtcNow - ConnectingStartedAtUtc.Value).TotalSeconds)
+        : 0;
 
     private string _errorMessage = "";
     public string ErrorMessage
@@ -220,6 +226,7 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
                         .Trim();
                     if (string.IsNullOrEmpty(rawName)) rawName = Alias;
                     RemoteHostName = rawName;
+                    ConnectingStartedAtUtc = null;
                     ErrorMessage = "";
                     Phase = RemoteSessionPhase.Connected;
                     AudioPlayer.SetMuted(_isAudioMuted);
@@ -239,6 +246,7 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
                 {
                     string reason = msg["connect failed:".Length..].Trim();
                     CleanupSessionWindows();
+                    ConnectingStartedAtUtc = null;
                     ErrorMessage = reason;
                     Phase = RemoteSessionPhase.Error;
                     OnStateMutated?.Invoke();
@@ -246,7 +254,12 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
                 else if (msg.Contains("disconnected", StringComparison.OrdinalIgnoreCase))
                 {
                     CleanupSessionWindows();
+                    ConnectingStartedAtUtc = null;
                     Phase = RemoteSessionPhase.Idle;
+                    OnStateMutated?.Invoke();
+                }
+                else if (IsConnecting)
+                {
                     OnStateMutated?.Invoke();
                 }
             });
@@ -416,8 +429,10 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
     public void Connect(string password, bool autoOpenDesktop = false)
     {
         AutoOpenFullDesktopOnConnect = autoOpenDesktop;
+        ConnectingStartedAtUtc = DateTime.UtcNow;
         Phase = RemoteSessionPhase.Connecting;
         ErrorMessage = "";
+        StatusMessage = $"正在发起连接 {DeviceCodeFormatter.FormatInput(Target)}...";
         LinkBadge = "正在握手...";
         OnStateMutated?.Invoke();
         Bridge.ConnectSmart(Target, Port, password);
@@ -427,9 +442,20 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
     {
         Bridge.Disconnect();
         CleanupSessionWindows();
+        ConnectingStartedAtUtc = null;
         Phase = RemoteSessionPhase.Idle;
         LinkBadge = "";
         OnStatusLog?.Invoke($"[{Alias}] 已断开远程连接");
+    }
+
+    public void ClearError()
+    {
+        if (Phase == RemoteSessionPhase.Error)
+        {
+            ErrorMessage = "";
+            Phase = RemoteSessionPhase.Idle;
+            OnStateMutated?.Invoke();
+        }
     }
 
     public void RefreshApps() => Bridge.RequestAppList();

@@ -46,6 +46,8 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,6 +58,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -88,7 +91,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -241,6 +246,8 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
     val identity by viewModel.identity.collectAsState()
     val deviceBook by viewModel.deviceBook.collectAsState()
     val probeResults by viewModel.probeResults.collectAsState()
+    val releaseInfo by viewModel.updater.releaseInfo.collectAsState()
+    val showUpdateDialog by viewModel.updater.showUpdateDialog.collectAsState()
 
     var showSettingsSheet by remember { mutableStateOf(false) }
     var editingEntry by remember { mutableStateOf<DeviceBookEntry?>(null) }
@@ -251,6 +258,7 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
 
     var targetField by remember { mutableStateOf(TextFieldValue("")) }
     var manualPin by remember { mutableStateOf("") }
+    var showManualPin by remember { mutableStateOf(false) }
 
     BackHandler(enabled = true) {
         when {
@@ -319,13 +327,37 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
                             .size(28.dp)
                             .clip(RoundedCornerShape(7.dp))
                     )
-                    Text(
-                        text = "OpenUU",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = (-0.4).sp,
-                        color = TextPrimary
-                    )
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text(
+                                text = "OpenUU",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = (-0.4).sp,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = AppUpdater.displayVersion,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.5.sp,
+                                color = TextMuted
+                            )
+                        }
+                        if (releaseInfo?.hasUpdate == true) {
+                            Text(
+                                text = "⬆ 新版本 ${releaseInfo!!.tagName} · 点击更新",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFFF9F0A),
+                                modifier = Modifier.clickable {
+                                    viewModel.updater.setShowUpdateDialog(true)
+                                }
+                            )
+                        }
+                    }
                 }
 
                 Row(
@@ -625,8 +657,25 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
                                     )
                                 },
                                 singleLine = true,
+                                visualTransformation = if (showManualPin) VisualTransformation.None else PasswordVisualTransformation(),
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { showManualPin = !showManualPin },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (showManualPin) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                            contentDescription = if (showManualPin) "隐藏密码" else "显示密码",
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
                                 shape = RoundedCornerShape(9.dp),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Password,
+                                    imeAction = ImeAction.Go
+                                ),
                                 keyboardActions = KeyboardActions(
                                     onGo = {
                                         if (targetField.text.isNotBlank() && !connectionPhase.isConnecting) {
@@ -656,7 +705,11 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
                                 ),
                                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp)
                             ) {
-                                Text("连接", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                Text(
+                                    if (connectionPhase.isConnecting) "连接中..." else "连接",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
                             }
                         }
                     }
@@ -691,6 +744,13 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
         SettingsAndLogsSheet(
             viewModel = viewModel,
             onDismiss = { showSettingsSheet = false }
+        )
+    }
+
+    if (showUpdateDialog) {
+        SoftwareUpdateDialog(
+            updater = viewModel.updater,
+            onDismiss = { viewModel.updater.setShowUpdateDialog(false) }
         )
     }
 }
@@ -766,19 +826,51 @@ private fun SessionStatusBanner(
                 }
 
                 is ConnectionPhase.Connecting -> {
+                    var elapsedSec by remember { mutableStateOf(0) }
+                    LaunchedEffect(Unit) {
+                        elapsedSec = 0
+                        while (true) {
+                            delay(1000L)
+                            elapsedSec += 1
+                        }
+                    }
+
                     CircularProgressIndicator(
-                        modifier = Modifier.size(15.dp),
+                        modifier = Modifier.size(16.dp),
                         strokeWidth = 1.8.dp,
-                        color = TextPrimary
+                        color = Color(0xFFFF9F0A)
                     )
-                    Text(
-                        text = phase.detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "正在建立连接",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFFF9F0A)
+                            )
+                            if (elapsedSec > 0) {
+                                Text(
+                                    text = "已等待 ${elapsedSec}s",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                        Text(
+                            text = phase.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextPrimary,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     TextButton(
                         onClick = onDisconnect,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -1064,6 +1156,7 @@ private fun PinPromptDialog(
     onConfirm: (String) -> Unit
 ) {
     var pin by remember { mutableStateOf("") }
+    var showPin by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -1093,8 +1186,25 @@ private fun PinPromptDialog(
                     onValueChange = { pin = it },
                     placeholder = { Text("输入配对码 / 访问密码", color = TextMuted) },
                     singleLine = true,
+                    visualTransformation = if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { showPin = !showPin },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (showPin) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (showPin) "隐藏密码" else "显示密码",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    },
                     shape = RoundedCornerShape(9.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
                     keyboardActions = KeyboardActions(onDone = { onConfirm(pin) }),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1138,6 +1248,7 @@ private fun DeviceBookEditDialog(
         mutableStateOf((initial?.port ?: OpenUUConstants.DEFAULT_PORT).toString())
     }
     var savedPin by remember(initial) { mutableStateOf(initial?.savedPin.orEmpty()) }
+    var showSavedPin by remember { mutableStateOf(false) }
     var favorite by remember(initial) { mutableStateOf(initial?.favorite ?: false) }
 
     AlertDialog(
@@ -1189,6 +1300,21 @@ private fun DeviceBookEditDialog(
                         onValueChange = { savedPin = it },
                         label = { Text("配对码（可选）") },
                         singleLine = true,
+                        visualTransformation = if (showSavedPin) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { showSavedPin = !showSavedPin },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (showSavedPin) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                    contentDescription = if (showSavedPin) "隐藏密码" else "显示密码",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         shape = RoundedCornerShape(9.dp),
                         modifier = Modifier.weight(1.3f),
                         colors = industrialTextFieldColors()
@@ -1346,6 +1472,99 @@ private fun SettingsAndLogsSheet(
                 }
             }
 
+            // Software Version & Auto-Update block
+            val updPolicy by viewModel.updater.policy.collectAsState()
+            val updChecking by viewModel.updater.isChecking.collectAsState()
+            val updSummary by viewModel.updater.statusSummary.collectAsState()
+            val updInfo by viewModel.updater.releaseInfo.collectAsState()
+            var policyMenuOpen by remember { mutableStateOf(false) }
+
+            Surface(
+                color = SurfaceElevated,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(0.5.dp, BorderHairline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("版本与自动更新", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            Text(
+                                text = "${AppUpdater.displayVersion} · $updSummary",
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (updInfo?.hasUpdate == true) Color(0xFFFF9F0A) else TextPrimary
+                            )
+                        }
+                        Button(
+                            onClick = { viewModel.updater.checkForUpdates(manual = true) },
+                            enabled = !updChecking,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = TextPrimary, contentColor = BgObsidian),
+                            contentPadding = PaddingValues(horizontal = 11.dp, vertical = 6.dp)
+                        ) {
+                            Text(if (updChecking) "检查中..." else "检查更新", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("自动检查策略", fontSize = 12.sp, color = TextSecondary)
+                        Box {
+                            OutlinedButton(
+                                onClick = { policyMenuOpen = true },
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(0.5.dp, BorderHairline),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(updPolicy.label, fontSize = 12.sp, color = TextPrimary)
+                            }
+                            DropdownMenu(
+                                expanded = policyMenuOpen,
+                                onDismissRequest = { policyMenuOpen = false },
+                                containerColor = SurfaceCard
+                            ) {
+                                UpdateCheckPolicy.entries.forEach { item ->
+                                    DropdownMenuItem(
+                                        text = { Text(item.label, color = TextPrimary, fontSize = 13.sp) },
+                                        onClick = {
+                                            viewModel.updater.setPolicy(item)
+                                            policyMenuOpen = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (updInfo != null) {
+                        TextButton(
+                            onClick = {
+                                onDismiss()
+                                viewModel.updater.setShowUpdateDialog(true)
+                            },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text(
+                                text = if (updInfo?.hasUpdate == true) "查看新版本更新内容并一键安装 ➔" else "查看当前版本说明 ➔",
+                                fontSize = 12.sp,
+                                color = if (updInfo?.hasUpdate == true) Color(0xFFFF9F0A) else TextSecondary
+                            )
+                        }
+                    }
+                }
+            }
+
             // WAN Coord & Relay Config
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("跨网协调与中继 (WAN)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
@@ -1492,6 +1711,169 @@ private fun SettingsAndLogsSheet(
             }
         }
     }
+}
+
+@Composable
+private fun SoftwareUpdateDialog(
+    updater: AppUpdater,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val info by updater.releaseInfo.collectAsState()
+    val isChecking by updater.isChecking.collectAsState()
+    val installState by updater.installState.collectAsState()
+    val hasUpdate = info?.hasUpdate == true
+
+    AlertDialog(
+        onDismissRequest = {
+            if (!installState.isBusy) onDismiss()
+        },
+        containerColor = SurfaceCard,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = if (hasUpdate) "发现新版本 ${info?.tagName.orEmpty()}" else "当前已是最新版本",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary
+                )
+                val meta = listOfNotNull(
+                    "当前 ${AppUpdater.displayVersion}",
+                    info?.formattedDate?.takeIf { it.isNotBlank() },
+                    info?.formattedSize?.takeIf { it.isNotBlank() }
+                ).joinToString(" · ")
+                Text(
+                    text = meta,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp,
+                    color = TextSecondary
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("更新内容说明", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextSecondary)
+                Surface(
+                    color = BgObsidian,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 230.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(11.dp)
+                    ) {
+                        Text(
+                            text = info?.releaseNotes?.ifBlank { "暂无详细更新说明，可前往 GitHub Releases 查看完整变更记录。" }
+                                ?: "暂无更新说明",
+                            fontSize = 12.5.sp,
+                            lineHeight = 18.sp,
+                            color = TextPrimary
+                        )
+                    }
+                }
+
+                when (val st = installState) {
+                    ApkInstallState.Idle -> Unit
+                    is ApkInstallState.Downloading -> {
+                        val doneMb = st.downloadedBytes / 1048576.0
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                val label = if (st.totalBytes > 0L) {
+                                    val totMb = st.totalBytes / 1048576.0
+                                    val pct = ((st.downloadedBytes * 100L) / st.totalBytes).coerceIn(0L, 100L)
+                                    String.format("正在下载：%.1f / %.1f MB (%d%%)", doneMb, totMb, pct)
+                                } else {
+                                    String.format("正在下载：%.1f MB...", doneMb)
+                                }
+                                Text(label, fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, color = TextPrimary)
+                                TextButton(
+                                    onClick = { updater.cancelDownload() },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("取消", fontSize = 11.5.sp, color = TextSecondary)
+                                }
+                            }
+                            if (st.totalBytes > 0L) {
+                                LinearProgressIndicator(
+                                    progress = { (st.downloadedBytes.toFloat() / st.totalBytes.toFloat()).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                    is ApkInstallState.ReadyToInstall -> {
+                        Text(st.message, fontSize = 12.sp, color = StatusOnline)
+                    }
+                    is ApkInstallState.Failed -> {
+                        Text(st.error, fontSize = 12.sp, color = Color(0xFFFF8A80))
+                    }
+                }
+
+                if (hasUpdate) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(
+                            onClick = { updater.skipCurrentAvailableVersion() },
+                            enabled = !installState.isBusy
+                        ) {
+                            Text("忽略此版本", fontSize = 12.sp, color = TextSecondary)
+                        }
+                        TextButton(
+                            onClick = { updater.openReleaseInBrowser(context) }
+                        ) {
+                            Text("浏览器下载", fontSize = 12.sp, color = TextSecondary)
+                        }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !installState.isBusy
+            ) {
+                Text(if (hasUpdate) "稍后" else "关闭", color = TextSecondary)
+            }
+        },
+        confirmButton = {
+            if (hasUpdate) {
+                val btnText = when (installState) {
+                    is ApkInstallState.Downloading -> "下载中..."
+                    is ApkInstallState.ReadyToInstall -> "立即安装"
+                    else -> "一键下载并安装"
+                }
+                Button(
+                    onClick = { updater.startDownloadAndInstallApk(context) },
+                    enabled = !installState.isBusy,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TextPrimary, contentColor = BgObsidian)
+                ) {
+                    Text(btnText, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Button(
+                    onClick = { updater.checkForUpdates(manual = true) },
+                    enabled = !isChecking,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TextPrimary, contentColor = BgObsidian)
+                ) {
+                    Text(if (isChecking) "检查中..." else "重新检查", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    )
 }
 
 @Composable

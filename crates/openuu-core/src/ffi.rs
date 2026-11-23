@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use base64::Engine;
 use bytes::Bytes;
-use iroh::{EndpointAddr, PublicKey, TransportAddr};
+use iroh::{EndpointAddr, PublicKey, TransportAddr, Watcher};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
@@ -25,13 +25,14 @@ use crate::identity::{
 use crate::protocol::{pb, AudioCodec, AudioFrame, VideoCodec, VideoFrame, MAX_AUDIO_FRAME_LEN};
 use crate::transport::{
     accept_client_session_guarded, accept_iroh_session, bind_host_endpoint, connect_to_host_pinned,
-    connect_via_iroh, resolve_host_socket_addr, IncomingChannels, PeerSession,
+    connect_via_iroh_with_progress, resolve_host_socket_addr, IncomingChannels, PeerSession,
 };
 use crate::wan::{
-    bind_iroh_endpoint, bind_iroh_endpoint_with_role, compute_pin_proof_hex,
+    bind_iroh_endpoint, bind_iroh_endpoint_with_port, compute_pin_proof_hex,
     coord_register_heartbeat, coord_resolve_batch, coord_resolve_code, coord_resolve_endpoint,
-    parse_custom_relay_urls, BatchProbeQueryItem, OpenUUTicket, PinRateLimiter, RATE_LIMIT_ERR,
-    TICKET_PREFIX, UNIFIED_AUTH_OR_CODE_ERR,
+    is_lan_or_private_ip, local_private_ipv4s, parse_custom_relay_urls, probe_public_ipv4_ephemeral,
+    shares_ipv4_lan_subnet, BatchProbeQueryItem, OpenUUTicket, PinRateLimiter,
+    DEFAULT_IROH_HOST_PORT, RATE_LIMIT_ERR, TICKET_PREFIX, UNIFIED_AUTH_OR_CODE_ERR,
 };
 
 pub type OpenUUControlCallback = extern "C" fn(*mut c_void, *const c_char);
@@ -125,7 +126,10 @@ pub struct OpenUURuntime {
     host_endpoint: Mutex<Option<quinn::Endpoint>>,
     iroh_host_endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
     iroh_client_endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
+    iroh_client_init_lock: Arc<tokio::sync::Mutex<()>>,
     active_session: Arc<Mutex<Option<Arc<PeerSession>>>>,
+    connect_attempt_seq: Arc<AtomicU64>,
+    pending_connect_abort: Mutex<Option<tokio::task::AbortHandle>>,
     audio_cb: AudioCbSlot,
     host_ticket: Arc<Mutex<String>>,
     coord_status: Arc<Mutex<String>>,
@@ -135,6 +139,47 @@ pub struct OpenUURuntime {
     seq: AtomicU64,
 }
 
+async fn ensure_client_iroh_endpoint(
+    identity_arc: &Arc<Mutex<DeviceIdentity>>,
+    slot: &Arc<Mutex<Option<iroh::Endpoint>>>,
+    init_lock: &Arc<tokio::sync::Mutex<()>>,
+) -> crate::error::Result<iroh::Endpoint> {
+    if let Some(ep) = slot.lock().ok().and_then(|g| g.clone()) {
+        if !ep.is_closed() {
+            return Ok(ep);
+        }
+    }
+    let _guard = init_lock.lock().await;
+    if let Some(ep) = slot.lock().ok().and_then(|g| g.clone()) {
+        if !ep.is_closed() {
+            return Ok(ep);
+        }
+    }
+    let cur_id = identity_arc.lock().unwrap().clone();
+    let ep = bind_iroh_endpoint(&cur_id, false).await?;
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(ep.clone());
+    }
+    Ok(ep)
+}
+
+fn spawn_client_iroh_prewarm(rt: &OpenUURuntime) {
+    if let Some(ep) = rt.iroh_client_endpoint.lock().ok().and_then(|g| g.clone()) {
+        if !ep.is_closed() {
+            return;
+        }
+    }
+    let id_arc = Arc::clone(&rt.identity);
+    let slot = Arc::clone(&rt.iroh_client_endpoint);
+    let init_lock = Arc::clone(&rt.iroh_client_init_lock);
+    rt.tokio_rt.spawn(async move {
+        if let Ok(ep) = ensure_client_iroh_endpoint(&id_arc, &slot, &init_lock).await {
+            // Warm up Home Relay WebSocket + QAD/UPnP in background so first Connect has zero cold-start lag
+            let _ = tokio::time::timeout(Duration::from_millis(2500), ep.online()).await;
+        }
+    });
+}
+
 impl OpenUURuntime {
     fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::Relaxed)
@@ -142,6 +187,39 @@ impl OpenUURuntime {
 
     fn snapshot_identity(&self) -> DeviceIdentity {
         self.identity.lock().unwrap().clone()
+    }
+
+    fn begin_connect_attempt(&self) -> (u64, Arc<AtomicU64>) {
+        let attempt_id = self.connect_attempt_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(mut guard) = self.pending_connect_abort.lock() {
+            if let Some(prev) = guard.take() {
+                prev.abort();
+            }
+        }
+        (attempt_id, Arc::clone(&self.connect_attempt_seq))
+    }
+
+    fn register_connect_abort(&self, handle: tokio::task::AbortHandle) {
+        if let Ok(mut guard) = self.pending_connect_abort.lock() {
+            *guard = Some(handle);
+        }
+    }
+
+    fn cancel_in_flight_connect(&self) {
+        self.connect_attempt_seq.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut guard) = self.pending_connect_abort.lock() {
+            if let Some(prev) = guard.take() {
+                prev.abort();
+            }
+        }
+    }
+}
+
+fn format_nine_digit_code(norm: &str) -> String {
+    if norm.len() == 9 {
+        format!("{} {} {}", &norm[0..3], &norm[3..6], &norm[6..9])
+    } else {
+        norm.to_string()
     }
 }
 
@@ -633,7 +711,10 @@ pub unsafe extern "C" fn openuu_runtime_create(device_name: *const c_char) -> *m
             host_endpoint: Mutex::new(None),
             iroh_host_endpoint: Arc::new(Mutex::new(None)),
             iroh_client_endpoint: Arc::new(Mutex::new(None)),
+            iroh_client_init_lock: Arc::new(tokio::sync::Mutex::new(())),
             active_session: Arc::new(Mutex::new(None)),
+            connect_attempt_seq: Arc::new(AtomicU64::new(0)),
+            pending_connect_abort: Mutex::new(None),
             audio_cb: Arc::new(Mutex::new(None)),
             host_ticket: Arc::new(Mutex::new(String::new())),
             coord_status: Arc::new(Mutex::new("未启动".to_string())),
@@ -687,7 +768,10 @@ pub unsafe extern "C" fn openuu_runtime_create_with_dir(
             host_endpoint: Mutex::new(None),
             iroh_host_endpoint: Arc::new(Mutex::new(None)),
             iroh_client_endpoint: Arc::new(Mutex::new(None)),
+            iroh_client_init_lock: Arc::new(tokio::sync::Mutex::new(())),
             active_session: Arc::new(Mutex::new(None)),
+            connect_attempt_seq: Arc::new(AtomicU64::new(0)),
+            pending_connect_abort: Mutex::new(None),
             audio_cb: Arc::new(Mutex::new(None)),
             host_ticket: Arc::new(Mutex::new(String::new())),
             coord_status: Arc::new(Mutex::new("未启动".to_string())),
@@ -704,7 +788,16 @@ pub unsafe extern "C" fn openuu_runtime_create_with_dir(
 #[no_mangle]
 pub unsafe extern "C" fn openuu_runtime_destroy(rt: *mut OpenUURuntime) {
     if !rt.is_null() {
-        drop(Box::from_raw(rt));
+        let boxed = Box::from_raw(rt);
+        boxed.cancel_in_flight_connect();
+        if let Ok(mut ep_guard) = boxed.iroh_client_endpoint.lock() {
+            if let Some(ep) = ep_guard.take() {
+                boxed.tokio_rt.spawn(async move {
+                    ep.close().await;
+                });
+            }
+        }
+        drop(boxed);
     }
 }
 
@@ -772,7 +865,7 @@ pub unsafe extern "C" fn openuu_set_wan_config_json(
             return -4;
         }
     }
-    // Reset cached client iroh endpoint so next connect picks up updated HK relay / TLS config
+    // Reset cached client iroh endpoint and immediately pre-warm a fresh one in background
     if let Ok(mut ep_guard) = rt.iroh_client_endpoint.lock() {
         if let Some(ep) = ep_guard.take() {
             rt.tokio_rt.spawn(async move {
@@ -780,6 +873,7 @@ pub unsafe extern "C" fn openuu_set_wan_config_json(
             });
         }
     }
+    spawn_client_iroh_prewarm(rt);
     0
 }
 
@@ -852,6 +946,7 @@ unsafe fn openuu_probe_devices_online_inner(
     let Ok(queries) = serde_json::from_str::<Vec<DeviceProbeQuery>>(json_str) else {
         return -3;
     };
+    spawn_client_iroh_prewarm(rt_ref);
     let cur_id = rt_ref.snapshot_identity();
     let lan_peers = rt_ref
         .discovery
@@ -1132,20 +1227,28 @@ pub unsafe extern "C" fn openuu_start_host(
         let limiter_wan = rt.pin_limiter.clone();
         let pin_wan = pin;
 
+        let preferred_iroh_port = if local_port > 0 && local_port < u16::MAX {
+            local_port + 1
+        } else {
+            DEFAULT_IROH_HOST_PORT
+        };
+
         rt.tokio_rt.spawn(async move {
             let init_id = identity_arc_wan.lock().unwrap().clone();
             if let Ok(mut st) = coord_status_slot.lock() {
                 *st = "正在连接跨网打洞/中继网络...".to_string();
             }
-            let iroh_ep = match bind_iroh_endpoint_with_role(&init_id, false, true).await {
-                Ok(ep) => ep,
-                Err(e) => {
-                    if let Ok(mut st) = coord_status_slot.lock() {
-                        *st = format!("跨网组件启动失败: {e}");
+            let (iroh_ep, stun_init) =
+                match bind_iroh_endpoint_with_port(&init_id, false, true, preferred_iroh_port).await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        if let Ok(mut st) = coord_status_slot.lock() {
+                            *st = format!("跨网组件启动失败: {e}");
+                        }
+                        return;
                     }
-                    return;
-                }
-            };
+                };
             if !host_running.load(Ordering::SeqCst) {
                 iroh_ep.close().await;
                 return;
@@ -1154,14 +1257,15 @@ pub unsafe extern "C" fn openuu_start_host(
                 *slot = Some(iroh_ep.clone());
             }
 
-            // Publish initial ticket immediately (with LAN/IPv6 direct addrs), then refresh once Home Relay is online!
+            // Publish initial ticket immediately (already includes STUN external IPv4 + LAN/IPv6 direct addrs!),
+            // then stream live updates via `ep.watch_addr()` as Home Relay & UPnP settle.
             if let Ok(t) = OpenUUTicket::from_endpoint(&iroh_ep, &init_id, local_port).encode() {
                 if let Ok(mut slot) = ticket_slot.lock() {
                     *slot = t;
                 }
             }
 
-            // Background ticket refresher & HK Coordinator heartbeat task
+            // Background event-driven ticket refresher, ISP PPPoE IP-rotation self-healer & Coordinator heartbeat
             let ep_hb = iroh_ep.clone();
             let id_hb = Arc::clone(&identity_arc_wan);
             let ticket_hb = Arc::clone(&ticket_slot);
@@ -1170,8 +1274,17 @@ pub unsafe extern "C" fn openuu_start_host(
             let notify_hb = Arc::clone(&stop_notify);
             let pin_hb = pin_wan.clone();
             tokio::spawn(async move {
+                let mut addr_watcher = ep_hb.watch_addr();
                 // Wait up to 6s for home relay handshake so initial ticket captures the real active RelayUrl
                 let _ = tokio::time::timeout(Duration::from_secs(6), ep_hb.online()).await;
+                // Brief 250ms settle so asynchronous UPnP/PCP/NAT-PMP (`portmapper`) also lands in the first push
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(250), addr_watcher.updated()).await;
+
+                let bound_v4_port = stun_init.bound_v4_port;
+                let mut tracked_stun_addrs: Vec<SocketAddr> = stun_init.external_addrs;
+                let mut last_stun_refresh = Instant::now();
+
                 let mut last_registered_ticket = String::new();
                 let mut last_registered_coord = String::new();
                 let mut last_registered_at: Option<Instant> = None;
@@ -1180,6 +1293,27 @@ pub unsafe extern "C" fn openuu_start_host(
                     if !running_hb.load(Ordering::SeqCst) {
                         break;
                     }
+
+                    // Every 3 minutes on fixed-port Hosts, verify whether router's PPPoE public IPv4 rotated
+                    if bound_v4_port != 0 && last_stun_refresh.elapsed() >= Duration::from_secs(180)
+                    {
+                        last_stun_refresh = Instant::now();
+                        if let Some(live_v4) = probe_public_ipv4_ephemeral().await {
+                            let known_same_ip = tracked_stun_addrs
+                                .iter()
+                                .any(|sa| sa.ip() == std::net::IpAddr::V4(live_v4));
+                            if !known_same_ip {
+                                for stale in tracked_stun_addrs.drain(..) {
+                                    ep_hb.remove_external_addr(&stale).await;
+                                }
+                                let fresh_sa =
+                                    SocketAddr::new(std::net::IpAddr::V4(live_v4), bound_v4_port);
+                                ep_hb.add_external_addr(fresh_sa).await;
+                                tracked_stun_addrs.push(fresh_sa);
+                            }
+                        }
+                    }
+
                     let cur_id = id_hb.lock().unwrap().clone();
                     let ticket_obj = OpenUUTicket::from_endpoint(&ep_hb, &cur_id, local_port);
                     let encoded_ticket = ticket_obj.encode().unwrap_or_default();
@@ -1190,7 +1324,7 @@ pub unsafe extern "C" fn openuu_start_host(
                     let has_relay = !ticket_obj.relay_urls.is_empty();
                     let coord_url = cur_id.wan_config.coord_url.trim().to_string();
 
-                    // Quota-saving heartbeat: only call `/v1/register` when ticket/coord changed
+                    // Quota-saving heartbeat: push immediately on live `watch_addr()` change
                     // OR every 5 minutes (300s, server TTL = 12m), saving ~90% daily CF Worker requests!
                     let should_push = encoded_ticket != last_registered_ticket
                         || coord_url != last_registered_coord
@@ -1255,9 +1389,17 @@ pub unsafe extern "C" fn openuu_start_host(
                         }
                     }
 
-                    // Local zero-HTTP check every 15s so local IP/Wi-Fi changes trigger immediate re-register
+                    // Event-driven wakeup via `ep.watch_addr()` so Wi-Fi/IPv6/UPnP/Relay changes sync in <300ms!
                     tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(15)) => {}
+                        res = addr_watcher.updated() => {
+                            if res.is_ok() {
+                                // Coalesce rapid interface / QAD / UPnP burst updates into a single HTTP register
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                            } else {
+                                break;
+                            }
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => {}
                         _ = notify_hb.notified() => break,
                     }
                 }
@@ -1330,6 +1472,7 @@ pub unsafe extern "C" fn openuu_start_discovery(rt: *mut OpenUURuntime) -> i32 {
             return -1;
         }
         let rt = &*rt;
+        spawn_client_iroh_prewarm(rt);
         let self_id = rt.snapshot_identity().device_id;
         let Ok(mut guard) = rt.discovery.lock() else {
             return -1;
@@ -1431,19 +1574,32 @@ unsafe fn openuu_connect_client_inner(
     let active_session = Arc::clone(&rt_ref.active_session);
     let audio_cb = Arc::clone(&rt_ref.audio_cb);
     let ctx = SendPtr::new(user_ctx);
+    let (attempt_id, attempt_seq) = rt_ref.begin_connect_attempt();
 
-    rt_ref.tokio_rt.spawn(async move {
-        emit_status(on_status, ctx, &format!("connecting to {host_owned}:{port}..."));
+    let join = rt_ref.tokio_rt.spawn(async move {
+        let is_current = || attempt_seq.load(Ordering::SeqCst) == attempt_id;
+        let emit_step = |msg: &str| {
+            if is_current() {
+                emit_status(on_status, ctx, msg);
+            }
+        };
+
+        emit_step(&format!("正在解析目标地址 {host_owned}:{port}..."));
         let addr = match resolve_host_socket_addr(&host_owned, port).await {
             Ok(a) => a,
             Err(e) => {
-                emit_status(on_status, ctx, &format!("connect failed: {e}"));
+                emit_step(&format!("connect failed: {e}"));
                 return;
             }
         };
+        emit_step(&format!("正在向 {addr} 发起 QUIC 加密握手与身份验证..."));
         let cur_id = identity_arc.lock().unwrap().clone();
         match connect_to_host_pinned(&cur_id, addr, &pin_owned, None).await {
             Ok((session, channels, ack, cert_fp, verified_pk)) => {
+                if !is_current() {
+                    session.close();
+                    return;
+                }
                 if let Ok(mut guard) = identity_arc.lock() {
                     let _ = guard.trust_peer(TrustedPeer {
                         device_id: ack.device_id.clone(),
@@ -1478,10 +1634,11 @@ unsafe fn openuu_connect_client_inner(
                     crate::error::OpenUUError::PairingRejected(ref m) => m.clone(),
                     _ => format!("{e}"),
                 };
-                emit_status(on_status, ctx, &format!("connect failed: {msg}"));
+                emit_step(&format!("connect failed: {msg}"));
             }
         }
     });
+    rt_ref.register_connect_abort(join.abort_handle());
 
     0
 }
@@ -1542,11 +1699,20 @@ unsafe fn openuu_connect_smart_inner(
     let identity_arc = Arc::clone(&rt_ref.identity);
     let discovery_arc = Arc::clone(&rt_ref.discovery);
     let iroh_client_slot = Arc::clone(&rt_ref.iroh_client_endpoint);
+    let iroh_client_init_lock = Arc::clone(&rt_ref.iroh_client_init_lock);
     let active_session = Arc::clone(&rt_ref.active_session);
     let audio_cb = Arc::clone(&rt_ref.audio_cb);
     let ctx = SendPtr::new(user_ctx);
+    let (attempt_id, attempt_seq) = rt_ref.begin_connect_attempt();
 
-    rt_ref.tokio_rt.spawn(async move {
+    let join = rt_ref.tokio_rt.spawn(async move {
+        let is_current = || attempt_seq.load(Ordering::SeqCst) == attempt_id;
+        let emit_step = |msg: &str| {
+            if is_current() {
+                emit_status(on_status, ctx, msg);
+            }
+        };
+
         let cur_id = identity_arc.lock().unwrap().clone();
         let norm_code = normalize_device_code(&raw_target);
 
@@ -1586,11 +1752,10 @@ unsafe fn openuu_connect_smart_inner(
                 .or_else(|| peer.addresses.first())
             {
                 let lan_addr = SocketAddr::new(lan_ip, peer.port);
-                emit_status(
-                    on_status,
-                    ctx,
-                    &format!("发现同局域网设备 {}，正在走局域网高速直连...", peer.device_name),
-                );
+                emit_step(&format!(
+                    "发现同局域网设备 {} ({lan_ip})，正在建立局域网高速直连...",
+                    peer.device_name
+                ));
                 let expected_fp = cur_id
                     .trusted_peers
                     .get(&peer.device_id)
@@ -1602,6 +1767,10 @@ unsafe fn openuu_connect_smart_inner(
                 )
                 .await
                 {
+                    if !is_current() {
+                        session.close();
+                        return;
+                    }
                     if let Ok(mut guard) = identity_arc.lock() {
                         let _ = guard.trust_peer(TrustedPeer {
                             device_id: ack.device_id.clone(),
@@ -1632,6 +1801,7 @@ unsafe fn openuu_connect_smart_inner(
                     );
                     return;
                 }
+                emit_step("局域网直连未响应，正在自动切换跨网穿透通道...");
             }
         }
 
@@ -1648,6 +1818,7 @@ unsafe fn openuu_connect_smart_inner(
         let mut saved_code = norm_code.clone();
 
         if raw_target.starts_with(TICKET_PREFIX) {
+            emit_step("正在解析跨网连接串并提取候选路由...");
             match OpenUUTicket::decode(&raw_target) {
                 Ok(t) => {
                     saved_code = t.device_code.clone();
@@ -1657,27 +1828,24 @@ unsafe fn openuu_connect_smart_inner(
                             resolved_ticket = Some(t);
                         }
                         Err(e) => {
-                            emit_status(on_status, ctx, &format!("connect failed: {e}"));
+                            emit_step(&format!("connect failed: {e}"));
                             return;
                         }
                     }
                 }
                 Err(e) => {
-                    emit_status(on_status, ctx, &format!("connect failed: {e}"));
+                    emit_step(&format!("connect failed: {e}"));
                     return;
                 }
             }
         } else if norm_code.len() == 9 {
             let mut rate_limited = false;
+            let pretty_code = format_nine_digit_code(&norm_code);
             let trusted_entry = cur_id.find_trusted_by_code_or_id(&norm_code).cloned();
 
             if !cur_id.wan_config.coord_url.trim().is_empty() {
-                emit_status(
-                    on_status,
-                    ctx,
-                    &format!("正在验证并连接设备 {norm_code}..."),
-                );
                 let mut resolve_res = if !pin_owned.trim().is_empty() {
+                    emit_step(&format!("正在连接寻址服务验证设备码 {pretty_code}..."));
                     coord_resolve_code(
                         &cur_id.wan_config.coord_url,
                         cur_id.wan_config.allow_insecure_tls,
@@ -1701,6 +1869,9 @@ unsafe fn openuu_connect_smart_inner(
                     if !is_rl {
                         if let Some(ref tp) = trusted_entry {
                             if !tp.endpoint_id.is_empty() {
+                                emit_step(&format!(
+                                    "正在通过已信任设备密钥获取 {pretty_code} 最新在线地址..."
+                                ));
                                 if let Ok(ep_resp) = coord_resolve_endpoint(
                                     &cur_id.wan_config.coord_url,
                                     cur_id.wan_config.allow_insecure_tls,
@@ -1736,6 +1907,7 @@ unsafe fn openuu_connect_smart_inner(
             // Fallback: check local TrustedPeer cache ONLY when already paired (`trusted_entry` exists)
             if !rate_limited && target_ep_addr.is_none() {
                 if let Some(tp) = trusted_entry {
+                    emit_step("寻址服务未命中，正在使用本地缓存地址尝试重连...");
                     if tp.last_ticket.starts_with(TICKET_PREFIX) {
                         if let Ok(t) = OpenUUTicket::decode(&tp.last_ticket) {
                             if let Ok(addr) = t.to_endpoint_addr(&extra_relays) {
@@ -1765,12 +1937,13 @@ unsafe fn openuu_connect_smart_inner(
                 } else {
                     UNIFIED_AUTH_OR_CODE_ERR
                 };
-                emit_status(on_status, ctx, &format!("connect failed: {hint}"));
+                emit_step(&format!("connect failed: {hint}"));
                 return;
             }
         } else if let Some(tp) = cur_id.find_trusted_by_code_or_id(&raw_target) {
             // Reconnecting to a saved TrustedPeer by `device_id` or `endpoint_id`
             saved_code = tp.device_code.clone();
+            emit_step(&format!("正在查询已信任设备 {} 的最新在线地址...", tp.device_name));
             if !cur_id.wan_config.coord_url.trim().is_empty() {
                 let resolve_res = if !pin_owned.trim().is_empty() && tp.device_code.len() == 9 {
                     coord_resolve_code(
@@ -1824,10 +1997,16 @@ unsafe fn openuu_connect_smart_inner(
             // If TrustedPeer was a direct IP:Port LAN/DDNS entry without Iroh EndpointId
             if target_ep_addr.is_none() && !tp.last_ticket.is_empty() {
                 let (h, p) = split_host_and_port(&tp.last_ticket, fallback_port);
+                emit_step(&format!("正在解析历史直连地址 {h}:{p}..."));
                 if let Ok(sa) = resolve_host_socket_addr(&h, p).await {
+                    emit_step(&format!("正在向 {sa} 发起 QUIC 加密握手与身份验证..."));
                     let fp = Some(tp.cert_fingerprint.clone()).filter(|s| !s.is_empty());
                     match connect_to_host_pinned(&cur_id, sa, &pin_owned, fp).await {
                         Ok((session, channels, ack, _, _)) => {
+                            if !is_current() {
+                                session.close();
+                                return;
+                            }
                             emit_status(
                                 on_status,
                                 ctx,
@@ -1847,7 +2026,7 @@ unsafe fn openuu_connect_smart_inner(
                             return;
                         }
                         Err(e) => {
-                            emit_status(on_status, ctx, &format!("connect failed: {e}"));
+                            emit_step(&format!("connect failed: {e}"));
                             return;
                         }
                     }
@@ -1855,6 +2034,7 @@ unsafe fn openuu_connect_smart_inner(
             }
         } else if let Ok(pk) = PublicKey::from_str(&raw_target) {
             // Raw Iroh EndpointId string
+            emit_step("正在准备对端公钥直连与加密中继路由...");
             let addrs: Vec<TransportAddr> = extra_relays
                 .iter()
                 .cloned()
@@ -1864,30 +2044,117 @@ unsafe fn openuu_connect_smart_inner(
         } else {
             // Direct IPv4 / IPv6 / DDNS hostname[:port]
             let (host_part, port_part) = split_host_and_port(&raw_target, fallback_port);
-            emit_status(
-                on_status,
-                ctx,
-                &format!("connecting to {host_part}:{port_part}..."),
-            );
+            emit_step(&format!("正在解析目标地址 {host_part}:{port_part}..."));
             match resolve_host_socket_addr(&host_part, port_part).await {
-                Ok(addr) => match connect_to_host_pinned(&cur_id, addr, &pin_owned, None).await {
-                    Ok((session, channels, ack, cert_fp, verified_pk)) => {
+                Ok(addr) => {
+                    emit_step(&format!("正在向 {addr} 发起 QUIC 加密握手与身份验证..."));
+                    match connect_to_host_pinned(&cur_id, addr, &pin_owned, None).await {
+                        Ok((session, channels, ack, cert_fp, verified_pk)) => {
+                            if !is_current() {
+                                session.close();
+                                return;
+                            }
+                            if let Ok(mut guard) = identity_arc.lock() {
+                                let _ = guard.trust_peer(TrustedPeer {
+                                    device_id: ack.device_id.clone(),
+                                    device_name: ack.device_name.clone(),
+                                    cert_fingerprint: cert_fp.unwrap_or_default(),
+                                    endpoint_id: verified_pk.unwrap_or_default(),
+                                    device_code: String::new(),
+                                    last_relay_url: String::new(),
+                                    last_ticket: format!("{host_part}:{port_part}"),
+                                    last_connected_ms: now_epoch_ms(),
+                                });
+                            }
+                            emit_status(
+                                on_status,
+                                ctx,
+                                &format!("connected to host: {}", ack.device_name),
+                            );
+                            attach_session_callbacks(
+                                session,
+                                channels,
+                                active_session,
+                                audio_cb,
+                                on_control,
+                                on_video,
+                                on_status,
+                                ctx,
+                                "disconnected from host",
+                            );
+                            return;
+                        }
+                        Err(e) => {
+                            emit_step(&format!("connect failed: {e}"));
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    emit_step(&format!("connect failed: {e}"));
+                    return;
+                }
+            }
+        }
+
+        // ====================================================================
+        // LAYER 1.5: Same-Subnet Unicast LAN Fast-Path (`ticket.lan_quic_port`)
+        // Bypasses WAN/Relay in <2ms on corporate/campus Wi-Fi where mDNS multicast is blocked!
+        // ====================================================================
+        if let Some(ref t) = resolved_ticket {
+            if t.lan_quic_port > 0 {
+                let my_lan_v4s = local_private_ipv4s();
+                let same_subnet_ip = t.direct_addrs.iter().find_map(|sa| match sa.ip() {
+                    std::net::IpAddr::V4(v4)
+                        if my_lan_v4s
+                            .iter()
+                            .any(|mine| shares_ipv4_lan_subnet(*mine, v4)) =>
+                    {
+                        Some(v4)
+                    }
+                    _ => None,
+                });
+                if let Some(lan_v4) = same_subnet_ip {
+                    let lan_sa = SocketAddr::new(std::net::IpAddr::V4(lan_v4), t.lan_quic_port);
+                    emit_step(&format!(
+                        "检测到同网段内网地址 {lan_v4}，正在尝试内网单播极速直连..."
+                    ));
+                    let expected_fp = cur_id
+                        .trusted_peers
+                        .get(&t.device_id)
+                        .map(|tp| tp.cert_fingerprint.clone())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| {
+                            Some(t.cert_fingerprint.clone()).filter(|s| !s.is_empty())
+                        });
+                    if let Ok(Ok((session, channels, ack, cert_fp, verified_pk))) =
+                        tokio::time::timeout(
+                            Duration::from_millis(900),
+                            connect_to_host_pinned(&cur_id, lan_sa, &pin_owned, expected_fp),
+                        )
+                        .await
+                    {
+                        if !is_current() {
+                            session.close();
+                            return;
+                        }
+                        let ticket_str = t.encode().unwrap_or_default();
                         if let Ok(mut guard) = identity_arc.lock() {
                             let _ = guard.trust_peer(TrustedPeer {
                                 device_id: ack.device_id.clone(),
                                 device_name: ack.device_name.clone(),
-                                cert_fingerprint: cert_fp.unwrap_or_default(),
-                                endpoint_id: verified_pk.unwrap_or_default(),
-                                device_code: String::new(),
-                                last_relay_url: String::new(),
-                                last_ticket: format!("{host_part}:{port_part}"),
+                                cert_fingerprint: cert_fp.unwrap_or_else(|| t.cert_fingerprint.clone()),
+                                endpoint_id: verified_pk.unwrap_or_else(|| t.endpoint_id.clone()),
+                                device_code: saved_code,
+                                last_relay_url: t.relay_urls.first().cloned().unwrap_or_default(),
+                                last_ticket: ticket_str,
                                 last_connected_ms: now_epoch_ms(),
                             });
                         }
                         emit_status(
                             on_status,
                             ctx,
-                            &format!("connected to host: {}", ack.device_name),
+                            &format!("connected to host: {} (局域网直连)", ack.device_name),
                         );
                         attach_session_callbacks(
                             session,
@@ -1902,14 +2169,7 @@ unsafe fn openuu_connect_smart_inner(
                         );
                         return;
                     }
-                    Err(e) => {
-                        emit_status(on_status, ctx, &format!("connect failed: {e}"));
-                        return;
-                    }
-                },
-                Err(e) => {
-                    emit_status(on_status, ctx, &format!("connect failed: {e}"));
-                    return;
+                    emit_step("内网单播未响应，正在切换跨网 P2P 打洞通道...");
                 }
             }
         }
@@ -1918,37 +2178,39 @@ unsafe fn openuu_connect_smart_inner(
         // Dial via Iroh (Cascading: IPv6 Direct -> IPv4 STUN P2P -> HK Relay -> n0 Fallback)
         // ====================================================================
         let Some(ep_addr) = target_ep_addr else {
-            emit_status(on_status, ctx, "connect failed: unable to build target EndpointAddr");
+            emit_step("connect failed: unable to build target EndpointAddr");
             return;
         };
 
-        emit_status(
-            on_status,
-            ctx,
-            "正在建立跨网加密连接（并发探测 IPv6 / P2P 打洞 / 中继兜底）...",
-        );
+        let has_warm_ep = iroh_client_slot
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|ep| !ep.is_closed()))
+            .unwrap_or(false);
+        if !has_warm_ep {
+            emit_step("正在初始化本机打洞组件并探测本地 NAT 公网映射...");
+        }
 
-        let existing_client_ep = iroh_client_slot.lock().ok().and_then(|g| g.clone());
-        let client_ep = match existing_client_ep {
-            Some(ep) => ep,
-            None => match bind_iroh_endpoint(&cur_id, false).await {
-                Ok(ep) => {
-                    if let Ok(mut slot) = iroh_client_slot.lock() {
-                        *slot = Some(ep.clone());
-                    }
-                    ep
-                }
-                Err(e) => {
-                    emit_status(on_status, ctx, &format!("connect failed: {e}"));
-                    return;
-                }
-            },
+        let client_ep = match ensure_client_iroh_endpoint(
+            &identity_arc,
+            &iroh_client_slot,
+            &iroh_client_init_lock,
+        )
+        .await
+        {
+            Ok(ep) => ep,
+            Err(e) => {
+                emit_step(&format!("connect failed: {e}"));
+                return;
+            }
         };
 
         let dial_timeout = Duration::from_secs(22);
         let mut connect_res = match tokio::time::timeout(
             dial_timeout,
-            connect_via_iroh(&client_ep, &cur_id, ep_addr.clone(), &pin_owned),
+            connect_via_iroh_with_progress(&client_ep, &cur_id, ep_addr.clone(), &pin_owned, |step| {
+                emit_step(step);
+            }),
         )
         .await
         {
@@ -1976,6 +2238,7 @@ unsafe fn openuu_connect_smart_inner(
                 {
                     if let Some(ref orig_ticket) = resolved_ticket {
                         if orig_ticket.endpoint_id.len() == 64 {
+                            emit_step("原连接串可能已变更，正在向寻址服务查询最新地址...");
                             if let Ok(resp) = coord_resolve_endpoint(
                                 &cur_id.wan_config.coord_url,
                                 cur_id.wan_config.allow_insecure_tls,
@@ -1989,25 +2252,23 @@ unsafe fn openuu_connect_smart_inner(
                                         if let Ok(fresh_addr) =
                                             fresh_ticket.to_endpoint_addr(&extra_relays)
                                         {
-                                            emit_status(
-                                                on_status,
-                                                ctx,
-                                                "原连接串已过期或不可达，已从寻址服刷新最新地址并重试...",
-                                            );
-                                            if let Ok(fresh_ep) =
-                                                bind_iroh_endpoint(&cur_id, false).await
+                                            emit_step("已获取最新在线地址，正在初始化第 2 次穿透重连...");
+                                            if let Ok(fresh_ep) = ensure_client_iroh_endpoint(
+                                                &identity_arc,
+                                                &iroh_client_slot,
+                                                &iroh_client_init_lock,
+                                            )
+                                            .await
                                             {
-                                                if let Ok(mut slot) = iroh_client_slot.lock() {
-                                                    *slot = Some(fresh_ep.clone());
-                                                }
                                                 resolved_ticket = Some(fresh_ticket);
                                                 connect_res = match tokio::time::timeout(
                                                     dial_timeout,
-                                                    connect_via_iroh(
+                                                    connect_via_iroh_with_progress(
                                                         &fresh_ep,
                                                         &cur_id,
                                                         fresh_addr,
                                                         &pin_owned,
+                                                        |step| emit_step(step),
                                                     ),
                                                 )
                                                 .await
@@ -2025,11 +2286,104 @@ unsafe fn openuu_connect_smart_inner(
                         }
                     }
                 }
+
+                // Final Direct QUIC Rescue (`ticket.lan_quic_port` over Global IPv6 / Port-Forwarded IPv4):
+                // Rescues connectivity even during a 100% Relay outage when Host's dual-stack port is reachable!
+                if connect_res.is_err() {
+                    if let Some(ref t) = resolved_ticket {
+                        let pinned_fp = cur_id
+                            .trusted_peers
+                            .get(&t.device_id)
+                            .map(|tp| tp.cert_fingerprint.clone())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
+                                Some(t.cert_fingerprint.clone()).filter(|s| !s.is_empty())
+                            });
+                        if t.lan_quic_port > 0 && pinned_fp.is_some() {
+                            let mut tried_ips: Vec<std::net::IpAddr> = Vec::new();
+                            for sa in &t.direct_addrs {
+                                let ip = sa.ip();
+                                if is_lan_or_private_ip(ip) || tried_ips.contains(&ip) {
+                                    continue;
+                                }
+                                tried_ips.push(ip);
+                                if tried_ips.len() > 2 {
+                                    break;
+                                }
+                                let direct_sa = SocketAddr::new(ip, t.lan_quic_port);
+                                emit_step(&format!(
+                                    "中继暂不可达，正在尝试公网直连地址 {direct_sa} 兜底穿透..."
+                                ));
+                                if let Ok(Ok((session, channels, ack, cert_fp, verified_pk))) =
+                                    tokio::time::timeout(
+                                        Duration::from_millis(2500),
+                                        connect_to_host_pinned(
+                                            &cur_id,
+                                            direct_sa,
+                                            &pin_owned,
+                                            pinned_fp.clone(),
+                                        ),
+                                    )
+                                    .await
+                                {
+                                    if !is_current() {
+                                        session.close();
+                                        return;
+                                    }
+                                    let link = session.link_telemetry();
+                                    let ticket_str = t.encode().unwrap_or_default();
+                                    if let Ok(mut guard) = identity_arc.lock() {
+                                        let _ = guard.trust_peer(TrustedPeer {
+                                            device_id: ack.device_id.clone(),
+                                            device_name: ack.device_name.clone(),
+                                            cert_fingerprint: cert_fp
+                                                .unwrap_or_else(|| t.cert_fingerprint.clone()),
+                                            endpoint_id: verified_pk
+                                                .unwrap_or_else(|| t.endpoint_id.clone()),
+                                            device_code: saved_code,
+                                            last_relay_url: t
+                                                .relay_urls
+                                                .first()
+                                                .cloned()
+                                                .unwrap_or_default(),
+                                            last_ticket: ticket_str,
+                                            last_connected_ms: now_epoch_ms(),
+                                        });
+                                    }
+                                    emit_status(
+                                        on_status,
+                                        ctx,
+                                        &format!(
+                                            "connected to host: {} (P2P 直连 {}ms)",
+                                            ack.device_name, link.rtt_ms
+                                        ),
+                                    );
+                                    attach_session_callbacks(
+                                        session,
+                                        channels,
+                                        active_session,
+                                        audio_cb,
+                                        on_control,
+                                        on_video,
+                                        on_status,
+                                        ctx,
+                                        "disconnected from host",
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
         match connect_res {
             Ok((session, channels, ack, verified_host_pk)) => {
+                if !is_current() {
+                    session.close();
+                    return;
+                }
                 let link = session.link_telemetry();
                 let ticket_str = resolved_ticket
                     .as_ref()
@@ -2039,12 +2393,16 @@ unsafe fn openuu_connect_smart_inner(
                     .as_ref()
                     .and_then(|t| t.relay_urls.first().cloned())
                     .unwrap_or_default();
+                let cert_fp_str = resolved_ticket
+                    .as_ref()
+                    .map(|t| t.cert_fingerprint.clone())
+                    .unwrap_or_default();
 
                 if let Ok(mut guard) = identity_arc.lock() {
                     let _ = guard.trust_peer(TrustedPeer {
                         device_id: ack.device_id.clone(),
                         device_name: ack.device_name.clone(),
-                        cert_fingerprint: String::new(),
+                        cert_fingerprint: cert_fp_str,
                         endpoint_id: verified_host_pk,
                         device_code: saved_code,
                         last_relay_url: relay_str,
@@ -2096,10 +2454,11 @@ unsafe fn openuu_connect_smart_inner(
                         }
                     }
                 };
-                emit_status(on_status, ctx, &format!("connect failed: {msg}"));
+                emit_step(&format!("connect failed: {msg}"));
             }
         }
     });
+    rt_ref.register_connect_abort(join.abort_handle());
 
     0
 }
@@ -2135,6 +2494,7 @@ pub unsafe extern "C" fn openuu_disconnect(rt: *mut OpenUURuntime) {
         return;
     }
     let rt = &*rt;
+    rt.cancel_in_flight_connect();
     if let Ok(mut guard) = rt.active_session.lock() {
         if let Some(session) = guard.take() {
             session.close();
@@ -2769,6 +3129,67 @@ pub unsafe extern "C" fn openuu_stop_remote_session(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn openuu_get_core_version() -> *mut c_char {
+    CString::new(crate::updater::CORE_VERSION)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_check_update(
+    rt: *mut OpenUURuntime,
+    current_version: *const c_char,
+    platform: *const c_char,
+    arch: *const c_char,
+    on_result: Option<OpenUUStatusCallback>,
+    user_ctx: *mut c_void,
+) -> i32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if rt.is_null() {
+            return -1;
+        }
+        let rt_ref = &*rt;
+        let cur_ver = if current_version.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(current_version)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let plat = if platform.is_null() {
+            std::env::consts::OS.to_string()
+        } else {
+            CStr::from_ptr(platform).to_string_lossy().into_owned()
+        };
+        let arch_str = if arch.is_null() {
+            std::env::consts::ARCH.to_string()
+        } else {
+            CStr::from_ptr(arch).to_string_lossy().into_owned()
+        };
+        let id = rt_ref.snapshot_identity();
+        let coord_url = id.wan_config.coord_url.clone();
+        let allow_insecure = id.wan_config.allow_insecure_tls;
+        let ctx = SendPtr::new(user_ctx);
+
+        rt_ref.tokio_rt.spawn(async move {
+            let res = crate::updater::check_latest_release(
+                &coord_url,
+                allow_insecure,
+                &cur_ver,
+                &plat,
+                &arch_str,
+            )
+            .await;
+            if let Ok(json) = serde_json::to_string(&res) {
+                emit_status(on_result, ctx, &json);
+            }
+        });
+        0
+    }))
+    .unwrap_or(-99)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn openuu_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
@@ -3099,6 +3520,217 @@ mod tests {
             openuu_runtime_destroy(sess_b);
             openuu_runtime_destroy(host_a);
             openuu_runtime_destroy(host_b);
+        }
+    }
+
+    #[test]
+    fn ffi_same_subnet_lan_fast_path_without_mdns() {
+        let my_lan_v4s = crate::wan::local_private_ipv4s();
+        let Some(&lan_v4) = my_lan_v4s.first() else {
+            return;
+        };
+
+        let _guard = FFI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let tmp_h = std::env::temp_dir().join("openuu-nomdns-host");
+            let tmp_c = std::env::temp_dir().join("openuu-nomdns-client");
+            let _ = std::fs::remove_dir_all(&tmp_h);
+            let _ = std::fs::remove_dir_all(&tmp_c);
+
+            let h_dir = CString::new(tmp_h.to_string_lossy().as_ref()).unwrap();
+            let c_dir = CString::new(tmp_c.to_string_lossy().as_ref()).unwrap();
+            let h_name = CString::new("Campus-Host").unwrap();
+            let c_name = CString::new("Campus-Client").unwrap();
+
+            let host_rt = openuu_runtime_create_with_dir(h_name.as_ptr(), h_dir.as_ptr());
+            let client_rt = openuu_runtime_create_with_dir(c_name.as_ptr(), c_dir.as_ptr());
+            assert!(!host_rt.is_null() && !client_rt.is_null());
+
+            let (tx, rx) = std_mpsc::channel::<String>();
+            let mut pin_buf = [0 as c_char; 16];
+            let host_port = openuu_start_host(
+                host_rt,
+                0,
+                pin_buf.as_mut_ptr(),
+                pin_buf.len(),
+                Some(test_ctrl_cb),
+                None,
+                None,
+                (&tx as *const _) as *mut c_void,
+            );
+            assert!(host_port > 0);
+            let pin = CStr::from_ptr(pin_buf.as_ptr()).to_str().unwrap().to_string();
+
+            // Build a ticket with ZERO relays, unreachable dummy iroh port, and NO mDNS started on client —
+            // ONLY Layer 1.5 (`ticket.lan_quic_port` + pinned `cert_fingerprint`) can succeed!
+            let host_id = (&*host_rt).snapshot_identity();
+            let ticket = OpenUUTicket {
+                v: 1,
+                endpoint_id: host_id.endpoint_id_str(),
+                device_id: host_id.device_id.clone(),
+                device_name: host_id.device_name.clone(),
+                device_code: host_id.device_code.clone(),
+                relay_urls: Vec::new(),
+                direct_addrs: vec![SocketAddr::new(std::net::IpAddr::V4(lan_v4), 59999)],
+                lan_quic_port: host_port,
+                cert_fingerprint: host_id.cert_fingerprint.clone(),
+            };
+            let encoded = CString::new(ticket.encode().unwrap()).unwrap();
+            let pin_c = CString::new(pin).unwrap();
+
+            assert_eq!(
+                openuu_connect_smart(
+                    client_rt,
+                    encoded.as_ptr(),
+                    host_port,
+                    pin_c.as_ptr(),
+                    None,
+                    None,
+                    None,
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+
+            std::thread::sleep(Duration::from_millis(250));
+            let msg_c = CString::new("AP隔离无mDNS同网段秒连").unwrap();
+            assert_eq!(openuu_send_text_commit(client_rt, 42, msg_c.as_ptr()), 0);
+
+            let mut received_ok = false;
+            for _ in 0..4 {
+                if let Ok(ev) = rx.recv_timeout(Duration::from_secs(2)) {
+                    if ev.contains("AP隔离无mDNS同网段秒连") {
+                        received_ok = true;
+                        break;
+                    }
+                }
+            }
+            assert!(
+                received_ok,
+                "Layer 1.5 same-subnet lan_quic_port fast-path must connect even without mDNS or Relays"
+            );
+
+            openuu_disconnect(client_rt);
+            openuu_stop_host(host_rt);
+            openuu_runtime_destroy(client_rt);
+            openuu_runtime_destroy(host_rt);
+            let _ = std::fs::remove_dir_all(&tmp_h);
+            let _ = std::fs::remove_dir_all(&tmp_c);
+        }
+    }
+
+    extern "C" fn test_status_cb(ctx: *mut c_void, status: *const c_char) {
+        unsafe {
+            let tx = &*(ctx as *const std_mpsc::Sender<String>);
+            if let Ok(s) = CStr::from_ptr(status).to_str() {
+                let _ = tx.send(s.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn ffi_connect_emits_step_progress_and_supports_cancel() {
+        let _guard = FFI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let tmp_h = std::env::temp_dir().join("openuu-step-host");
+            let tmp_c = std::env::temp_dir().join("openuu-step-client");
+            let _ = std::fs::remove_dir_all(&tmp_h);
+            let _ = std::fs::remove_dir_all(&tmp_c);
+
+            let h_dir = CString::new(tmp_h.to_string_lossy().as_ref()).unwrap();
+            let c_dir = CString::new(tmp_c.to_string_lossy().as_ref()).unwrap();
+            let h_name = CString::new("Step-Host").unwrap();
+            let c_name = CString::new("Step-Client").unwrap();
+
+            let host_rt = openuu_runtime_create_with_dir(h_name.as_ptr(), h_dir.as_ptr());
+            let client_rt = openuu_runtime_create_with_dir(c_name.as_ptr(), c_dir.as_ptr());
+            assert!(!host_rt.is_null() && !client_rt.is_null());
+
+            let mut pin_buf = [0 as c_char; 16];
+            let host_port = openuu_start_host(
+                host_rt,
+                0,
+                pin_buf.as_mut_ptr(),
+                pin_buf.len(),
+                None,
+                None,
+                None,
+                std::ptr::null_mut(),
+            );
+            assert!(host_port > 0);
+            let pin = CStr::from_ptr(pin_buf.as_ptr()).to_str().unwrap().to_string();
+
+            let (status_tx, status_rx) = std_mpsc::channel::<String>();
+            let ip_c = CString::new("127.0.0.1").unwrap();
+            let pin_c = CString::new(pin).unwrap();
+            assert_eq!(
+                openuu_connect_client(
+                    client_rt,
+                    ip_c.as_ptr(),
+                    host_port,
+                    pin_c.as_ptr(),
+                    None,
+                    None,
+                    Some(test_status_cb),
+                    (&status_tx as *const _) as *mut c_void,
+                ),
+                0
+            );
+
+            let mut steps = Vec::new();
+            while let Ok(msg) = status_rx.recv_timeout(Duration::from_secs(2)) {
+                let done = msg.starts_with("connected to host:");
+                steps.push(msg);
+                if done {
+                    break;
+                }
+            }
+            assert!(
+                steps.iter().any(|s| s.contains("正在解析目标地址")),
+                "expected DNS/address step, got {steps:?}"
+            );
+            assert!(
+                steps.iter().any(|s| s.contains("发起 QUIC 加密握手")),
+                "expected QUIC handshake step, got {steps:?}"
+            );
+            assert!(
+                steps.last().map(|s| s.starts_with("connected to host:")).unwrap_or(false),
+                "expected final connected status, got {steps:?}"
+            );
+
+            openuu_disconnect(client_rt);
+            //Drain disconnect event if any
+            while status_rx.recv_timeout(Duration::from_millis(80)).is_ok() {}
+
+            // Verify in-flight cancel (`openuu_disconnect` aborts pending blackhole connect immediately)
+            let blackhole = CString::new("192.0.2.1").unwrap(); // TEST-NET-1 unreachable
+            assert_eq!(
+                openuu_connect_client(
+                    client_rt,
+                    blackhole.as_ptr(),
+                    39481,
+                    pin_c.as_ptr(),
+                    None,
+                    None,
+                    Some(test_status_cb),
+                    (&status_tx as *const _) as *mut c_void,
+                ),
+                0
+            );
+            std::thread::sleep(Duration::from_millis(30));
+            openuu_disconnect(client_rt);
+            // Drain any pre-cancel step message, then verify NO late `connect failed:` arrives after cancel
+            while status_rx.recv_timeout(Duration::from_millis(30)).is_ok() {}
+            assert!(
+                status_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+                "cancelled connect attempt must not emit late callbacks"
+            );
+
+            openuu_stop_host(host_rt);
+            openuu_runtime_destroy(client_rt);
+            openuu_runtime_destroy(host_rt);
+            let _ = std::fs::remove_dir_all(&tmp_h);
+            let _ = std::fs::remove_dir_all(&tmp_c);
         }
     }
 }

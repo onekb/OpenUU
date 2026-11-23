@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Foundation
 import SwiftUI
@@ -183,6 +184,7 @@ final class MobileSessionViewModel: ObservableObject {
 
     // Connect form & canvas zoom state
     @Published var targetInput: String = ""
+    @Published var connectingStartedAt: Date?
     @Published var portInput: String = "\(OpenUUConstants.defaultPort)"
     @Published var pinInput: String = ""
     @Published var canvasZoomScale: CGFloat = 1.0
@@ -192,8 +194,10 @@ final class MobileSessionViewModel: ObservableObject {
 
     let bridge: OpenUUBridge
     let deviceBook: DeviceBookStore
+    var updater = MobileAppUpdater()
     let videoRenderer = IOSVideoDisplayRenderer()
     let audioPlayer = IOSAudioStreamPlayer()
+    private var updaterCancellables: Set<AnyCancellable> = []
 
     private let activeWindowIDBox = LockedValue<UInt32>(0)
     private let popoverRenderersBox = LockedValue<[UInt32: IOSVideoDisplayRenderer]>([:])
@@ -253,7 +257,18 @@ final class MobileSessionViewModel: ObservableObject {
         bridge.startDiscovery()
         refreshIdentityAndDeviceBook()
         startDiscoveryPolling()
-        appendLog("OpenUU Core 已就绪 (\(finalDeviceName))")
+        appendLog("OpenUU Core 已就绪 (\(finalDeviceName), \(MobileAppVersion.display))")
+
+        updater.coordURLProvider = { [weak self] in
+            self?.wanConfig.coord_url ?? OpenUUConstants.defaultCoordURL
+        }
+        updater.onLog = { [weak self] msg in
+            self?.appendLog("[更新] \(msg)")
+        }
+        updater.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &updaterCancellables)
+        updater.startScheduledChecks()
 
         checkAndStartE2EIfConfigured()
     }
@@ -419,12 +434,15 @@ final class MobileSessionViewModel: ObservableObject {
         lastConnectedPort = port
         lastConnectedPin = pin
         autoOpenDesktopOnConnect = autoOpenDesktop
-        phase = .connecting("正在连接 \(cleanTarget)...")
-        statusMessage = "正在连接 \(cleanTarget)..."
+        connectingStartedAt = Date()
+        let pretty = DeviceCodeFormatter.formatInput(cleanTarget)
+        phase = .connecting("正在发起连接 \(pretty)...")
+        statusMessage = "正在发起连接 \(pretty)..."
         linkBadge = "握手中..."
         appendLog("发起智能连接: \(cleanTarget)")
         let ok = bridge.connectSmart(target: cleanTarget, defaultPort: port, pin: pin)
         if !ok {
+            connectingStartedAt = nil
             phase = .error("连接参数无效")
             appendLog("connectSmart 参数校验失败")
         }
@@ -438,14 +456,21 @@ final class MobileSessionViewModel: ObservableObject {
         lastConnectedPort = port
         lastConnectedPin = pin
         autoOpenDesktopOnConnect = false
+        connectingStartedAt = Date()
         phase = .connecting("正在直连 \(cleanIP):\(port)...")
         statusMessage = "正在直连 \(cleanIP):\(port)..."
         linkBadge = "直连握手中..."
         appendLog("发起局域网直连: \(cleanIP):\(port)")
         let ok = bridge.connectClient(hostIP: cleanIP, port: port, pin: pin)
         if !ok {
+            connectingStartedAt = nil
             phase = .error("直连参数无效")
         }
+    }
+
+    func elapsedConnectingSeconds(at now: Date = Date()) -> Int {
+        guard let start = connectingStartedAt else { return 0 }
+        return max(0, Int(now.timeIntervalSince(start)))
     }
 
     func clearConnectionError() {
@@ -457,6 +482,7 @@ final class MobileSessionViewModel: ObservableObject {
     func disconnect() {
         bridge.disconnect()
         resetSessionState()
+        connectingStartedAt = nil
         phase = .idle
         statusMessage = "已断开连接"
         appendLog("已主动断开连接")
@@ -1205,6 +1231,7 @@ final class MobileSessionViewModel: ObservableObject {
                 .components(separatedBy: " (")
                 .first?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Mac"
+            connectingStartedAt = nil
             phase = .connected(hostName.isEmpty ? "Mac" : hostName)
             audioPlayer.setMuted(!remoteAudioEnabled)
             bridge.sendAudioControl(enabled: remoteAudioEnabled, muteHost: muteHostAudio)
@@ -1231,16 +1258,20 @@ final class MobileSessionViewModel: ObservableObject {
         } else if msg.hasPrefix("connect failed:") {
             let reason = msg.replacingOccurrences(of: "connect failed:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             resetSessionState()
+            connectingStartedAt = nil
             phase = .error(reason)
             if e2eConfig != nil {
                 writeE2ELog("E2E_CONNECT_FAILED reason=\(reason)")
             }
         } else if msg.contains("disconnected") {
             resetSessionState()
+            connectingStartedAt = nil
             phase = .idle
             if e2eConfig != nil {
                 writeE2ELog("E2E_DISCONNECTED raw=\(msg)")
             }
+        } else if phase.isConnecting {
+            phase = .connecting(msg)
         }
     }
 

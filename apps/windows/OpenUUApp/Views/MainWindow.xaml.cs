@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         """;
 
     private readonly AppState _state;
+    private readonly System.Windows.Threading.DispatcherTimer _connectingTickTimer;
+    private SoftwareUpdateDialog? _activeUpdateDialog;
     private bool _syncingUi;
     private string _selectedGroupFilter = "全部";
     private bool _isDrawerCollapsed;
@@ -36,6 +38,17 @@ public partial class MainWindow : Window
     public MainWindow(AppState state)
     {
         _state = state;
+        _connectingTickTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1.0)
+        };
+        _connectingTickTimer.Tick += (_, _) =>
+        {
+            if (_state.QuickStatusSession?.IsConnecting == true || _state.ConnectedSessions.Any(s => s.IsConnecting))
+                SyncAllFromState();
+            else
+                _connectingTickTimer.Stop();
+        };
         _syncingUi = true;
         InitializeComponent();
         _syncingUi = false;
@@ -52,7 +65,26 @@ public partial class MainWindow : Window
         foreach (var level in Enum.GetValues<OpenUULogLevel>())
             LogLevelCombo.Items.Add(level.GetLabel());
         LogLevelCombo.SelectedIndex = (int)_state.SelectedLogLevel;
+
+        foreach (var pol in Enum.GetValues<UpdateCheckPolicy>())
+            UpdatePolicyCombo.Items.Add(pol.GetLabel());
+        UpdatePolicyCombo.SelectedIndex = (int)_state.Updater.Policy;
+        SidebarVersionText.Text = AppVersion.Display;
+        SettingsCurrentVerText.Text = $"当前客户端版本：{AppVersion.Display}";
         _syncingUi = false;
+
+        _state.Updater.OnShowUpdateDialogRequested = _ =>
+        {
+            Dispatcher.BeginInvoke(() => ShowSoftwareUpdateDialog());
+        };
+        _state.Updater.OnRequestShutdownForUpdate = () =>
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                AllowTrueClose = true;
+                System.Windows.Application.Current.Shutdown();
+            });
+        };
 
         QuickTargetBox.SubmitRequested += () => _state.ConnectFromQuickInput(autoOpenDesktop: false);
         QuickTargetBox.TextChanged += (_, _) =>
@@ -60,8 +92,18 @@ public partial class MainWindow : Window
             if (!_syncingUi)
             {
                 _state.QuickConnectTarget = QuickTargetBox.Text;
-                if (QuickPasswordBox.Text != _state.QuickConnectPassword)
-                    QuickPasswordBox.Text = _state.QuickConnectPassword;
+                _syncingUi = true;
+                try
+                {
+                    if (QuickPasswordBox.Text != _state.QuickConnectPassword)
+                        QuickPasswordBox.Text = _state.QuickConnectPassword;
+                    if (QuickPasswordSecureBox.Password != _state.QuickConnectPassword)
+                        QuickPasswordSecureBox.Password = _state.QuickConnectPassword;
+                }
+                finally
+                {
+                    _syncingUi = false;
+                }
             }
         };
 
@@ -75,6 +117,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             _state.StartDiscovery();
+            _state.Updater.StartScheduledChecks();
             SyncAllFromState();
             RefreshLogsBox();
         };
@@ -171,7 +214,7 @@ public partial class MainWindow : Window
             HostPinBox.Visibility = _state.IsHostPasswordRevealed ? Visibility.Visible : Visibility.Collapsed;
             HostPinMaskedText.Text = _state.MaskedHostPin;
             HostPinMaskedText.Visibility = _state.IsHostPasswordRevealed ? Visibility.Collapsed : Visibility.Visible;
-            TogglePinEyeBtn.Content = _state.IsHostPasswordRevealed ? "隐藏" : "显示";
+            TogglePinEyeBtn.Content = _state.IsHostPasswordRevealed ? "🙈" : "👁";
             RegenPinBtn.Visibility = _state.IsHostRunning ? Visibility.Collapsed : Visibility.Visible;
 
             HeroHostPillBtn.Content = _state.IsHostRunning ? "● 被控运行中 · 点击关闭" : "⚡ 点击开启被控";
@@ -194,10 +237,22 @@ public partial class MainWindow : Window
                 QuickTargetBox.Text = _state.QuickConnectTarget;
             if (!QuickPasswordBox.IsKeyboardFocused && QuickPasswordBox.Text != _state.QuickConnectPassword)
                 QuickPasswordBox.Text = _state.QuickConnectPassword;
+            if (!QuickPasswordSecureBox.IsKeyboardFocused && QuickPasswordSecureBox.Password != _state.QuickConnectPassword)
+                QuickPasswordSecureBox.Password = _state.QuickConnectPassword;
+            QuickPasswordBox.Visibility = _state.IsQuickPasswordRevealed ? Visibility.Visible : Visibility.Collapsed;
+            QuickPasswordSecureBox.Visibility = _state.IsQuickPasswordRevealed ? Visibility.Collapsed : Visibility.Visible;
+            ToggleQuickPwEyeBtn.Content = _state.IsQuickPasswordRevealed ? "🙈" : "👁";
             if (!QuickPortBox.IsKeyboardFocused && QuickPortBox.Text != _state.QuickConnectPort)
                 QuickPortBox.Text = _state.QuickConnectPort;
             QuickBookPickerBtn.Visibility = _state.DeviceBook.Devices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
+            bool anyConnecting = _state.QuickStatusSession?.IsConnecting == true || _state.ConnectedSessions.Any(s => s.IsConnecting);
+            if (anyConnecting && !_connectingTickTimer.IsEnabled)
+                _connectingTickTimer.Start();
+            else if (!anyConnecting && _connectingTickTimer.IsEnabled)
+                _connectingTickTimer.Stop();
+
+            RebuildQuickConnectStatusBanner();
             RebuildLanDiscoveryStrip();
             RebuildActiveSessionsDockAndRecent();
 
@@ -236,6 +291,23 @@ public partial class MainWindow : Window
 
             RebuildTrustedPeersCard();
 
+            // Software Update Status & Sidebar Pill
+            bool hasUpd = _state.Updater.HasAvailableUpdate;
+            SidebarBrandSubText.Visibility = hasUpd ? Visibility.Collapsed : Visibility.Visible;
+            SidebarUpdatePillBtn.Visibility = hasUpd ? Visibility.Visible : Visibility.Collapsed;
+            if (hasUpd && _state.Updater.ReleaseInfo != null)
+                SidebarUpdatePillBtn.Content = $"⬆ 新版本 {_state.Updater.ReleaseInfo.TagName} · 点击更新";
+
+            SettingsUpdateSummaryText.Text = $"  ·  {_state.Updater.StatusSummary}";
+            SettingsUpdateSummaryText.Foreground = hasUpd
+                ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(217, 119, 6))
+                : (SolidColorBrush)FindResource("TextSecondary");
+            ViewReleaseNotesBtn.Visibility = _state.Updater.ReleaseInfo != null ? Visibility.Visible : Visibility.Collapsed;
+            ViewReleaseNotesBtn.Content = hasUpd ? "查看更新内容 / 一键更新" : "查看版本说明";
+            CheckUpdatesNowBtn.Content = _state.Updater.IsChecking ? "正在检查..." : "立即检查更新";
+            CheckUpdatesNowBtn.IsEnabled = !_state.Updater.IsChecking;
+            UpdatePolicyCombo.SelectedIndex = (int)_state.Updater.Policy;
+
             // Network Page (sync only if not actively editing)
             if (!WanCoordBox.IsKeyboardFocused) WanCoordBox.Text = _state.WanCoordUrl;
             if (!WanRelayBox.IsKeyboardFocused) WanRelayBox.Text = _state.WanRelayUrl;
@@ -258,6 +330,122 @@ public partial class MainWindow : Window
             ? (SolidColorBrush)FindResource("AccentBrush")
             : (SolidColorBrush)FindResource("TextPrimary");
         btn.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
+    private void RebuildQuickConnectStatusBanner()
+    {
+        var statusSess = _state.QuickStatusSession;
+        bool isQuickConnecting = statusSess?.IsConnecting == true;
+        QuickConnectAppsBtn.Content = isQuickConnecting ? "⏳ 正在建立连接..." : "连接并挑应用";
+        QuickConnectAppsBtn.IsEnabled = !isQuickConnecting;
+        QuickConnectDesktopBtn.IsEnabled = !isQuickConnecting;
+
+        if (statusSess == null)
+        {
+            QuickConnectStatusHost.Content = null;
+            QuickConnectStatusHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (statusSess.IsConnecting)
+        {
+            int secs = statusSess.ElapsedConnectingSeconds;
+            var banner = new Border
+            {
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 251, 235)),
+                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(252, 211, 77)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(11, 9, 11, 9)
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var leftCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            string header = secs > 0
+                ? $"⏳ 正在建立连接 · {statusSess.Alias}   (已等待 {secs}s)"
+                : $"⏳ 正在建立连接 · {statusSess.Alias}";
+            leftCol.Children.Add(new TextBlock
+            {
+                Text = header,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9))
+            });
+            leftCol.Children.Add(new TextBlock
+            {
+                Text = statusSess.StatusMessage,
+                FontSize = 12,
+                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 0)
+            });
+            Grid.SetColumn(leftCol, 0);
+            grid.Children.Add(leftCol);
+
+            var cancelBtn = new System.Windows.Controls.Button
+            {
+                Content = "取消",
+                Padding = new Thickness(10, 4, 10, 4),
+                FontSize = 11.5,
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("SecondaryButtonStyle")
+            };
+            string sid = statusSess.Id;
+            cancelBtn.Click += (_, _) => _state.DisconnectSession(sid);
+            Grid.SetColumn(cancelBtn, 1);
+            grid.Children.Add(cancelBtn);
+
+            banner.Child = grid;
+            QuickConnectStatusHost.Content = banner;
+            QuickConnectStatusHost.Visibility = Visibility.Visible;
+        }
+        else if (statusSess.IsError)
+        {
+            var banner = new Border
+            {
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(254, 242, 242)),
+                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(252, 165, 165)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(11, 9, 11, 9)
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var errTxt = new TextBlock
+            {
+                Text = $"⚠ {statusSess.ErrorMessage}",
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(185, 28, 28)),
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            Grid.SetColumn(errTxt, 0);
+            grid.Children.Add(errTxt);
+
+            var closeBtn = new System.Windows.Controls.Button
+            {
+                Content = "✕",
+                Padding = new Thickness(7, 2, 7, 2),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Top,
+                Style = (Style)FindResource("SecondaryButtonStyle")
+            };
+            var captured = statusSess;
+            closeBtn.Click += (_, _) => captured.ClearError();
+            Grid.SetColumn(closeBtn, 1);
+            grid.Children.Add(closeBtn);
+
+            banner.Child = grid;
+            QuickConnectStatusHost.Content = banner;
+            QuickConnectStatusHost.Visibility = Visibility.Visible;
+        }
     }
 
     private void RebuildLanDiscoveryStrip()
@@ -525,7 +713,7 @@ public partial class MainWindow : Window
 
         var btnDisc = new System.Windows.Controls.Button
         {
-            Content = "断开",
+            Content = sess.IsConnecting ? "取消连接" : "断开",
             Padding = new Thickness(10, 4, 10, 4),
             FontSize = 11.5,
             Style = (Style)FindResource("DangerButtonStyle")
@@ -544,9 +732,24 @@ public partial class MainWindow : Window
 
         if (sess.IsConnecting)
         {
+            int secs = sess.ElapsedConnectingSeconds;
+            string stepLine = secs > 0
+                ? $"⏳ {sess.StatusMessage}  （已等待 {secs}s）"
+                : $"⏳ {sess.StatusMessage}";
             col.Children.Add(new TextBlock
             {
-                Text = $"⏳ {sess.StatusMessage}",
+                Text = stepLine,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 0)
+            });
+        }
+        else if (sess.RemoteApps.Count == 0)
+        {
+            col.Children.Add(new TextBlock
+            {
+                Text = "🔄 已建立安全加密连接，正在同步远端可共享应用列表...",
                 FontSize = 12,
                 Foreground = (SolidColorBrush)FindResource("TextSecondary"),
                 Margin = new Thickness(0, 10, 0, 0)
@@ -783,22 +986,46 @@ public partial class MainWindow : Window
         col.Children.Add(top);
 
         // Status row
-        string statusStr = isConn
-            ? $"● 操控中 · {(string.IsNullOrEmpty(sess?.LinkBadge) ? "已连接" : sess!.LinkBadge)}"
-            : (isConnecting
-                ? "● 正在连接穿透中..."
-                : $"● {onlineState.GetLabel()}");
-        if (!string.IsNullOrEmpty(dev.SavedPassword) && !isConn)
-            statusStr += " · 已记住密码";
+        bool isErr = sess?.IsError == true;
+        string statusStr;
+        if (isConn)
+        {
+            statusStr = $"● 操控中 · {(string.IsNullOrEmpty(sess?.LinkBadge) ? "已连接" : sess!.LinkBadge)}";
+        }
+        else if (isConnecting)
+        {
+            int secs = sess?.ElapsedConnectingSeconds ?? 0;
+            string msg = string.IsNullOrEmpty(sess?.StatusMessage) ? "正在建立连接..." : sess!.StatusMessage;
+            statusStr = secs > 0 ? $"⏳ {msg} ({secs}s)" : $"⏳ {msg}";
+        }
+        else if (isErr)
+        {
+            statusStr = $"⚠ {sess!.ErrorMessage}";
+        }
+        else
+        {
+            statusStr = $"● {onlineState.GetLabel()}";
+            if (!string.IsNullOrEmpty(dev.SavedPassword))
+                statusStr += " · 已记住密码";
+        }
+
+        SolidColorBrush statusBrush = isConn || (!isConnecting && !isErr && onlineState.IsOnline())
+            ? (SolidColorBrush)FindResource("OnlineGreen")
+            : isConnecting
+                ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9))
+                : isErr
+                    ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(185, 28, 28))
+                    : (SolidColorBrush)FindResource("TextSecondary");
 
         col.Children.Add(new TextBlock
         {
             Text = statusStr,
+            ToolTip = statusStr,
             FontSize = 11.5,
-            Foreground = isConn || onlineState.IsOnline()
-                ? (SolidColorBrush)FindResource("OnlineGreen")
-                : (SolidColorBrush)FindResource("TextSecondary"),
+            Foreground = statusBrush,
             Margin = new Thickness(0, 10, 0, 10),
+            MaxHeight = 34,
+            TextWrapping = TextWrapping.Wrap,
             TextTrimming = TextTrimming.CharacterEllipsis
         });
 
@@ -851,11 +1078,37 @@ public partial class MainWindow : Window
             actions.Children.Add(btnDesk);
             actions.Children.Add(btnDisc);
         }
+        else if (isConnecting)
+        {
+            var btnCancel = new System.Windows.Controls.Button
+            {
+                Content = "取消连接",
+                Padding = new Thickness(8, 6, 8, 6),
+                FontSize = 12,
+                Style = (Style)FindResource("DangerButtonStyle")
+            };
+            btnCancel.Click += (_, _) => _state.DisconnectSession(dev.Id);
+
+            var btnEdit = new System.Windows.Controls.Button
+            {
+                Content = "编辑",
+                Padding = new Thickness(10, 6, 10, 6),
+                FontSize = 12,
+                Style = (Style)FindResource("SecondaryButtonStyle")
+            };
+            btnEdit.Click += (_, _) => OpenEditDeviceDialog(dev);
+
+            Grid.SetColumn(btnCancel, 0);
+            Grid.SetColumnSpan(btnCancel, 3);
+            Grid.SetColumn(btnEdit, 4);
+            actions.Children.Add(btnCancel);
+            actions.Children.Add(btnEdit);
+        }
         else
         {
             var btnConn = new System.Windows.Controls.Button
             {
-                Content = isConnecting ? "重连" : "⚡ 一键连接",
+                Content = "⚡ 一键连接",
                 Padding = new Thickness(8, 6, 8, 6),
                 FontSize = 12,
                 Style = (Style)FindResource("PrimaryButtonStyle")
@@ -922,9 +1175,25 @@ public partial class MainWindow : Window
 
         if (activeSess.IsConnecting)
         {
+            int secs = activeSess.ElapsedConnectingSeconds;
+            string msg = secs > 0
+                ? $"⏳ 正在连接 {activeSess.Alias}：{activeSess.StatusMessage} （已等待 {secs}s）"
+                : $"⏳ 正在连接 {activeSess.Alias}：{activeSess.StatusMessage}";
             DrawerAppsWrapPanel.Children.Add(new TextBlock
             {
-                Text = $"正在连接 {activeSess.Alias}：{activeSess.StatusMessage}",
+                Text = msg,
+                FontSize = 12.5,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9)),
+                Margin = new Thickness(8)
+            });
+            return;
+        }
+
+        if (activeSess.RemoteApps.Count == 0)
+        {
+            DrawerAppsWrapPanel.Children.Add(new TextBlock
+            {
+                Text = $"正在同步 {activeSess.Alias} 上的可共享应用列表...",
                 FontSize = 12.5,
                 Foreground = (SolidColorBrush)FindResource("TextSecondary"),
                 Margin = new Thickness(8)
@@ -1169,8 +1438,38 @@ public partial class MainWindow : Window
 
     private void QuickPasswordBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (!_syncingUi) _state.QuickConnectPassword = QuickPasswordBox.Text;
+        if (_syncingUi) return;
+        _state.QuickConnectPassword = QuickPasswordBox.Text;
+        _syncingUi = true;
+        try
+        {
+            if (QuickPasswordSecureBox.Password != _state.QuickConnectPassword)
+                QuickPasswordSecureBox.Password = _state.QuickConnectPassword;
+        }
+        finally
+        {
+            _syncingUi = false;
+        }
     }
+
+    private void QuickPasswordSecureBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingUi) return;
+        _state.QuickConnectPassword = QuickPasswordSecureBox.Password;
+        _syncingUi = true;
+        try
+        {
+            if (QuickPasswordBox.Text != _state.QuickConnectPassword)
+                QuickPasswordBox.Text = _state.QuickConnectPassword;
+        }
+        finally
+        {
+            _syncingUi = false;
+        }
+    }
+
+    private void ToggleQuickPwEyeBtn_Click(object sender, RoutedEventArgs e)
+        => _state.IsQuickPasswordRevealed = !_state.IsQuickPasswordRevealed;
 
     private void QuickPortBox_TextChanged(object sender, TextChangedEventArgs e)
     {
@@ -1180,7 +1479,7 @@ public partial class MainWindow : Window
     private void QuickConnectAppsBtn_Click(object sender, RoutedEventArgs e)
     {
         _state.QuickConnectTarget = QuickTargetBox.Text;
-        _state.QuickConnectPassword = QuickPasswordBox.Text;
+        _state.QuickConnectPassword = _state.IsQuickPasswordRevealed ? QuickPasswordBox.Text : QuickPasswordSecureBox.Password;
         _state.QuickConnectPort = QuickPortBox.Text;
         _state.ConnectFromQuickInput(autoOpenDesktop: false);
     }
@@ -1188,7 +1487,7 @@ public partial class MainWindow : Window
     private void QuickConnectDesktopBtn_Click(object sender, RoutedEventArgs e)
     {
         _state.QuickConnectTarget = QuickTargetBox.Text;
-        _state.QuickConnectPassword = QuickPasswordBox.Text;
+        _state.QuickConnectPassword = _state.IsQuickPasswordRevealed ? QuickPasswordBox.Text : QuickPasswordSecureBox.Password;
         _state.QuickConnectPort = QuickPortBox.Text;
         _state.ConnectFromQuickInput(autoOpenDesktop: true);
     }
@@ -1330,6 +1629,35 @@ public partial class MainWindow : Window
             _state.SelectedLogLevel = (OpenUULogLevel)LogLevelCombo.SelectedIndex;
             RefreshLogsBox();
         }
+    }
+
+    private void ShowSoftwareUpdateDialog()
+    {
+        if (_activeUpdateDialog != null && _activeUpdateDialog.IsLoaded)
+        {
+            _activeUpdateDialog.Activate();
+            return;
+        }
+        var dlg = new SoftwareUpdateDialog(_state.Updater);
+        if (IsVisible)
+            dlg.Owner = this;
+        _activeUpdateDialog = dlg;
+        dlg.Closed += (_, _) => _activeUpdateDialog = null;
+        dlg.Show();
+    }
+
+    private void OpenUpdateDialogBtn_Click(object sender, RoutedEventArgs e) => ShowSoftwareUpdateDialog();
+
+    private async void CheckUpdatesNowBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await _state.Updater.CheckForUpdatesAsync(manual: true);
+    }
+
+    private void UpdatePolicyCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || !IsInitialized) return;
+        if (UpdatePolicyCombo.SelectedIndex >= 0)
+            _state.Updater.Policy = (UpdateCheckPolicy)UpdatePolicyCombo.SelectedIndex;
     }
 
     private void CopyDiagLogsBtn_Click(object sender, RoutedEventArgs e) => _state.CopyDiagnosticLogs();

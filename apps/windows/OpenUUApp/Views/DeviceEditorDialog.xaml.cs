@@ -13,6 +13,8 @@ public partial class DeviceEditorDialog : Window
     public string ResultGroup { get; private set; } = "常用";
     public bool ResultFavorite { get; private set; }
     public string ResultNotes { get; private set; } = "";
+    private bool _isPasswordRevealed;
+    private bool _syncingPw;
 
     public DeviceEditorDialog(ManagedRemoteDevice? existing = null)
     {
@@ -28,7 +30,10 @@ public partial class DeviceEditorDialog : Window
             AliasBox.Text = existing.Alias;
             TargetBox.Text = DeviceCodeFormatter.FormatInput(existing.Target);
             PortBox.Text = existing.Port.ToString();
+            _syncingPw = true;
             PasswordBox.Text = existing.SavedPassword;
+            PasswordSecureBox.Password = existing.SavedPassword;
+            _syncingPw = false;
             GroupCombo.Text = string.IsNullOrWhiteSpace(existing.GroupTag) ? "常用" : existing.GroupTag;
             NotesBox.Text = existing.Notes;
             FavoriteCheck.IsChecked = existing.IsFavorite;
@@ -47,6 +52,30 @@ public partial class DeviceEditorDialog : Window
         SaveBtn.IsEnabled = !string.IsNullOrEmpty(DeviceCodeFormatter.SanitizeForUse(TargetBox.Text));
     }
 
+    private void PasswordSecureBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingPw) return;
+        _syncingPw = true;
+        PasswordBox.Text = PasswordSecureBox.Password;
+        _syncingPw = false;
+    }
+
+    private void PasswordBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_syncingPw) return;
+        _syncingPw = true;
+        PasswordSecureBox.Password = PasswordBox.Text;
+        _syncingPw = false;
+    }
+
+    private void ToggleDialogPwEyeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _isPasswordRevealed = !_isPasswordRevealed;
+        PasswordBox.Visibility = _isPasswordRevealed ? Visibility.Visible : Visibility.Collapsed;
+        PasswordSecureBox.Visibility = _isPasswordRevealed ? Visibility.Collapsed : Visibility.Visible;
+        ToggleDialogPwEyeBtn.Content = _isPasswordRevealed ? "🙈" : "👁";
+    }
+
     private void CancelBtn_Click(object sender, RoutedEventArgs e)
     {
         DialogResult = false;
@@ -61,7 +90,8 @@ public partial class DeviceEditorDialog : Window
         ResultAlias = AliasBox.Text.Trim();
         ResultTarget = cleanTarget;
         ResultPort = ushort.TryParse(PortBox.Text.Trim(), out ushort p) && p > 0 ? p : (ushort)39481;
-        ResultPassword = PasswordBox.Text.Trim();
+        string rawPw = _isPasswordRevealed ? PasswordBox.Text : PasswordSecureBox.Password;
+        ResultPassword = rawPw.Trim();
         ResultGroup = string.IsNullOrWhiteSpace(GroupCombo.Text) ? "常用" : GroupCombo.Text.Trim();
         ResultFavorite = FavoriteCheck.IsChecked == true;
         ResultNotes = NotesBox.Text.Trim();

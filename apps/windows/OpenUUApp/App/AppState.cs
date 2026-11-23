@@ -30,6 +30,9 @@ public sealed class UserPrefsModel
     public bool MapCtrlToMacCommand { get; set; } = true;
     public string CaptureScheme { get; set; } = "main";
     public double DrawerHeight { get; set; } = 215.0;
+    public string UpdatePolicy { get; set; } = "launch_and_daily";
+    public long LastUpdateCheckEpoch { get; set; } = 0;
+    public string SkippedUpdateVersion { get; set; } = "";
 }
 
 /// <summary>
@@ -43,6 +46,7 @@ public sealed class AppState : ObservableBase, IDisposable
 
     public OpenUUBridge HostBridge { get; }
     public OpenUUBridge ProbeBridge { get; }
+    public AppUpdater Updater { get; } = new();
     public MultiWindowCaptureManager CaptureManager { get; } = new();
     public InputInjector InputInjector { get; } = new();
     public SleepPreventer SleepPreventer { get; } = new();
@@ -145,7 +149,7 @@ public sealed class AppState : ObservableBase, IDisposable
         }
     }
 
-    private bool _isHostPasswordRevealed = true;
+    private bool _isHostPasswordRevealed = false;
     public bool IsHostPasswordRevealed
     {
         get => _isHostPasswordRevealed;
@@ -154,6 +158,13 @@ public sealed class AppState : ObservableBase, IDisposable
             if (SetField(ref _isHostPasswordRevealed, value))
                 OnPropertyChanged(nameof(MaskedHostPin));
         }
+    }
+
+    private bool _isQuickPasswordRevealed = false;
+    public bool IsQuickPasswordRevealed
+    {
+        get => _isQuickPasswordRevealed;
+        set => SetField(ref _isQuickPasswordRevealed, value);
     }
 
     public string MaskedHostPin => new('•', Math.Max(6, _hostPin.Length));
@@ -524,7 +535,19 @@ public sealed class AppState : ObservableBase, IDisposable
         foreach (var existing in OpenUULogger.Shared.RecentEntries(OpenUULogLevel.Debug, 200))
             LogEntries.Add(existing);
 
-        OpenUULogger.Shared.Info("APP", $"launched platform=windows version=v0.6.0 admin={IsRunningAsAdministrator} fps={_targetFps}");
+        OpenUULogger.Shared.Info("APP", $"launched platform=windows version={AppVersion.Display} admin={IsRunningAsAdministrator} fps={_targetFps}");
+
+        Updater.CoordUrlProvider = () => WanCoordUrl;
+        Updater.OnLog = msg => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => StatusLog = msg);
+        Updater.OnPrefsChanged = () =>
+        {
+            _prefs.UpdatePolicy = Updater.Policy.ToCode();
+            _prefs.LastUpdateCheckEpoch = Updater.LastCheckEpochSeconds;
+            _prefs.SkippedUpdateVersion = Updater.SkippedVersion;
+            SavePrefs();
+        };
+        Updater.PropertyChanged += (_, _) => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => StateMutated?.Invoke());
+        Updater.RefreshStatusFromPrefs();
 
         ProbeBridge.OnProbeResults = results =>
         {
@@ -572,6 +595,9 @@ public sealed class AppState : ObservableBase, IDisposable
         _showDebugHud = _prefs.DebugHud;
         _mapCtrlToMacCommand = _prefs.MapCtrlToMacCommand;
         _captureScheme = string.IsNullOrWhiteSpace(_prefs.CaptureScheme) ? "main" : _prefs.CaptureScheme;
+        Updater.Policy = UpdateCheckPolicyExtensions.FromCode(_prefs.UpdatePolicy);
+        Updater.LastCheckEpochSeconds = _prefs.LastUpdateCheckEpoch;
+        Updater.SkippedVersion = _prefs.SkippedUpdateVersion ?? "";
         SavePrefs();
     }
 
@@ -821,6 +847,25 @@ public sealed class AppState : ObservableBase, IDisposable
 
     public RemotePeerSession? GetSession(string deviceId)
         => _sessions.TryGetValue(deviceId, out var s) ? s : null;
+
+    public RemotePeerSession? QuickStatusSession
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(SelectedSessionId)
+                && _sessions.TryGetValue(SelectedSessionId, out var sel)
+                && (sel.IsConnecting || sel.IsError))
+            {
+                return sel;
+            }
+            foreach (var id in _activeSessionOrder)
+            {
+                if (_sessions.TryGetValue(id, out var s) && (s.IsConnecting || s.IsError))
+                    return s;
+            }
+            return null;
+        }
+    }
 
     public RemotePeerSession ConnectDevice(ManagedRemoteDevice device, bool autoOpenDesktop = false)
     {
@@ -1376,7 +1421,7 @@ public sealed class AppState : ObservableBase, IDisposable
         string snap = $"savedDevices={DeviceBook.Devices.Count} activeSessions={ConnectedHostCount} totalWindows={TotalOpenRemoteWindows}";
 
         string report = OpenUULogger.Shared.BuildDiagnosticReport(
-            "v0.6.0-windows",
+            $"{AppVersion.Display}-windows",
             role,
             CaptureScheme,
             caps,

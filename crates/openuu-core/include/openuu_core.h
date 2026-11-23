@@ -310,6 +310,21 @@ int32_t openuu_stop_remote_session(
     uint32_t window_id
 );
 
+/// Returns the compiled OpenUU Core semantic version string (e.g. "0.7.0").
+/// Caller must free with `openuu_free_string`.
+char *openuu_get_core_version(void);
+
+/// Asynchronously checks for a newer OpenUU release (via Coord edge mirror + GitHub Releases fallback)
+/// and invokes `on_result(user_ctx, update_json)` with `UpdateCheckResult` JSON.
+int32_t openuu_check_update(
+    OpenUURuntime *rt,
+    const char *current_version,
+    const char *platform,
+    const char *arch,
+    OpenUUStatusCallback on_result,
+    void *user_ctx
+);
+
 /// Free strings returned by OpenUU FFI functions.
 void openuu_free_string(char *ptr);
 

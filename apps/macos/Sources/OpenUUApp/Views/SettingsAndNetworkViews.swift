@@ -144,6 +144,47 @@ struct SecurityAndQualityView: View {
                         .padding(10)
                     }
                 }
+                // 5. Software Version & Auto-Update
+                GroupBox("版本维护与自动更新") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("当前客户端版本：\(AppVersion.display)")
+                                .font(.system(size: 12.5, weight: .semibold))
+                            Text("·  \(state.updater.statusSummary)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(state.updater.hasAvailableUpdate ? .orange : .secondary)
+                            Spacer()
+                            if state.updater.releaseInfo != nil {
+                                Button(state.updater.hasAvailableUpdate ? "查看更新内容 / 一键更新" : "查看版本说明") {
+                                    state.updater.showingUpdateSheet = true
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Button(state.updater.isChecking ? "正在检查..." : "立即检查更新") {
+                                Task { await state.updater.checkForUpdates(manual: true) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(state.updater.isChecking)
+                        }
+
+                        HStack {
+                            Text("自动检查策略:")
+                                .frame(width: 110, alignment: .leading)
+                            Picker("", selection: $state.updater.policy) {
+                                ForEach(UpdateCheckPolicy.allCases) { p in
+                                    Text(p.label).tag(p)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 280)
+                            Spacer()
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             .padding(22)
         }

@@ -16,6 +16,11 @@ enum RemoteSessionPhase: Equatable {
         if case .connecting = self { return true }
         return false
     }
+
+    var errorReason: String? {
+        if case .error(let msg) = self { return msg }
+        return nil
+    }
 }
 
 /// Represents ONE independent remote Host connection so a single OpenUU Client can simultaneously connect to,
@@ -32,6 +37,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     @Published var target: String
     @Published var port: UInt16
     @Published var phase: RemoteSessionPhase = .idle
+    @Published var connectingStartedAt: Date?
     @Published var linkBadge: String = ""
     @Published var statusMessage: String = "未连接"
     @Published var remoteHostName: String = ""
@@ -124,6 +130,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                         .first?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? self.alias
                     self.remoteHostName = rawName
+                    self.connectingStartedAt = nil
                     self.phase = .connected
                     self.audioPlayer.setMuted(self.isAudioMuted)
                     self.bridge.sendAudioControl(enabled: !self.isAudioMuted, muteHost: self.muteHostSpeakers)
@@ -137,11 +144,15 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                 } else if msg.hasPrefix("connect failed:") {
                     let reason = msg.replacingOccurrences(of: "connect failed:", with: "").trimmingCharacters(in: .whitespaces)
                     self.cleanupSessionWindows()
+                    self.connectingStartedAt = nil
                     self.phase = .error(reason)
                     self.onStateMutated?()
                 } else if msg.contains("disconnected") {
                     self.cleanupSessionWindows()
+                    self.connectingStartedAt = nil
                     self.phase = .idle
+                    self.onStateMutated?()
+                } else if self.phase.isConnecting {
                     self.onStateMutated?()
                 }
             }
@@ -255,7 +266,9 @@ final class RemotePeerSession: ObservableObject, Identifiable {
 
     func connect(password: String, autoOpenDesktop: Bool = false) {
         autoOpenFullDesktopOnConnect = autoOpenDesktop
+        connectingStartedAt = Date()
         phase = .connecting
+        statusMessage = "正在发起连接 \(DeviceCodeFormatter.formatInput(target))..."
         linkBadge = "正在握手..."
         onStateMutated?()
         _ = bridge.connectSmart(target: target, defaultPort: port, pin: password)
@@ -264,9 +277,22 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     func disconnect() {
         bridge.disconnect()
         cleanupSessionWindows()
+        connectingStartedAt = nil
         phase = .idle
         linkBadge = ""
         onStatusLog?("[\(alias)] 已断开远程连接")
+    }
+
+    func clearError() {
+        if case .error = phase {
+            phase = .idle
+            onStateMutated?()
+        }
+    }
+
+    func elapsedConnectingSeconds(at now: Date = Date()) -> Int {
+        guard let start = connectingStartedAt else { return 0 }
+        return max(0, Int(now.timeIntervalSince(start)))
     }
 
     func refreshApps() {

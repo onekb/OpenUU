@@ -72,6 +72,7 @@ private struct WorkspaceBodyView: View {
         .onAppear {
             state.refreshPermission()
             state.startDiscovery()
+            state.updater.startScheduledChecks()
         }
         .sheet(isPresented: $showingAddDeviceSheet) {
             DeviceEditorSheet(
@@ -120,6 +121,9 @@ private struct WorkspaceBodyView: View {
         .sheet(isPresented: $state.showingPermissionGuideSheet) {
             HostPermissionGuideSheet(state: state)
         }
+        .sheet(isPresented: $state.updater.showingUpdateSheet) {
+            SoftwareUpdateSheet(updater: state.updater)
+        }
     }
 
     // MARK: - Left Sidebar Navigation Rail (ToDesk / UU远程 Style)
@@ -137,12 +141,32 @@ private struct WorkspaceBodyView: View {
                     .frame(width: 36, height: 36)
                     .shadow(color: .black.opacity(0.22), radius: 3, y: 1)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("OpenUU")
-                        .font(.system(size: 14.5, weight: .bold))
-                    Text("工作伴侣，永久免费。")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text("OpenUU")
+                            .font(.system(size: 14.5, weight: .bold))
+                        Text(AppVersion.display)
+                            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if state.updater.hasAvailableUpdate, let rel = state.updater.releaseInfo {
+                        Button {
+                            state.updater.showingUpdateSheet = true
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 10))
+                                Text("新版本 \(rel.tagName) · 点击更新")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .foregroundStyle(.orange)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text("工作伴侣，永久免费。")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -586,9 +610,26 @@ struct RemoteControlHomeView: View {
                     Text("访问密码（已保存或已信任免填）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    TextField("首次连接请输入对方密码", text: $state.quickConnectPassword)
+                    HStack(spacing: 6) {
+                        Group {
+                            if state.isQuickPasswordRevealed {
+                                TextField("首次连接请输入对方密码", text: $state.quickConnectPassword)
+                            } else {
+                                SecureField("首次连接请输入对方密码", text: $state.quickConnectPassword)
+                            }
+                        }
                         .font(.system(size: 13.5, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
+
+                        Button {
+                            state.isQuickPasswordRevealed.toggle()
+                        } label: {
+                            Image(systemName: state.isQuickPasswordRevealed ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(state.isQuickPasswordRevealed ? "隐藏访问密码" : "点击显示访问密码")
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
@@ -603,14 +644,16 @@ struct RemoteControlHomeView: View {
             }
 
             HStack(spacing: 10) {
+                let isQuickConnecting = state.quickStatusSession?.phase.isConnecting == true
                 Button {
                     state.connectFromQuickInput(autoOpenDesktop: false)
                 } label: {
-                    Label("连接并挑应用", systemImage: "macwindow.badge.plus")
+                    Label(isQuickConnecting ? "正在建立连接..." : "连接并挑应用", systemImage: "macwindow.badge.plus")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(isQuickConnecting)
 
                 Button {
                     state.connectFromQuickInput(autoOpenDesktop: true)
@@ -619,7 +662,20 @@ struct RemoteControlHomeView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                .disabled(isQuickConnecting)
                 .help("连上后立即弹出对方整台 Mac 桌面窗口")
+            }
+
+            if let statusSession = state.quickStatusSession {
+                QuickConnectStepBanner(
+                    session: statusSession,
+                    onCancel: {
+                        state.disconnectSession(id: statusSession.id)
+                    },
+                    onDismissError: {
+                        statusSession.clearError()
+                    }
+                )
             }
 
             Text("连接成功后将自动收录至「设备列表」，支持多台受控机同时在线操控。")
@@ -755,6 +811,83 @@ struct RemoteControlHomeView: View {
     }
 }
 
+private struct QuickConnectStepBanner: View {
+    @ObservedObject var session: RemotePeerSession
+    var onCancel: () -> Void
+    var onDismissError: () -> Void
+
+    var body: some View {
+        if session.phase.isConnecting {
+            TimelineView(.periodic(from: .now, by: 1.0)) { context in
+                let secs = session.elapsedConnectingSeconds(at: context.date)
+                HStack(alignment: .center, spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("正在建立连接 · \(session.alias)")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(.orange)
+                            if secs > 0 {
+                                Text("已等待 \(secs)s")
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(session.statusMessage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    Button("取消", action: onCancel)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.orange.opacity(0.1))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.28), lineWidth: 1)
+                )
+            }
+        } else if let reason = session.phase.errorReason {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.red)
+                    .padding(.top, 1)
+                Text(reason)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: onDismissError) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.red.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
+            )
+        }
+    }
+}
+
 private struct ActiveSessionQuickPanel: View {
     @ObservedObject var session: RemotePeerSession
     var onDisconnect: () -> Void
@@ -808,7 +941,7 @@ private struct ActiveSessionQuickPanel: View {
                 }
                 .controlSize(.small)
                 .disabled(!session.phase.isConnected)
-                Button("断开") {
+                Button(session.phase.isConnecting ? "取消连接" : "断开") {
                     onDisconnect()
                 }
                 .controlSize(.small)
@@ -817,9 +950,29 @@ private struct ActiveSessionQuickPanel: View {
             }
 
             if session.phase.isConnecting {
+                TimelineView(.periodic(from: .now, by: 1.0)) { context in
+                    let secs = session.elapsedConnectingSeconds(at: context.date)
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(session.statusMessage)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 4)
+                        if secs > 0 {
+                            Text("已用时 \(secs)s")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.orange.opacity(0.09))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            } else if session.remoteApps.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(session.statusMessage)
+                    Text("已建立安全加密连接，正在同步远端可共享应用列表...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1204,10 +1357,31 @@ private struct ManagedDeviceCardView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.green)
                 } else if isConnecting {
-                    ProgressView().controlSize(.mini)
-                    Text("正在连接穿透中...")
+                    TimelineView(.periodic(from: .now, by: 1.0)) { context in
+                        let secs = session?.elapsedConnectingSeconds(at: context.date) ?? 0
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.mini)
+                            Text(session?.statusMessage ?? "正在建立连接...")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .lineLimit(2)
+                                .help(session?.statusMessage ?? "")
+                            if secs > 0 {
+                                Text("(\(secs)s)")
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } else if let err = session?.phase.errorReason {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.red)
+                    Text(err)
                         .font(.system(size: 11))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                        .help(err)
                 } else {
                     Circle()
                         .fill(onlineState.isOnline ? Color.green : Color.gray.opacity(0.45))
@@ -1216,13 +1390,13 @@ private struct ManagedDeviceCardView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(onlineState.isOnline ? .green : .secondary)
                 }
-                if !device.savedPassword.isEmpty && !isConnected {
+                if !device.savedPassword.isEmpty && !isConnected && !isConnecting && session?.phase.errorReason == nil {
                     Text("· 已记住密码")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !device.notes.isEmpty {
+                if !device.notes.isEmpty && !isConnecting {
                     Text(device.notes)
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
@@ -1250,11 +1424,23 @@ private struct ManagedDeviceCardView: View {
                         .buttonStyle(.bordered)
                         .tint(.red)
                         .controlSize(.small)
+                } else if isConnecting {
+                    Button(action: onDisconnect) {
+                        Label("取消连接", systemImage: "xmark.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.small)
+
+                    Button("编辑", action: onEdit)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 } else {
                     Button {
                         onConnectApps()
                     } label: {
-                        Label(isConnecting ? "重连" : "一键连接", systemImage: "bolt.fill")
+                        Label("一键连接", systemImage: "bolt.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
@@ -1553,6 +1739,7 @@ struct DeviceEditorSheet: View {
     @State private var target: String
     @State private var portText: String
     @State private var savedPassword: String
+    @State private var isSavedPasswordRevealed: Bool = false
     @State private var groupTag: String
     @State private var isFavorite: Bool
     @State private var notes: String
@@ -1609,9 +1796,26 @@ struct DeviceEditorSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("保存访问密码（保存后一键免输连接）")
                         .font(.caption).foregroundStyle(.secondary)
-                    TextField("输入被控端访问密码 / PIN", text: $savedPassword)
+                    HStack(spacing: 6) {
+                        Group {
+                            if isSavedPasswordRevealed {
+                                TextField("输入被控端访问密码 / PIN", text: $savedPassword)
+                            } else {
+                                SecureField("输入被控端访问密码 / PIN", text: $savedPassword)
+                            }
+                        }
                         .font(.system(size: 13, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
+
+                        Button {
+                            isSavedPasswordRevealed.toggle()
+                        } label: {
+                            Image(systemName: isSavedPasswordRevealed ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isSavedPasswordRevealed ? "隐藏访问密码" : "点击显示访问密码")
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 6) {

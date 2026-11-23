@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 enum SidebarTab: String, CaseIterable, Identifiable {
@@ -33,6 +34,7 @@ final class AppState: ObservableObject {
     // Host & Discovery bridges
     let hostBridge = OpenUUBridge()
     let probeBridge = OpenUUBridge()
+    var updater = AppUpdater()
     let captureManager = MultiWindowCaptureManager()
     let inputInjector = InputInjector()
     let sleepPreventer = SleepPreventer()
@@ -103,7 +105,8 @@ final class AppState: ObservableObject {
     @Published var hostPIN: String = UserDefaults.standard.string(forKey: PrefKey.hostPIN) ?? String(format: "%06d", Int.random(in: 0...999999)) {
         didSet { UserDefaults.standard.set(hostPIN, forKey: PrefKey.hostPIN) }
     }
-    @Published var isHostPasswordRevealed: Bool = true
+    @Published var isHostPasswordRevealed: Bool = false
+    @Published var isQuickPasswordRevealed: Bool = false
     @Published var silentClickMode: Bool = UserDefaults.standard.object(forKey: PrefKey.silentClick) as? Bool ?? true {
         didSet {
             inputInjector.silentMode = silentClickMode
@@ -253,11 +256,24 @@ final class AppState: ObservableObject {
 
     private var discoveryTimer: Timer?
     private var presenceTickCounter: Int = 0
+    private var updaterCancellables: Set<AnyCancellable> = []
 
     var connectedSessions: [RemotePeerSession] {
         activeSessionOrder.compactMap { id in
             guard let s = sessions[id], s.phase.isConnected || s.phase.isConnecting else { return nil }
             return s
+        }
+    }
+
+    /// Active connecting or errored session to highlight inline on the Home Quick-Connect card.
+    var quickStatusSession: RemotePeerSession? {
+        if let selID = selectedSessionID,
+           let sel = sessions[selID],
+           (sel.phase.isConnecting || sel.phase.errorReason != nil) {
+            return sel
+        }
+        return activeSessionOrder.compactMap { sessions[$0] }.first {
+            $0.phase.isConnecting || $0.phase.errorReason != nil
         }
     }
 
@@ -279,7 +295,17 @@ final class AppState: ObservableObject {
                 self.logEntries.removeFirst(self.logEntries.count - 400)
             }
         }
-        OpenUULogger.shared.info("APP", "launched version=v0.6.0 multiHost=true scheme=\(captureScheme.rawValue) fps=\(targetFPS)")
+        OpenUULogger.shared.info("APP", "launched version=\(AppVersion.display) multiHost=true scheme=\(captureScheme.rawValue) fps=\(targetFPS)")
+
+        updater.coordURLProvider = { [weak self] in
+            self?.wanCoordURL ?? "https://openuu.1kb.ren"
+        }
+        updater.onLog = { [weak self] msg in
+            self?.statusLog = msg
+        }
+        updater.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &updaterCancellables)
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -1309,7 +1335,7 @@ final class AppState: ObservableObject {
         let perms = "Screen=\(hasScreenRecordingPermission), Direct=\(hasDirectCapturePermission), AX=\(hasAccessibilityPermission)"
         let snapshot = "savedDevices=\(deviceBook.devices.count) activeSessions=\(connectedHostCount) totalWindows=\(totalOpenRemoteWindows)"
         let report = OpenUULogger.shared.buildDiagnosticReport(
-            appVersion: "v0.6.0",
+            appVersion: AppVersion.display,
             roleSummary: role.isEmpty ? "Idle" : role,
             schemeSummary: captureScheme.rawValue,
             permissionsSummary: perms,

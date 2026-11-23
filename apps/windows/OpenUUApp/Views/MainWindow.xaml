@@ -43,13 +43,35 @@
                        RenderOptions.BitmapScalingMode="HighQuality"
                        Margin="0,0,10,0" />
                 <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="OpenUU"
-                               FontSize="15.5"
-                               FontWeight="Bold"
-                               Foreground="{StaticResource TextPrimary}" />
-                    <TextBlock Text="工作伴侣，永久免费。"
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="OpenUU"
+                                   FontSize="15.5"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimary}" />
+                        <TextBlock x:Name="SidebarVersionText"
+                                   Text="v0.7.0"
+                                   FontSize="10"
+                                   FontFamily="Consolas"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   VerticalAlignment="Center"
+                                   Margin="6,2,0,0" />
+                    </StackPanel>
+                    <TextBlock x:Name="SidebarBrandSubText"
+                               Text="工作伴侣，永久免费。"
                                FontSize="11"
                                Foreground="{StaticResource TextSecondary}" />
+                    <Button x:Name="SidebarUpdatePillBtn"
+                            Content="⬆ 发现新版本 · 点击更新"
+                            Visibility="Collapsed"
+                            HorizontalAlignment="Left"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0,2,0,0"
+                            Cursor="Hand"
+                            FontSize="10.5"
+                            FontWeight="SemiBold"
+                            Foreground="#D97706"
+                            Click="OpenUpdateDialogBtn_Click" />
                 </StackPanel>
             </StackPanel>
 
@@ -250,6 +272,7 @@
                                                  FontFamily="Consolas"
                                                  FontSize="15.5"
                                                  FontWeight="SemiBold"
+                                                 Visibility="Collapsed"
                                                  Style="{StaticResource RoundedTextBoxStyle}"
                                                  TextChanged="HostPinBox_TextChanged" />
                                         <TextBlock x:Name="HostPinMaskedText"
@@ -258,12 +281,13 @@
                                                    FontSize="18"
                                                    FontWeight="Bold"
                                                    VerticalAlignment="Center"
-                                                   Visibility="Collapsed" />
+                                                   Visibility="Visible" />
                                         <Button x:Name="TogglePinEyeBtn"
-                                                Content="隐藏"
+                                                Content="👁"
+                                                ToolTip="点击显示/隐藏本机访问密码"
                                                 Margin="8,0,0,0"
                                                 Padding="10,5"
-                                                FontSize="11.5"
+                                                FontSize="12"
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Click="TogglePinEyeBtn_Click" />
                                         <Button x:Name="RegenPinBtn"
@@ -361,10 +385,32 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <TextBlock Text="访问密码（已保存或已信任免填）" FontSize="11.5" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
-                                            <TextBox x:Name="QuickPasswordBox"
-                                                     FontFamily="Consolas"
-                                                     Style="{StaticResource RoundedTextBoxStyle}"
-                                                     TextChanged="QuickPasswordBox_TextChanged" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="6" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <PasswordBox x:Name="QuickPasswordSecureBox"
+                                                             Grid.Column="0"
+                                                             FontFamily="Consolas"
+                                                             Style="{StaticResource RoundedPasswordBoxStyle}"
+                                                             PasswordChanged="QuickPasswordSecureBox_PasswordChanged" />
+                                                <TextBox x:Name="QuickPasswordBox"
+                                                         Grid.Column="0"
+                                                         Visibility="Collapsed"
+                                                         FontFamily="Consolas"
+                                                         Style="{StaticResource RoundedTextBoxStyle}"
+                                                         TextChanged="QuickPasswordBox_TextChanged" />
+                                                <Button x:Name="ToggleQuickPwEyeBtn"
+                                                        Grid.Column="2"
+                                                        Content="👁"
+                                                        ToolTip="点击显示/隐藏访问密码"
+                                                        Padding="9,5"
+                                                        FontSize="12"
+                                                        Style="{StaticResource SecondaryButtonStyle}"
+                                                        Click="ToggleQuickPwEyeBtn_Click" />
+                                            </Grid>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2">
                                             <TextBlock Text="直连端口" FontSize="11.5" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5" />
@@ -382,18 +428,24 @@
                                             <ColumnDefinition Width="10" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <Button Grid.Column="0"
+                                        <Button x:Name="QuickConnectAppsBtn"
+                                                Grid.Column="0"
                                                 Content="连接并挑应用"
                                                 Padding="14,10"
                                                 Style="{StaticResource PrimaryButtonStyle}"
                                                 Click="QuickConnectAppsBtn_Click" />
-                                        <Button Grid.Column="2"
+                                        <Button x:Name="QuickConnectDesktopBtn"
+                                                Grid.Column="2"
                                                 Content="🖥 直开远程桌面"
                                                 Padding="14,10"
                                                 ToolTip="连上后立即弹出对方整台电脑桌面窗口"
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Click="QuickConnectDesktopBtn_Click" />
                                     </Grid>
+
+                                    <ContentControl x:Name="QuickConnectStatusHost"
+                                                    Visibility="Collapsed"
+                                                    Margin="0,10,0,0" />
 
                                     <TextBlock Text="连接成功后将自动收录至「设备列表」，支持多台 Mac / Windows 受控机同时在线操控。"
                                                FontSize="11"
@@ -721,7 +773,7 @@
                         </Border>
 
                         <!-- 4. Trusted Peers Whitelist -->
-                        <Border x:Name="TrustedPeersCard" Style="{StaticResource CardBorderStyle}" Visibility="Collapsed">
+                        <Border x:Name="TrustedPeersCard" Style="{StaticResource CardBorderStyle}" Visibility="Collapsed" Margin="0,0,0,16">
                             <StackPanel>
                                 <TextBlock x:Name="TrustedPeersHeading"
                                            Text="已信任免密证书设备白名单 (0)"
@@ -730,6 +782,48 @@
                                            Foreground="{StaticResource TextPrimary}"
                                            Margin="0,0,0,10" />
                                 <StackPanel x:Name="TrustedPeersListPanel" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 5. Software Version & Auto-Update -->
+                        <Border Style="{StaticResource CardBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Text="版本维护与自动更新" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12" />
+
+                                <Grid Margin="0,0,0,12">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock x:Name="SettingsCurrentVerText"
+                                                   Text="当前客户端版本：v0.7.0"
+                                                   FontSize="12.5"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimary}" />
+                                        <TextBlock x:Name="SettingsUpdateSummaryText"
+                                                   Text="  ·  尚未检查更新"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondary}" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button x:Name="ViewReleaseNotesBtn"
+                                                Content="查看更新内容 / 一键更新"
+                                                Visibility="Collapsed"
+                                                Padding="11,5"
+                                                FontSize="11.5"
+                                                Margin="0,0,8,0"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Click="OpenUpdateDialogBtn_Click" />
+                                        <Button x:Name="CheckUpdatesNowBtn"
+                                                Content="立即检查更新"
+                                                Padding="12,5"
+                                                FontSize="11.5"
+                                                Style="{StaticResource PrimaryButtonStyle}"
+                                                Click="CheckUpdatesNowBtn_Click" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="自动检查策略：" Width="110" VerticalAlignment="Center" FontSize="12.5" />
+                                    <ComboBox x:Name="UpdatePolicyCombo" Width="250" Height="28" SelectionChanged="UpdatePolicyCombo_SelectionChanged" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>

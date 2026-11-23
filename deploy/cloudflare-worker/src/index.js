@@ -573,6 +573,55 @@ async function handleResolveBatch(request, env) {
   return jsonResponse({ items });
 }
 
+async function handleLatestRelease() {
+  try {
+    const upstream = await fetch("https://api.github.com/repos/onekb/OpenUU/releases/latest", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "OpenUU-Coord-Worker/0.7.0",
+      },
+      cf: {
+        cacheEverything: true,
+        cacheTtl: 600,
+      },
+    });
+    if (!upstream.ok) {
+      return jsonResponse({ error: `github_upstream_${upstream.status}` }, 502);
+    }
+    const rel = await upstream.json();
+    const assets = Array.isArray(rel.assets)
+      ? rel.assets.map((a) => ({
+          name: String(a.name || ""),
+          size: Number(a.size || 0),
+          browser_download_url: String(a.browser_download_url || ""),
+          digest: a.digest ? String(a.digest) : null,
+        }))
+      : [];
+    return new Response(
+      JSON.stringify({
+        tag_name: String(rel.tag_name || ""),
+        name: String(rel.name || ""),
+        body: String(rel.body || ""),
+        html_url: String(rel.html_url || "https://github.com/onekb/OpenUU/releases/latest"),
+        published_at: String(rel.published_at || ""),
+        draft: Boolean(rel.draft),
+        prerelease: Boolean(rel.prerelease),
+        assets,
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "public, max-age=300",
+          "access-control-allow-origin": "*",
+        },
+      }
+    );
+  } catch (e) {
+    return jsonResponse({ error: String(e?.message || e) }, 502);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -584,6 +633,10 @@ export default {
 
     if (request.method === "GET" && path === "/health") {
       return handleHealth(env);
+    }
+
+    if (request.method === "GET" && path === "/v1/latest-release") {
+      return handleLatestRelease();
     }
 
     if (request.method === "POST" && path === "/v1/register") {

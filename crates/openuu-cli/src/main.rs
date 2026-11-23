@@ -19,7 +19,7 @@ use openuu_core::identity::{
 use openuu_core::protocol::pb;
 use openuu_core::transport::{
     accept_client_session, accept_iroh_session, bind_host_endpoint, connect_to_host,
-    connect_via_iroh,
+    connect_via_iroh_with_progress,
 };
 use openuu_core::wan::{
     bind_iroh_endpoint, bind_iroh_endpoint_with_role, coord_register_heartbeat, coord_resolve_code,
@@ -585,21 +585,34 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             println!("Device Code : {}", identity.formatted_device_code());
             println!("Password    : {pin}");
             println!("EndpointId  : {}", iroh_ep.id());
+            println!("Relay URLs  : {:?}", ticket.relay_urls);
+            println!("Direct Addrs: {:?}", ticket.direct_addrs);
             println!("Ticket      : {ticket_str}");
+            let _ = std::io::stdout().flush();
 
             let limiter = PinRateLimiter::default();
             let (session, mut channels, hello, _) =
                 accept_iroh_session(&iroh_ep, &identity, Some(&pin), &limiter).await?;
             let link = session.link_telemetry();
             println!(
-                "WAN Client connected: {} (mode={}, rtt={}ms)",
+                "WAN Client connected: {} (mode={}, rtt={}ms, remote={})",
                 hello.device_name,
                 link.mode.as_str(),
-                link.rtt_ms
+                link.rtt_ms,
+                link.remote_addr
             );
+            let _ = std::io::stdout().flush();
 
             while let Some(env) = channels.control_rx.recv().await {
                 if let Some(pb::control_envelope::Payload::Ping(p)) = env.payload {
+                    let cur = session.link_telemetry();
+                    println!(
+                        "[Host Telemetry] mode={} rtt={}ms remote={}",
+                        cur.mode.as_str(),
+                        cur.rtt_ms,
+                        cur.remote_addr
+                    );
+                    let _ = std::io::stdout().flush();
                     let pong = pb::ControlEnvelope {
                         seq: env.seq + 1,
                         payload: Some(pb::control_envelope::Payload::Pong(pb::Pong {
@@ -613,12 +626,16 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         Some("wan-client") => {
             let target = args
                 .get(2)
-                .ok_or("usage: openuu-cli wan-client <9-digit-code | openuu://ticket> [pin] [--coord URL] [--relay URL]")?;
+                .ok_or("usage: openuu-cli wan-client <9-digit-code | openuu://ticket> [pin] [--coord URL] [--relay URL] [--watch-secs N]")?;
             let pin = args
                 .get(3)
                 .filter(|s| !s.starts_with("--"))
                 .cloned()
                 .unwrap_or_default();
+            let watch_secs: u64 = parse_flag(&args, "--watch-secs")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1)
+                .max(1);
             let mut identity = DeviceIdentity::load_or_create(None, None)?;
             if let Some(relay) = parse_flag(&args, "--relay") {
                 identity.wan_config.relay_url = relay;
@@ -633,6 +650,12 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 identity.wan_config.enable_public_fallback = false;
             }
             let force_relay = args.iter().any(|a| a == "--force-relay");
+
+            // Pre-warm client endpoint BEFORE resolving/dialing (matches GUI client pre-warm)
+            let iroh_ep = bind_iroh_endpoint(&identity, false).await?;
+            let _ = tokio::time::timeout(Duration::from_millis(2000), iroh_ep.online()).await;
+            let my_ticket = OpenUUTicket::from_endpoint(&iroh_ep, &identity, 0);
+            println!("Client Direct Addrs: {:?}", my_ticket.direct_addrs);
 
             let extra_relays = parse_custom_relay_urls(&identity.wan_config.relay_url);
             let mut ticket = if target.starts_with(TICKET_PREFIX) {
@@ -652,28 +675,43 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             if force_relay {
                 ticket.direct_addrs.clear();
             }
+            println!("Target Host Direct Addrs: {:?}", ticket.direct_addrs);
 
             let ep_addr = ticket.to_endpoint_addr(&extra_relays)?;
-            let iroh_ep = bind_iroh_endpoint(&identity, false).await?;
             let (session, mut channels, ack, _) =
-                connect_via_iroh(&iroh_ep, &identity, ep_addr, &pin).await?;
+                connect_via_iroh_with_progress(&iroh_ep, &identity, ep_addr, &pin, |step| {
+                    println!("[Step] {step}");
+                    let _ = std::io::stdout().flush();
+                })
+                .await?;
             let link = session.link_telemetry();
             println!(
-                "Connected to WAN Host: {} (mode={}, rtt={}ms)",
+                "[+0s] Connected to WAN Host: {} | mode={} rtt={}ms remote={}",
                 ack.device_name,
                 link.mode.as_str(),
-                link.rtt_ms
+                link.rtt_ms,
+                link.remote_addr
             );
 
-            let ping = pb::ControlEnvelope {
-                seq: 2,
-                payload: Some(pb::control_envelope::Payload::Ping(pb::Ping {
-                    timestamp_us: 99,
-                })),
-            };
-            session.send_control(&ping).await?;
-            if let Some(resp) = channels.control_rx.recv().await {
-                println!("WAN Host replied: {:?}", resp.payload);
+            for sec in 1..=watch_secs {
+                let ping = pb::ControlEnvelope {
+                    seq: 1 + sec,
+                    payload: Some(pb::control_envelope::Payload::Ping(pb::Ping {
+                        timestamp_us: sec * 1_000_000,
+                    })),
+                };
+                session.send_control(&ping).await?;
+                let _ = tokio::time::timeout(Duration::from_secs(3), channels.control_rx.recv()).await;
+                if sec < watch_secs {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                let cur = session.link_telemetry();
+                println!(
+                    "[+{sec}s] mode={} rtt={}ms remote={}",
+                    cur.mode.as_str(),
+                    cur.rtt_ms,
+                    cur.remote_addr
+                );
             }
             session.close();
             iroh_ep.close().await;
