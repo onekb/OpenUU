@@ -266,16 +266,36 @@ public partial class OpenUUApplication : System.Windows.Application
                 winIcon = new Icon(s);
             }
 
-            var menu = new System.Windows.Forms.ContextMenuStrip();
-            menu.Items.Add("打开 OpenUU 主面板", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
-            menu.Items.Add("开启 / 关闭本机被控", null, (_, _) => Dispatcher.Invoke(() => _mainWindow?.ToggleHostWithAntiFraudCheck()));
+            var menu = new System.Windows.Forms.ContextMenuStrip
+            {
+                ShowImageMargin = false,
+                BackColor = System.Drawing.Color.White,
+                ForeColor = System.Drawing.Color.FromArgb(15, 23, 42),
+                Font = new System.Drawing.Font("Microsoft YaHei UI", 9.25f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point),
+                Padding = new System.Windows.Forms.Padding(5),
+                Renderer = new ModernTrayMenuRenderer()
+            };
+
+            void AddTrayItem(string label, EventHandler onClick, bool danger = false)
+            {
+                var item = new System.Windows.Forms.ToolStripMenuItem(label)
+                {
+                    Padding = new System.Windows.Forms.Padding(10, 5, 10, 5),
+                    ForeColor = danger ? System.Drawing.Color.FromArgb(220, 38, 38) : System.Drawing.Color.FromArgb(15, 23, 42)
+                };
+                item.Click += onClick;
+                menu.Items.Add(item);
+            }
+
+            AddTrayItem("打开 OpenUU 主面板", (_, _) => Dispatcher.Invoke(ShowMainWindow));
+            AddTrayItem("开启 / 关闭本机被控", (_, _) => Dispatcher.Invoke(() => _mainWindow?.ToggleHostWithAntiFraudCheck()));
             if (_state != null && !_state.IsRunningAsAdministrator)
             {
-                menu.Items.Add("以管理员权限重启 (支持操控管理员窗口)", null, (_, _) => Dispatcher.Invoke(() => _state?.RelaunchAsAdministrator()));
+                AddTrayItem("以管理员权限重启 (支持操控管理员窗口)", (_, _) => Dispatcher.Invoke(() => _state?.RelaunchAsAdministrator()));
             }
-            menu.Items.Add("断开所有远控连接", null, (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
-            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            menu.Items.Add("退出 OpenUU", null, (_, _) => Dispatcher.Invoke(ShutdownCleanly));
+            AddTrayItem("断开所有远控连接", (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
+            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator { Margin = new System.Windows.Forms.Padding(6, 3, 6, 3) });
+            AddTrayItem("退出 OpenUU", (_, _) => Dispatcher.Invoke(ShutdownCleanly), danger: true);
 
             _trayIcon = new System.Windows.Forms.NotifyIcon
             {
@@ -567,5 +587,57 @@ public partial class OpenUUApplication : System.Windows.Application
         {
             return OpenUUNativeMethods.openuu_aac_encoder_encode_pcm16(enc, pIn, 1024, pts, pOut, aacOut.Length);
         }
+    }
+
+    private sealed class ModernTrayMenuRenderer : System.Windows.Forms.ToolStripProfessionalRenderer
+    {
+        public ModernTrayMenuRenderer() : base(new ModernTrayColorTable())
+        {
+            RoundedEdges = true;
+        }
+
+        protected override void OnRenderMenuItemBackground(System.Windows.Forms.ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected)
+                return;
+
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var rect = new System.Drawing.Rectangle(2, 1, e.Item.Width - 4, e.Item.Height - 2);
+            using var path = BuildRoundRect(rect, 6);
+            bool isDanger = e.Item.ForeColor.R > 180 && e.Item.ForeColor.G < 80;
+            using var fill = new System.Drawing.SolidBrush(
+                isDanger ? System.Drawing.Color.FromArgb(254, 226, 226) : System.Drawing.Color.FromArgb(224, 242, 254)
+            );
+            g.FillPath(fill, path);
+        }
+
+        protected override void OnRenderSeparator(System.Windows.Forms.ToolStripSeparatorRenderEventArgs e)
+        {
+            using var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(226, 232, 240), 1f);
+            int y = e.Item.Height / 2;
+            e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath BuildRoundRect(System.Drawing.Rectangle r, int radius)
+        {
+            int d = radius * 2;
+            var p = new System.Drawing.Drawing2D.GraphicsPath();
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+    }
+
+    private sealed class ModernTrayColorTable : System.Windows.Forms.ProfessionalColorTable
+    {
+        public override System.Drawing.Color ToolStripDropDownBackground => System.Drawing.Color.White;
+        public override System.Drawing.Color MenuBorder => System.Drawing.Color.FromArgb(203, 213, 225);
+        public override System.Drawing.Color ImageMarginGradientBegin => System.Drawing.Color.White;
+        public override System.Drawing.Color ImageMarginGradientMiddle => System.Drawing.Color.White;
+        public override System.Drawing.Color ImageMarginGradientEnd => System.Drawing.Color.White;
     }
 }

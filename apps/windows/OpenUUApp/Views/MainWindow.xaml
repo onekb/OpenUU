@@ -55,7 +55,7 @@
 
             <!-- 4 Navigation Tabs -->
             <StackPanel Grid.Row="1" Margin="10,0,10,0">
-                <Button x:Name="NavRemoteBtn" Click="NavRemoteBtn_Click" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
+                <Button x:Name="NavRemoteBtn" Click="NavRemoteBtn_Click" FocusVisualStyle="{x:Null}" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="TabBd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
@@ -63,14 +63,23 @@
                                     <TextBlock x:Name="TabTxt" Text="🖥  远程控制" FontSize="13.5" Foreground="{TemplateBinding Foreground}" FontWeight="{TemplateBinding FontWeight}" />
                                 </Grid>
                             </Border>
+                            <ControlTemplate.Triggers>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="FontWeight" Value="Normal" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="TabBd" Property="Background" Value="#E2E8F0" />
+                                </MultiTrigger>
+                            </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Button.Template>
                 </Button>
 
-                <Button x:Name="NavDevicesBtn" Click="NavDevicesBtn_Click" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
+                <Button x:Name="NavDevicesBtn" Click="NavDevicesBtn_Click" FocusVisualStyle="{x:Null}" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <Border x:Name="TabBd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
                                 <Grid>
                                     <TextBlock Text="💻  设备列表" FontSize="13.5" Foreground="{TemplateBinding Foreground}" FontWeight="{TemplateBinding FontWeight}" VerticalAlignment="Center" />
                                     <Border x:Name="DevicesCountPill"
@@ -83,26 +92,53 @@
                                     </Border>
                                 </Grid>
                             </Border>
+                            <ControlTemplate.Triggers>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="FontWeight" Value="Normal" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="TabBd" Property="Background" Value="#E2E8F0" />
+                                </MultiTrigger>
+                            </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Button.Template>
                 </Button>
 
-                <Button x:Name="NavSecurityBtn" Click="NavSecurityBtn_Click" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
+                <Button x:Name="NavSecurityBtn" Click="NavSecurityBtn_Click" FocusVisualStyle="{x:Null}" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <Border x:Name="TabBd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
                                 <TextBlock Text="🛡  安全与画质" FontSize="13.5" Foreground="{TemplateBinding Foreground}" FontWeight="{TemplateBinding FontWeight}" />
                             </Border>
+                            <ControlTemplate.Triggers>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="FontWeight" Value="Normal" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="TabBd" Property="Background" Value="#E2E8F0" />
+                                </MultiTrigger>
+                            </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Button.Template>
                 </Button>
 
-                <Button x:Name="NavNetworkBtn" Click="NavNetworkBtn_Click" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
+                <Button x:Name="NavNetworkBtn" Click="NavNetworkBtn_Click" FocusVisualStyle="{x:Null}" Margin="0,0,0,4" Cursor="Hand" BorderThickness="0" Padding="12,10">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <Border x:Name="TabBd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
                                 <TextBlock Text="📡  网络与日志" FontSize="13.5" Foreground="{TemplateBinding Foreground}" FontWeight="{TemplateBinding FontWeight}" />
                             </Border>
+                            <ControlTemplate.Triggers>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="FontWeight" Value="Normal" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="TabBd" Property="Background" Value="#E2E8F0" />
+                                </MultiTrigger>
+                            </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Button.Template>
                 </Button>
@@ -185,9 +221,21 @@
                         Click="AddDeviceBtn_Click" />
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top">
-                    <Button Content="─" Style="{StaticResource WindowCaptionBtnStyle}" Click="MinimizeWindow_Click" ToolTip="最小化" />
-                    <Button x:Name="MaxRestoreBtn" Content="☐" Style="{StaticResource WindowCaptionBtnStyle}" Click="MaxRestoreWindow_Click" ToolTip="最大化 / 还原" />
-                    <Button Content="✕" Style="{StaticResource WindowCloseBtnStyle}" Click="CloseWindow_Click" ToolTip="关闭主面板（连接活跃时驻留系统托盘）" />
+                    <Button Style="{StaticResource WindowCaptionBtnStyle}" Click="MinimizeWindow_Click" ToolTip="最小化">
+                        <Canvas Width="10" Height="10">
+                            <Path Data="M 0,5 H 10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2" />
+                        </Canvas>
+                    </Button>
+                    <Button x:Name="MaxRestoreBtn" Style="{StaticResource WindowCaptionBtnStyle}" Click="MaxRestoreWindow_Click" ToolTip="最大化 / 还原">
+                        <Canvas Width="10" Height="10">
+                            <Path x:Name="MaxRestoreIconPath" Data="M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2" />
+                        </Canvas>
+                    </Button>
+                    <Button Style="{StaticResource WindowCloseBtnStyle}" Click="CloseWindow_Click" ToolTip="关闭主面板（连接活跃时驻留系统托盘）">
+                        <Canvas Width="10" Height="10">
+                            <Path Data="M 0.5,0.5 L 9.5,9.5 M 9.5,0.5 L 0.5,9.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.3" />
+                        </Canvas>
+                    </Button>
                 </StackPanel>
             </Grid>
 
@@ -369,6 +417,7 @@
                                     <views:SmartTargetTextBox x:Name="QuickTargetBox"
                                                               FontSize="14.5"
                                                               Style="{StaticResource RoundedTextBoxStyle}"
+                                                              views:UiAssist.Placeholder="输入 9 位设备码 / openuu:// / IP"
                                                               ToolTip="例如：601 550 599 或 openuu://… 或 192.168.1.10"
                                                               Margin="0,0,0,12" />
 
@@ -383,6 +432,7 @@
                                             <TextBox x:Name="QuickPasswordBox"
                                                      FontFamily="Consolas"
                                                      Style="{StaticResource RoundedTextBoxStyle}"
+                                                     views:UiAssist.Placeholder="可留空免密连接"
                                                      TextChanged="QuickPasswordBox_TextChanged" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="2">
@@ -430,7 +480,7 @@
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource TextSecondary}"
                                        Margin="0,0,0,8" />
-                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" views:UiAssist.HorizontalWheelScroll="True">
                                 <StackPanel x:Name="LanPeersHostPanel" Orientation="Horizontal" />
                             </ScrollViewer>
                         </StackPanel>
@@ -468,7 +518,7 @@
                                         Style="{StaticResource SecondaryButtonStyle}"
                                         Click="NavDevicesBtn_Click" />
                             </Grid>
-                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" views:UiAssist.HorizontalWheelScroll="True">
                                 <StackPanel x:Name="RecentDevicesStripPanel" Orientation="Horizontal" />
                             </ScrollViewer>
                         </StackPanel>
@@ -498,11 +548,13 @@
 
                         <TextBox x:Name="DeviceSearchBox"
                                  Grid.Column="0"
+                                 FontSize="12.5"
                                  Style="{StaticResource RoundedTextBoxStyle}"
+                                 views:UiAssist.Placeholder="🔍 搜索备注名 / 设备码 / IP..."
                                  ToolTip="搜索备注名 / 设备码 / IP..."
                                  TextChanged="DeviceSearchBox_TextChanged" />
 
-                        <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center">
+                        <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center" views:UiAssist.HorizontalWheelScroll="True">
                             <StackPanel x:Name="GroupFilterPillsPanel" Orientation="Horizontal" />
                         </ScrollViewer>
 
@@ -549,10 +601,10 @@
 
                     <!-- Resizable Handle -->
                     <GridSplitter Grid.Row="3"
-                                  Height="6"
+                                  Height="8"
                                   HorizontalAlignment="Stretch"
                                   VerticalAlignment="Center"
-                                  Background="#CBD5E1"
+                                  Style="{StaticResource ModernHorizontalSplitterStyle}"
                                   ShowsPreview="False"
                                   ResizeDirection="Rows" />
 
@@ -580,7 +632,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,10,0" />
 
-                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" views:UiAssist.HorizontalWheelScroll="True">
                                 <StackPanel x:Name="DrawerSessionTabsPanel" Orientation="Horizontal" />
                             </ScrollViewer>
 
@@ -627,13 +679,15 @@
                                 </StackPanel>
 
                                 <CheckBox x:Name="DynResCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="动态分辨率加速（高速滚动/跨网中继时智能调节采样，静止恢复超清锐利文字）"
-                                          Margin="0,0,0,9"
+                                          Margin="0,2,0,11"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
                                 <CheckBox x:Name="DebugHudCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="显示画面调试浮窗（远程窗口左下角展示 H.264/HEVC、实时码率与解码耗时）"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
@@ -647,55 +701,65 @@
                                 <TextBlock Text="多机键鼠、远端音频与剪贴板无缝协同" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,14" />
 
                                 <CheckBox x:Name="RemoteAudioCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="远端音频实时传输（将当前远控应用或整屏桌面声音实时传至控制端）"
-                                          Margin="0,0,0,9"
+                                          Margin="0,0,0,11"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
                                 <CheckBox x:Name="MuteHostAudioCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="远控传声时被控端电脑自动静音（断开远控后自动恢复本机外放）"
-                                          Margin="0,0,0,9"
+                                          Margin="0,0,0,11"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
                                 <CheckBox x:Name="ClipboardSyncCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="跨多机双向剪贴板同步（复制文字 / 图片 / 文件自动同步至所有已连设备）"
-                                          Margin="0,0,0,9"
+                                          Margin="0,0,0,11"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
                                 <CheckBox x:Name="NotifSyncCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="远端消息通知横幅与本地任务栏独立图标未读红点同步"
-                                          Margin="0,0,0,9"
+                                          Margin="0,0,0,11"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
                                 <CheckBox x:Name="MapCtrlToCmdCheck"
+                                          Style="{StaticResource ModernToggleSwitchStyle}"
                                           Content="操控 Mac 时智能将 Ctrl 快捷键映射为 Mac Command (⌘) 键（复制/粘贴/撤销/全选与 Windows 习惯一致）"
-                                          Margin="0,0,0,10"
+                                          Margin="0,0,0,12"
                                           FontSize="12.5"
                                           Checked="QualityCheck_Changed"
                                           Unchecked="QualityCheck_Changed" />
 
+                                <Border Height="1" Background="{StaticResource DividerBrush}" Margin="0,0,0,12" />
+
                                 <WrapPanel>
                                     <CheckBox x:Name="SilentClickCheck"
-                                              Content="静默点击模式（点击后自动归位本机光标）"
-                                              Margin="0,0,24,6"
+                                              Style="{StaticResource ModernToggleSwitchStyle}"
+                                              Content="静默点击模式（点击后归位本机光标）"
+                                              Margin="0,0,26,6"
                                               FontSize="12.5"
                                               Checked="QualityCheck_Changed"
                                               Unchecked="QualityCheck_Changed" />
                                     <CheckBox x:Name="HoverCursorCheck"
+                                              Style="{StaticResource ModernToggleSwitchStyle}"
                                               Content="同步远端光标形状"
-                                              Margin="0,0,24,6"
+                                              Margin="0,0,26,6"
                                               FontSize="12.5"
                                               Checked="QualityCheck_Changed"
                                               Unchecked="QualityCheck_Changed" />
                                     <CheckBox x:Name="PreventSleepCheck"
-                                              Content="被控开启期间阻止电脑休眠息屏"
+                                              Style="{StaticResource ModernToggleSwitchStyle}"
+                                              Content="被控期间阻止休眠息屏"
                                               Margin="0,0,0,6"
                                               FontSize="12.5"
                                               Checked="QualityCheck_Changed"
@@ -792,19 +856,19 @@
                                 <TextBox x:Name="WanRelayBox" Grid.Column="1" FontFamily="Consolas" Style="{StaticResource RoundedTextBoxStyle}" />
                             </Grid>
 
-                            <Grid Margin="0,0,0,10">
+                            <Grid Margin="0,0,0,12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="136" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="中继鉴权 Token:" VerticalAlignment="Center" FontSize="12.5" />
-                                <TextBox x:Name="WanTokenBox" Grid.Column="1" FontFamily="Consolas" Style="{StaticResource RoundedTextBoxStyle}" />
+                                <TextBox x:Name="WanTokenBox" Grid.Column="1" FontFamily="Consolas" Style="{StaticResource RoundedTextBoxStyle}" views:UiAssist.Placeholder="可选鉴权令牌" />
                             </Grid>
 
                             <Grid>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <CheckBox x:Name="WanFallbackCheck" Content="保留全球公共节点作为终极兜底" Margin="0,0,18,0" FontSize="12" />
-                                    <CheckBox x:Name="WanInsecureCheck" Content="允许自签 TLS 证书" FontSize="12" />
+                                    <CheckBox x:Name="WanFallbackCheck" Style="{StaticResource ModernToggleSwitchStyle}" Content="保留全球公共节点作为终极兜底" Margin="0,0,22,0" FontSize="12" />
+                                    <CheckBox x:Name="WanInsecureCheck" Style="{StaticResource ModernToggleSwitchStyle}" Content="允许自签 TLS 证书" FontSize="12" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button Content="使用公共服务域名"
@@ -852,7 +916,7 @@
                     <Grid Grid.Row="2" Margin="0,0,0,8">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="实时分级诊断日志" FontSize="13.5" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,12,0" VerticalAlignment="Center" />
-                            <ComboBox x:Name="LogLevelCombo" Width="136" Height="28" SelectionChanged="LogLevelCombo_SelectionChanged" />
+                            <ComboBox x:Name="LogLevelCombo" Width="144" Height="30" SelectionChanged="LogLevelCombo_SelectionChanged" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="复制诊断报告" Padding="11,5" FontSize="11.5" Margin="0,0,6,0" Style="{StaticResource PrimaryButtonStyle}" Click="CopyDiagLogsBtn_Click" />
@@ -862,10 +926,9 @@
                     </Grid>
 
                     <!-- Log Console -->
-                    <Border Grid.Row="3" Background="#0F172A" CornerRadius="8" Padding="10">
+                    <Border Grid.Row="3" Background="#0F172A" BorderBrush="#1E293B" BorderThickness="1" CornerRadius="10" Padding="8">
                         <ListBox x:Name="LogsListBox"
-                                 Background="Transparent"
-                                 BorderThickness="0"
+                                 Style="{StaticResource DarkLogListBoxStyle}"
                                  FontFamily="Consolas"
                                  FontSize="11.5"
                                  Foreground="#E2E8F0"
