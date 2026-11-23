@@ -1,5 +1,9 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -12,9 +16,15 @@ using OpenUU.Views;
 
 public partial class OpenUUApplication : System.Windows.Application
 {
+    private const string ActivateEventName = @"Local\OpenUU.ActivateWindow.v1";
+    private const string TakeoverExitEventName = @"Local\OpenUU.TakeoverExit.v1";
+
     private AppState? _state;
     private MainWindow? _mainWindow;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private EventWaitHandle? _activateEvent;
+    private EventWaitHandle? _takeoverExitEvent;
+    private CancellationTokenSource? _ipcCts;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -23,6 +33,9 @@ public partial class OpenUUApplication : System.Windows.Application
         string[] args = e.Args;
         string? configDir = ParseFlag(args, "--config-dir");
         string? logDir = ParseFlag(args, "--log-dir");
+        bool isE2E = args.Any(a => a.StartsWith("--e2e-", StringComparison.OrdinalIgnoreCase));
+        bool autoStartHost = HasFlag(args, "--autostart-host");
+
         if (!string.IsNullOrWhiteSpace(logDir))
             Environment.SetEnvironmentVariable("OPENUU_LOG_DIR", logDir.Trim());
 
@@ -31,6 +44,17 @@ public partial class OpenUUApplication : System.Windows.Application
             string cacheDir = Path.Combine(configDir.Trim(), "cache");
             Directory.CreateDirectory(cacheDir);
             OpenUUBridge.SetGlobalAppDirs(configDir.Trim(), cacheDir);
+        }
+
+        // Coordinate single-instance ownership in normal desktop mode so a tray-minimized non-admin instance
+        // never holds UDP port 39481 when the user launches OpenUU as Administrator (or double-clicks shortcut).
+        if (string.IsNullOrWhiteSpace(configDir) && !isE2E)
+        {
+            if (!AcquireSingleInstanceOrYield())
+            {
+                Shutdown(0);
+                return;
+            }
         }
 
         Win32Interop.SetCurrentProcessExplicitAppUserModelID("ren.onekb.openuu.windows");
@@ -48,7 +72,185 @@ public partial class OpenUUApplication : System.Windows.Application
         SetupSystemTrayIcon();
         _mainWindow.Show();
 
+        if (autoStartHost)
+        {
+            Dispatcher.BeginInvoke(async () =>
+            {
+                for (int attempt = 0; attempt < 6; attempt++)
+                {
+                    if (_state.StartHost())
+                    {
+                        _state.StatusLog = "[被控端] 已以管理员权限自动恢复本机被控监听";
+                        break;
+                    }
+                    await Task.Delay(250);
+                }
+            });
+        }
+
         ConfigureCliAutomationIfPresent(args);
+    }
+
+    private bool AcquireSingleInstanceOrYield()
+    {
+        bool isAdmin = AppState.CheckIsAdmin();
+        int myPid = Environment.ProcessId;
+        int mySession = -1;
+        try { mySession = Process.GetCurrentProcess().SessionId; } catch { }
+
+        var otherProcs = GetOtherInteractiveOpenUUProcesses(myPid, mySession);
+
+        if (otherProcs.Count > 0)
+        {
+            if (isAdmin)
+            {
+                // Elevated launch (via "以管理员权限重启" or right-click "以管理员身份运行"):
+                // Ask any existing instance in this session to exit cleanly so port 39481 & identity are handed over.
+                TrySignalNamedEvent(TakeoverExitEventName);
+                var sw = Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 1400)
+                {
+                    if (otherProcs.All(HasProcessExitedSafe))
+                        break;
+                    Thread.Sleep(80);
+                }
+
+                // Clean up any legacy stuck tray instance that predates TakeoverExitEventName
+                foreach (var p in otherProcs.Where(p => !HasProcessExitedSafe(p)))
+                {
+                    try { p.Kill(); } catch { }
+                    try { p.WaitForExit(500); } catch { }
+                }
+            }
+            else
+            {
+                // Non-elevated duplicate launch: bring the already-running instance's MainWindow to front and exit.
+                TrySignalNamedEvent(ActivateEventName);
+                return false;
+            }
+        }
+
+        foreach (var p in otherProcs)
+        {
+            try { p.Dispose(); } catch { }
+        }
+
+        SetupSingleInstanceListeners();
+        return true;
+    }
+
+    private static List<Process> GetOtherInteractiveOpenUUProcesses(int myPid, int mySession)
+    {
+        var list = new List<Process>();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("OpenUU"))
+            {
+                if (p.Id == myPid)
+                {
+                    p.Dispose();
+                    continue;
+                }
+                try
+                {
+                    if (mySession >= 0 && p.SessionId != mySession)
+                    {
+                        p.Dispose();
+                        continue;
+                    }
+                }
+                catch
+                {
+                }
+                list.Add(p);
+            }
+        }
+        catch
+        {
+        }
+        return list;
+    }
+
+    private static bool HasProcessExitedSafe(Process p)
+    {
+        try { return p.HasExited; }
+        catch { return true; }
+    }
+
+    private static void TrySignalNamedEvent(string name)
+    {
+        try
+        {
+            using var ev = EventWaitHandle.OpenExisting(name);
+            ev.Set();
+        }
+        catch
+        {
+        }
+    }
+
+    private static EventWaitHandle? CreatePermissiveAutoResetEvent(string name)
+    {
+        try
+        {
+            var sec = new EventWaitHandleSecurity();
+            sec.AddAccessRule(new EventWaitHandleAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                EventWaitHandleRights.Modify | EventWaitHandleRights.Synchronize,
+                AccessControlType.Allow
+            ));
+            return EventWaitHandleAcl.Create(false, EventResetMode.AutoReset, name, out _, sec);
+        }
+        catch
+        {
+            try { return new EventWaitHandle(false, EventResetMode.AutoReset, name); }
+            catch { return null; }
+        }
+    }
+
+    private void SetupSingleInstanceListeners()
+    {
+        _activateEvent = CreatePermissiveAutoResetEvent(ActivateEventName);
+        _takeoverExitEvent = CreatePermissiveAutoResetEvent(TakeoverExitEventName);
+        _ipcCts = new CancellationTokenSource();
+        var ct = _ipcCts.Token;
+
+        if (_activateEvent is { } actEv)
+        {
+            _ = Task.Factory.StartNew(() =>
+            {
+                var handles = new WaitHandle[] { actEv, ct.WaitHandle };
+                while (!ct.IsCancellationRequested)
+                {
+                    int idx = WaitHandle.WaitAny(handles);
+                    if (idx == 0 && !ct.IsCancellationRequested)
+                        Dispatcher.BeginInvoke(ShowMainWindow);
+                    else
+                        break;
+                }
+            }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        if (_takeoverExitEvent is { } exitEv)
+        {
+            _ = Task.Factory.StartNew(() =>
+            {
+                var handles = new WaitHandle[] { exitEv, ct.WaitHandle };
+                int idx = WaitHandle.WaitAny(handles);
+                if (idx == 0 && !ct.IsCancellationRequested)
+                    Dispatcher.BeginInvoke(ShutdownCleanly);
+            }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+    }
+
+    private void DisposeIpcListeners()
+    {
+        try { _ipcCts?.Cancel(); } catch { }
+        try { _activateEvent?.Dispose(); } catch { }
+        try { _takeoverExitEvent?.Dispose(); } catch { }
+        _ipcCts = null;
+        _activateEvent = null;
+        _takeoverExitEvent = null;
     }
 
     private void SetupSystemTrayIcon()
@@ -67,6 +269,10 @@ public partial class OpenUUApplication : System.Windows.Application
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("打开 OpenUU 主面板", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
             menu.Items.Add("开启 / 关闭本机被控", null, (_, _) => Dispatcher.Invoke(() => _mainWindow?.ToggleHostWithAntiFraudCheck()));
+            if (_state != null && !_state.IsRunningAsAdministrator)
+            {
+                menu.Items.Add("以管理员权限重启 (支持操控管理员窗口)", null, (_, _) => Dispatcher.Invoke(() => _state?.RelaunchAsAdministrator()));
+            }
             menu.Items.Add("断开所有远控连接", null, (_, _) => Dispatcher.Invoke(() => _state?.DisconnectAllClientSessions()));
             menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             menu.Items.Add("退出 OpenUU", null, (_, _) => Dispatcher.Invoke(ShutdownCleanly));
@@ -99,6 +305,7 @@ public partial class OpenUUApplication : System.Windows.Application
 
     public void ShutdownCleanly()
     {
+        DisposeIpcListeners();
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;
@@ -118,6 +325,7 @@ public partial class OpenUUApplication : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        DisposeIpcListeners();
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;

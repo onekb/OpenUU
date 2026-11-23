@@ -214,7 +214,26 @@
                             <Border x:Name="HostHeroCard" Grid.Column="0" Style="{StaticResource CardBorderStyle}">
                                 <StackPanel>
                                     <Grid Margin="0,0,0,12">
-                                        <TextBlock Text="🖥  允许控制本机" FontSize="14.5" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" />
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="🖥  允许控制本机" FontSize="14.5" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" />
+                                            <Border x:Name="HomeAdminBadge"
+                                                    Margin="8,0,0,0"
+                                                    Padding="6,2"
+                                                    CornerRadius="6"
+                                                    Background="{StaticResource OnlineGreenSoft}"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="Collapsed">
+                                                <TextBlock Text="🛡 管理员" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource OnlineGreen}" />
+                                            </Border>
+                                            <Button x:Name="HomeElevateBtn"
+                                                    Content="🛡 提权运行"
+                                                    Margin="8,0,0,0"
+                                                    Padding="7,2"
+                                                    FontSize="10.5"
+                                                    ToolTip="当前为普通用户权限，Windows 会拦截对管理员窗口（如提权终端/Electron/任务管理器）的鼠标点击；点击一键以管理员重启并自动恢复被控"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Click="RelaunchAdminBtn_Click" />
+                                        </StackPanel>
                                         <Button x:Name="HeroHostPillBtn"
                                                 HorizontalAlignment="Right"
                                                 Content="⚡ 点击开启被控"

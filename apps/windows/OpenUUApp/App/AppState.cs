@@ -602,7 +602,7 @@ public sealed class AppState : ObservableBase, IDisposable
         }
     }
 
-    private static bool CheckIsAdmin()
+    internal static bool CheckIsAdmin()
     {
         try
         {
@@ -779,6 +779,7 @@ public sealed class AppState : ObservableBase, IDisposable
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => StatusLog = $"[被控端] {msg}");
         };
 
+        InputInjector.IsCurrentProcessAdmin = IsRunningAsAdministrator;
         InputInjector.SilentMode = _silentClickMode;
         InputInjector.HoverCursorSync = _hoverCursorSync;
         InputInjector.OnDebugLog = msg =>
@@ -1258,21 +1259,43 @@ public sealed class AppState : ObservableBase, IDisposable
         StateMutated?.Invoke();
     }
 
+    private readonly SemaphoreSlim _appListPushGate = new(1, 1);
+
     private void PushHostAppListToClient()
     {
-        try
+        _ = Task.Run(async () =>
         {
-            var apps = WindowCatalog.BuildHostAppSummaries();
-            NotificationMonitor.UpdateWatchedApps(
-                apps.Where(a => a.BundleId != MultiWindowCaptureManager.FullDesktopBundleId)
-                    .Select(a => (a.BundleId, a.Name))
-            );
-            HostBridge.SendAppList(apps);
-        }
-        catch (Exception ex)
-        {
-            StatusLog = $"[被控端] 获取应用列表失败: {ex.Message}";
-        }
+            await _appListPushGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var apps = WindowCatalog.BuildHostAppSummaries();
+                HostBridge.SendAppList(apps);
+                OpenUULogger.Shared.Info("HOST", $"sent app list count={apps.Count} admin={IsRunningAsAdministrator}");
+
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    NotificationMonitor.UpdateWatchedApps(
+                        apps.Where(a => a.BundleId != MultiWindowCaptureManager.FullDesktopBundleId)
+                            .Select(a => (a.BundleId, a.Name))
+                    );
+                });
+            }
+            catch (Exception ex)
+            {
+                string detail = string.IsNullOrWhiteSpace(ex.Message)
+                    ? ex.GetType().FullName ?? "UnknownError"
+                    : $"{ex.GetType().Name}: {ex.Message}";
+                OpenUULogger.Shared.Error("HOST", $"PushHostAppListToClient failed: {ex}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    StatusLog = $"[被控端] 获取应用列表失败: {detail}";
+                });
+            }
+            finally
+            {
+                _appListPushGate.Release();
+            }
+        });
     }
 
     private void EnqueueClipboardFile(string filePath)
@@ -1437,14 +1460,22 @@ public sealed class AppState : ObservableBase, IDisposable
     {
         string? exe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) return;
+        bool wasHostRunning = IsHostRunning;
         try
         {
-            Process.Start(new ProcessStartInfo(exe)
+            var proc = Process.Start(new ProcessStartInfo(exe)
             {
                 UseShellExecute = true,
-                Verb = "runas"
+                Verb = "runas",
+                Arguments = wasHostRunning ? "--relaunch-admin --autostart-host" : "--relaunch-admin"
             });
-            System.Windows.Application.Current?.Shutdown();
+            if (proc != null)
+            {
+                if (System.Windows.Application.Current is OpenUUApplication app)
+                    app.ShutdownCleanly();
+                else
+                    System.Windows.Application.Current?.Shutdown();
+            }
         }
         catch
         {

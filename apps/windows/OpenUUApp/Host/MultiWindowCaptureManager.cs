@@ -369,7 +369,14 @@ public sealed class MultiWindowCaptureManager : IDisposable
 
         foreach (var w in appWindows.Where(w => !w.IsPopup && !_windowIconCache.ContainsKey(w.WindowId)))
         {
-            string b64 = IconCompositor.ExtractWindowOrExeIconBase64(w.Hwnd, w.ExePath);
+            string b64 = IconCompositor.ExtractWindowOrExeIconBase64(
+                w.Hwnd,
+                w.ExePath,
+                w.ExplicitIconPath,
+                w.DiscoveredIconPath,
+                w.IsGenericRuntime,
+                w.AppName
+            );
             if (!string.IsNullOrEmpty(b64))
                 _windowIconCache[w.WindowId] = b64;
         }

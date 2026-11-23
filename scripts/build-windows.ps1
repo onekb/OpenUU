@@ -97,23 +97,46 @@ else {
     throw "No C++17 compiler found (install LLVM-MinGW or Visual Studio Build Tools)."
 }
 
-$publishDir = if ($OutDir) { $OutDir } else { Join-Path $RootDir "build\OpenUU-Windows" }
-if (Test-Path $publishDir) {
-    Remove-Item -Recurse -Force $publishDir -ErrorAction SilentlyContinue
-    if (Test-Path (Join-Path $publishDir "OpenUU.dll")) {
-        $fallbackDir = Join-Path $RootDir "build\OpenUU-Windows-v0.6.1"
-        Write-Host "==> Note: $publishDir is currently in use by a running OpenUU.exe; publishing to $fallbackDir ..."
-        $publishDir = $fallbackDir
-        if (Test-Path $publishDir) {
-            Remove-Item -Recurse -Force $publishDir
-        }
-    }
-}
-
 $csprojPath = Join-Path $RootDir "apps\windows\OpenUUApp\OpenUUApp.csproj"
 [xml]$csprojXml = Get-Content $csprojPath -Encoding UTF8
 $appVersion = ($csprojXml.Project.PropertyGroup.Version | Select-Object -First 1)
 if (-not $appVersion) { $appVersion = "0.6.1" }
+
+function Test-PublishDirLocked([string]$Dir) {
+    if (-not (Test-Path $Dir)) { return $false }
+    $probeFiles = @("OpenUU.exe", "OpenUU.dll", "openuu_core.dll", "openuu_win_media.dll", "coreclr.dll")
+    foreach ($name in $probeFiles) {
+        $fp = Join-Path $Dir $name
+        if (Test-Path $fp) {
+            try {
+                $fs = [System.IO.File]::Open($fp, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+                $fs.Close()
+            }
+            catch {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+$publishDir = if ($OutDir) { $OutDir } else { Join-Path $RootDir "build\OpenUU-Windows" }
+if (Test-PublishDirLocked $publishDir) {
+    $candidates = @(
+        (Join-Path $RootDir "build\OpenUU-Windows-v$appVersion"),
+        (Join-Path $RootDir "build\OpenUU-Windows-v$appVersion-stage")
+    )
+    $chosen = $candidates | Where-Object { -not (Test-PublishDirLocked $_) } | Select-Object -First 1
+    if (-not $chosen) {
+        throw "All candidate publish directories are locked by running OpenUU.exe processes. Please close OpenUU first."
+    }
+    Write-Host "==> Note: $publishDir is currently in use by a running OpenUU.exe; leaving it intact and publishing to $chosen ..."
+    $publishDir = $chosen
+}
+
+if (Test-Path $publishDir) {
+    Remove-Item -Recurse -Force $publishDir
+}
 
 $scValue = if ($SelfContained) { "true" } else { "false" }
 Write-Host "==> 3/5 Publishing OpenUUApp v$appVersion (.NET 8 WPF win-x64, self-contained=$scValue)..."

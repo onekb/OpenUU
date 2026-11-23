@@ -19,8 +19,10 @@ public sealed class InputInjector : IDisposable
     private CancellationTokenSource? _restoreCursorCts;
     private bool _isRemoteButtonDown;
     private long _lastHoverTickMs;
+    private long _lastUipiWarnTickMs;
     private string _lastCursorKind = "";
 
+    public bool IsCurrentProcessAdmin { get; set; }
     public bool SilentMode { get; set; } = true;
     public bool HoverCursorSync { get; set; } = true;
 
@@ -103,9 +105,18 @@ public sealed class InputInjector : IDisposable
             return;
         }
 
-        uint style = Win32Interop.GetWindowLong(hwnd, Win32Interop.GWL_STYLE);
-        string cls = Win32Interop.GetWindowClassName(hwnd);
-        bool isPopup = cls == "#32768" || (style & Win32Interop.WS_POPUP) != 0;
+        bool isPopup = Win32Interop.IsFloatingMenuOrPopup(hwnd);
+
+        if (!IsCurrentProcessAdmin &&
+            ((msg.Type == "mouse" && msg.EventType == 1) || msg.Type is "key" or "text_commit" or "scroll"))
+        {
+            Win32Interop.GetWindowThreadProcessId(hwnd, out uint targetPid);
+            if (targetPid != 0 && Win32Interop.IsProcessElevated(targetPid))
+            {
+                WarnUipiBlocked(hwnd, targetPid);
+                return;
+            }
+        }
 
         if (!isPopup &&
             ((msg.Type == "mouse" && msg.EventType is 1 or 2 or 3) ||
@@ -243,7 +254,10 @@ public sealed class InputInjector : IDisposable
                     uint downFlag = button == 1
                         ? Win32Interop.MOUSEEVENTF_RIGHTDOWN
                         : (button == 2 ? Win32Interop.MOUSEEVENTF_MIDDLEDOWN : Win32Interop.MOUSEEVENTF_LEFTDOWN);
-                    SendMouseAbsolute(px, py, downFlag, 0);
+                    if (SendMouseAbsolute(px, py, downFlag, 0) == 0 && !IsCurrentProcessAdmin)
+                    {
+                        WarnUipiBlocked(Win32Interop.GetForegroundWindow(), 0);
+                    }
                 }
                 else if (type == 2)
                 {
@@ -277,6 +291,18 @@ public sealed class InputInjector : IDisposable
         }
     }
 
+    private void WarnUipiBlocked(IntPtr hwnd, uint pid)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastUipiWarnTickMs < 2500) return;
+        _lastUipiWarnTickMs = now;
+
+        string title = hwnd != IntPtr.Zero ? Win32Interop.GetWindowTitle(hwnd).Trim() : "";
+        string label = !string.IsNullOrEmpty(title) ? title : (pid != 0 ? $"PID {pid}" : "管理员窗口");
+        OpenUULogger.Shared.Warn("INPUT", $"UIPI blocked input to elevated window '{label}' (pid={pid}) while OpenUU admin=False");
+        OnDebugLog?.Invoke($"权限受限：目标窗口「{label}」正以管理员权限运行，请在被控端点击「🛡 管理员提权」");
+    }
+
     private static void ActivateWindowForInput(IntPtr hwnd, bool isPopup)
     {
         if (hwnd == IntPtr.Zero || isPopup) return;
@@ -286,17 +312,14 @@ public sealed class InputInjector : IDisposable
         IntPtr fg = Win32Interop.GetForegroundWindow();
         if (fg == hwnd) return;
 
-        // Avoid raising main window if foreground window is already an active popup of the same process
+        // Avoid raising main window if foreground window is already an active floating menu/popover of the same process
         if (fg != IntPtr.Zero)
         {
             Win32Interop.GetWindowThreadProcessId(fg, out uint fgPid);
             Win32Interop.GetWindowThreadProcessId(hwnd, out uint targetPid);
-            if (fgPid == targetPid)
+            if (fgPid == targetPid && Win32Interop.IsFloatingMenuOrPopup(fg))
             {
-                uint fgStyle = Win32Interop.GetWindowLong(fg, Win32Interop.GWL_STYLE);
-                string fgClass = Win32Interop.GetWindowClassName(fg);
-                if (fgClass == "#32768" || (fgStyle & Win32Interop.WS_POPUP) != 0)
-                    return;
+                return;
             }
         }
 
@@ -311,6 +334,20 @@ public sealed class InputInjector : IDisposable
 
         if (attached)
             Win32Interop.AttachThreadInput(curThread, fgThread, false);
+
+        // If Windows Foreground Lock prevented SetForegroundWindow from raising hwnd above covering windows,
+        // lift hwnd to the top of the normal Z-order so SendInput clicks land directly on hwnd (not on an overlapping window).
+        if (Win32Interop.GetForegroundWindow() != hwnd)
+        {
+            uint exStyle = Win32Interop.GetWindowLong(hwnd, Win32Interop.GWL_EXSTYLE);
+            if ((exStyle & Win32Interop.WS_EX_TOPMOST) == 0)
+            {
+                const uint flags = Win32Interop.SWP_NOMOVE | Win32Interop.SWP_NOSIZE | Win32Interop.SWP_NOACTIVATE;
+                Win32Interop.SetWindowPos(hwnd, Win32Interop.HWND_TOPMOST, 0, 0, 0, 0, flags);
+                Win32Interop.SetWindowPos(hwnd, Win32Interop.HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+            }
+            Win32Interop.SetForegroundWindow(hwnd);
+        }
     }
 
     private static void ResizeTargetWindow(IntPtr hwnd, float logicalW, float logicalH, double dpiScale)
@@ -374,7 +411,7 @@ public sealed class InputInjector : IDisposable
         }, ct);
     }
 
-    private static void SendMouseAbsolute(int screenX, int screenY, uint mouseFlags, int wheelDelta)
+    private static uint SendMouseAbsolute(int screenX, int screenY, uint mouseFlags, int wheelDelta)
     {
         int vx = Win32Interop.GetSystemMetrics(Win32Interop.SM_XVIRTUALSCREEN);
         int vy = Win32Interop.GetSystemMetrics(Win32Interop.SM_YVIRTUALSCREEN);
@@ -398,7 +435,7 @@ public sealed class InputInjector : IDisposable
                 }
             }
         };
-        Win32Interop.SendInput(1, new[] { input }, Marshal.SizeOf<Win32Interop.INPUT>());
+        return Win32Interop.SendInput(1, new[] { input }, Marshal.SizeOf<Win32Interop.INPUT>());
     }
 
     private static void EmitScroll(float deltaX, float deltaY, bool isContinuous)

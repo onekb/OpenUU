@@ -7,15 +7,19 @@ param(
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 
+# Allow unattended headless E2E runs from non-elevated shells without triggering interactive UAC prompts
+$isCurrentShellAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isCurrentShellAdmin) {
+    $env:__COMPAT_LAYER = "RunAsInvoker"
+}
+
 if (-not $AppExe) {
-    $candV5 = Join-Path $RootDir "build\OpenUU-Windows-v0.6.1\OpenUU.exe"
-    $candDef = Join-Path $RootDir "build\OpenUU-Windows\OpenUU.exe"
-    if ((Test-Path $candV5) -and ((-not (Test-Path $candDef)) -or ((Get-Item $candV5).LastWriteTime -gt (Get-Item $candDef).LastWriteTime))) {
-        $AppExe = $candV5
-    }
-    else {
-        $AppExe = $candDef
-    }
+    $candidates = @(
+        (Join-Path $RootDir "build\OpenUU-Windows-v0.6.1-stage\OpenUU.exe"),
+        (Join-Path $RootDir "build\OpenUU-Windows-v0.6.1\OpenUU.exe"),
+        (Join-Path $RootDir "build\OpenUU-Windows\OpenUU.exe")
+    ) | Where-Object { Test-Path $_ } | Sort-Object { (Get-Item $_).LastWriteTime } -Descending
+    $AppExe = $candidates | Select-Object -First 1
 }
 if (-not $MockBin) { $MockBin = Join-Path $RootDir "target\release\openuu-cli.exe" }
 if (-not $ArtifactDir) { $ArtifactDir = Join-Path $RootDir "build\e2e-artifacts" }
@@ -305,6 +309,7 @@ $timer.Start()
 
     $singleClientLog = if (Test-Path $LiveSingleLogFile) { Get-Content $LiveSingleLogFile -Raw -Encoding UTF8 } else { "" }
     Assert-Check "Live Windows Host -> Client single-app connected & listed real Windows apps" ($singleClientLog -match "list_apps_resp count=")
+    Assert-Check "Live Windows Host -> Client single-app received window_topology" ($singleClientLog -match "window_topology count=[1-9]")
     Assert-Check "Live Windows Host DWM PrintWindow + MF H.264 encode -> Client decoded_frames >= 5" ($singleClientLog -match "decoded_frames=([5-9]|[1-9][0-9]+)")
     Assert-Check "Live Windows Host QUIC Audio (0x02) + MF AAC-LC encode/decode -> decoded_audio_frames >= 3" ($singleClientLog -match "decoded_audio_frames=([3-9]|[1-9][0-9]+)")
     if (Test-Path (Join-Path $LiveSingleShotDir "windows_03_proxy_window.png")) {
@@ -343,6 +348,7 @@ $timer.Start()
     $hostLog = if (Test-Path $HostLogFile) { Get-Content $HostLogFile -Raw -Encoding UTF8 } else { "" }
 
     Assert-Check "Live Windows Host DXGI Full Desktop capture started" ($hostLog -match "started full_desktop")
+    Assert-Check "Live Windows Host Full Desktop -> Client received window_topology (2147483392)" ($deskClientLog -match "window_topology.*2147483392")
     Assert-Check "Live Windows Host Full Desktop -> Client decoded_frames >= 5" ($deskClientLog -match "decoded_frames=([5-9]|[1-9][0-9]+)")
     if (Test-Path (Join-Path $LiveDeskShotDir "windows_03_proxy_window.png")) {
         Copy-Item -Force (Join-Path $LiveDeskShotDir "windows_03_proxy_window.png") (Join-Path $ArtifactDir "windows_05_live_host_desktop.png")

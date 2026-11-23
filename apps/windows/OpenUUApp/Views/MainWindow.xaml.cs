@@ -229,10 +229,14 @@ public partial class MainWindow : Window
                 AdminStatusText.Text = "✅  管理员窗口控制权限 (UIPI)：已处于管理员权限（可操控本机所有管理员窗口与系统工具）";
                 AdminStatusText.Foreground = (SolidColorBrush)FindResource("OnlineGreen");
                 RelaunchAdminBtn.Visibility = Visibility.Collapsed;
+                HomeAdminBadge.Visibility = Visibility.Visible;
+                HomeElevateBtn.Visibility = Visibility.Collapsed;
             }
             else
             {
                 RelaunchAdminBtn.Visibility = Visibility.Visible;
+                HomeAdminBadge.Visibility = Visibility.Collapsed;
+                HomeElevateBtn.Visibility = Visibility.Visible;
             }
 
             RebuildTrustedPeersCard();

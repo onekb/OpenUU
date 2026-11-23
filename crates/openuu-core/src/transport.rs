@@ -481,19 +481,28 @@ pub fn bind_host_endpoint(identity: &DeviceIdentity, bind_addr: SocketAddr) -> R
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_server_cfg));
     server_config.transport_config(lan_transport_config());
 
-    // Upgrade unspecified IPv4 `0.0.0.0:port` to dual-stack `[::]:port` if available
+    // Upgrade unspecified IPv4 `0.0.0.0:port` to dual-stack `[::]:port` if available.
+    // IMPORTANT: If `[::]:port` fails with `AddrInUse`, propagate the error immediately instead of falling back
+    // to `0.0.0.0:port` — on Windows Winsock, falling back would allow a second process to bind `0.0.0.0:port`
+    // alongside an existing process's dual-stack `[::]:port` socket, causing split-brain UDP routing!
     if bind_addr.ip().is_unspecified() && bind_addr.is_ipv4() {
-        if let Ok(sock) = bind_dual_stack_udp(bind_addr.port()) {
-            let runtime = quinn::default_runtime()
-                .ok_or_else(|| OpenUUError::Protocol("no async runtime for quinn".into()))?;
-            if let Ok(ep) = Endpoint::new(
-                EndpointConfig::default(),
-                Some(server_config.clone()),
-                sock,
-                runtime,
-            ) {
-                return Ok(ep);
+        match bind_dual_stack_udp(bind_addr.port()) {
+            Ok(sock) => {
+                let runtime = quinn::default_runtime()
+                    .ok_or_else(|| OpenUUError::Protocol("no async runtime for quinn".into()))?;
+                if let Ok(ep) = Endpoint::new(
+                    EndpointConfig::default(),
+                    Some(server_config.clone()),
+                    sock,
+                    runtime,
+                ) {
+                    return Ok(ep);
+                }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                return Err(OpenUUError::Io(e));
+            }
+            Err(_) => {}
         }
     }
 
