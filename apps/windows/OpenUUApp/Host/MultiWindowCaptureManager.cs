@@ -338,10 +338,14 @@ public sealed class MultiWindowCaptureManager : IDisposable
 
         var appWindows = rawCandidates.Where(w => !_suppressedWindows.ContainsKey(w.WindowId)).ToList();
 
-        foreach (var w in appWindows.Where(w => !w.IsPopup))
+        foreach (var appGroup in appWindows.Where(w => !w.IsPopup).GroupBy(w => w.AppId, StringComparer.OrdinalIgnoreCase))
         {
-            if (!_primaryWindowByApp.ContainsKey(w.AppId))
-                _primaryWindowByApp[w.AppId] = w.WindowId;
+            if (!_primaryWindowByApp.ContainsKey(appGroup.Key))
+            {
+                var preferred = PickPreferredPrimaryWindow(appGroup.ToList());
+                if (preferred != null)
+                    _primaryWindowByApp[appGroup.Key] = preferred.WindowId;
+            }
         }
         // Clean up stale primary window references if closed
         var liveNormalIds = appWindows.Where(w => !w.IsPopup).Select(w => w.WindowId).ToHashSet();
@@ -349,7 +353,8 @@ public sealed class MultiWindowCaptureManager : IDisposable
         {
             if (!liveNormalIds.Contains(kv.Value))
             {
-                var replacement = appWindows.FirstOrDefault(w => !w.IsPopup && w.AppId.Equals(kv.Key, StringComparison.OrdinalIgnoreCase));
+                var candidates = appWindows.Where(w => !w.IsPopup && w.AppId.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)).ToList();
+                var replacement = PickPreferredPrimaryWindow(candidates);
                 if (replacement != null)
                     _primaryWindowByApp[kv.Key] = replacement.WindowId;
                 else
@@ -497,6 +502,26 @@ public sealed class MultiWindowCaptureManager : IDisposable
             OnTopologyChanged?.Invoke(items);
         }
         AudioStreamer.UpdateScope(_isSharingFullDesktop, _sharedAppIds);
+    }
+
+    private static ShareableWindowItem? PickPreferredPrimaryWindow(IReadOnlyList<ShareableWindowItem> candidates)
+    {
+        if (candidates.Count == 0) return null;
+        return candidates
+            .OrderByDescending(w =>
+            {
+                string t = (w.Title ?? "").Trim();
+                string app = (w.AppName ?? "").Trim();
+                return !string.IsNullOrEmpty(app) && string.Equals(t, app, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            })
+            .ThenByDescending(w =>
+            {
+                string t = (w.Title ?? "").Trim();
+                string app = (w.AppName ?? "").Trim();
+                return !string.IsNullOrEmpty(app) && t.StartsWith(app, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            })
+            .ThenByDescending(w => (double)w.LogicalWidth * w.LogicalHeight)
+            .FirstOrDefault();
     }
 
     private static long OverlapArea(Win32Interop.RECT a, Win32Interop.RECT b)

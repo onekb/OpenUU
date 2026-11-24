@@ -411,6 +411,18 @@ public sealed class ControlEventMessage
     [JsonPropertyName("local_path")]
     public string? LocalPath { get; set; }
 
+    [JsonPropertyName("filename")]
+    public string? Filename { get; set; }
+
+    [JsonPropertyName("received_bytes")]
+    public ulong? ReceivedBytes { get; set; }
+
+    [JsonPropertyName("total_bytes")]
+    public ulong? TotalBytes { get; set; }
+
+    [JsonPropertyName("transfer_state")]
+    public uint? TransferState { get; set; }
+
     [JsonPropertyName("link_mode")]
     public string? LinkMode { get; set; }
 

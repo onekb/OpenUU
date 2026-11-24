@@ -147,6 +147,8 @@
                     BorderThickness="1">
                 <TextBlock x:Name="FileDropLabel"
                            Text="松手发送文件到远端窗口"
+                           MaxWidth="420"
+                           TextTrimming="CharacterEllipsis"
                            Foreground="White"
                            FontSize="13.5"
                            FontWeight="SemiBold" />

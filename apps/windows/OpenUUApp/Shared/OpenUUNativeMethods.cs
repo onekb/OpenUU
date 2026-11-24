@@ -254,6 +254,9 @@ internal static unsafe class OpenUUNativeMethods
     );
 
     [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int openuu_cancel_file_blob(byte* blobIdUtf8);
+
+    [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int openuu_request_app_list(IntPtr rt);
 
     [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]

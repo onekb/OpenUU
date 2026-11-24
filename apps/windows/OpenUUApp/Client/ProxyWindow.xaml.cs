@@ -40,7 +40,7 @@ public partial class ProxyWindow : Window
     private bool _isLeftMouseDown;
     private bool _didStartLocalDragOut;
     private System.Windows.Point _lastMouseLocalPt;
-    private readonly List<string> _pendingDragOutFiles = new();
+    private readonly List<DragOutItemDescriptor> _pendingDragOutItems = new();
     private System.Windows.Input.Cursor _remoteCursor = System.Windows.Input.Cursors.Arrow;
 
     private (Rect ParentBounds, double RelX, double RelY, System.Windows.Size FallbackSize)? _popoverPlacement;
@@ -476,8 +476,8 @@ public partial class ProxyWindow : Window
         {
             if (_didStartLocalDragOut) return;
 
-            // Hand off to local Windows Explorer Drag-Out if Host streamed dragged file(s) and cursor neared edge
-            if (_pendingDragOutFiles.Count > 0 && IsNearEdge(local))
+            // Hand off to local Windows Explorer Drag-Out as soon as Host notifies drag-out metadata and cursor nears border
+            if (_pendingDragOutItems.Count > 0 && IsNearEdge(local))
             {
                 BeginNativeWindowsDragOut();
                 return;
@@ -530,7 +530,7 @@ public partial class ProxyWindow : Window
         {
             _isLeftMouseDown = true;
             _didStartLocalDragOut = false;
-            _pendingDragOutFiles.Clear();
+            _pendingDragOutItems.Clear();
             InteractiveSurface.CaptureMouse();
         }
 
@@ -559,9 +559,17 @@ public partial class ProxyWindow : Window
             if (_didStartLocalDragOut)
             {
                 _didStartLocalDragOut = false;
-                _pendingDragOutFiles.Clear();
+                _pendingDragOutItems.Clear();
                 e.Handled = true;
                 return;
+            }
+
+            if (_pendingDragOutItems.Count > 0)
+            {
+                var unclaimed = _pendingDragOutItems.ToArray();
+                _pendingDragOutItems.Clear();
+                foreach (var item in unclaimed)
+                    DragOutTransferCoordinator.Shared.AbandonUnclaimedDragOut(item.BlobId);
             }
         }
 
@@ -648,7 +656,8 @@ public partial class ProxyWindow : Window
 
     private void OnWindowDragEnter(object sender, System.Windows.DragEventArgs e)
     {
-        if (IsFloatingPopover || _currentWindowId == 0 || !e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+        // Never allow a drag-out initiated from this same proxy window to loop back into itself!
+        if (_didStartLocalDragOut || IsFloatingPopover || _currentWindowId == 0 || !e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
         {
             e.Effects = System.Windows.DragDropEffects.None;
             return;
@@ -659,7 +668,9 @@ public partial class ProxyWindow : Window
             e.Effects = System.Windows.DragDropEffects.None;
             return;
         }
-        FileDropLabel.Text = files.Count > 1 ? $"松手发送 {files.Count} 个文件到远端窗口" : "松手发送文件到远端窗口";
+        string trimmedTitle = (Title ?? "").Trim();
+        string targetDesc = string.IsNullOrEmpty(trimmedTitle) ? "远端窗口" : $"「{trimmedTitle}」";
+        FileDropLabel.Text = files.Count > 1 ? $"松手发送 {files.Count} 个文件到{targetDesc}" : $"松手发送文件到{targetDesc}";
         FileDropOverlay.Visibility = Visibility.Visible;
         e.Effects = System.Windows.DragDropEffects.Copy;
         e.Handled = true;
@@ -667,6 +678,12 @@ public partial class ProxyWindow : Window
 
     private void OnWindowDragOver(object sender, System.Windows.DragEventArgs e)
     {
+        if (_didStartLocalDragOut)
+        {
+            e.Effects = System.Windows.DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
         if (FileDropOverlay.Visibility == Visibility.Visible)
         {
             e.Effects = System.Windows.DragDropEffects.Copy;
@@ -682,7 +699,7 @@ public partial class ProxyWindow : Window
     private void OnWindowDrop(object sender, System.Windows.DragEventArgs e)
     {
         FileDropOverlay.Visibility = Visibility.Collapsed;
-        if (IsFloatingPopover || _currentWindowId == 0) return;
+        if (_didStartLocalDragOut || IsFloatingPopover || _currentWindowId == 0) return;
 
         var files = ExtractDroppedRegularFiles(e.Data);
         if (files.Count == 0) return;
@@ -711,54 +728,78 @@ public partial class ProxyWindow : Window
     {
         if (data.GetData(System.Windows.DataFormats.FileDrop) is not string[] raw)
             return new();
-        return raw.Where(File.Exists).ToList();
+        return raw.Where(p => File.Exists(p) && !p.EndsWith(".downloading", StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     private bool IsNearEdge(System.Windows.Point pt)
     {
         double w = InteractiveSurface.ActualWidth;
         double h = InteractiveSurface.ActualHeight;
-        return pt.X < 10 || pt.Y < 10 || pt.X > w - 10 || pt.Y > h - 10;
+        return pt.X <= 6 || pt.Y <= 6 || pt.X >= w - 6 || pt.Y >= h - 6;
     }
 
-    public bool DeliverDragOutFiles(IReadOnlyList<string> paths)
+    public bool DeliverDragOutItems(IReadOnlyList<DragOutItemDescriptor> items)
     {
-        if (paths.Count == 0 || !_isLeftMouseDown || _didStartLocalDragOut)
+        if (items.Count == 0 || !_isLeftMouseDown || _didStartLocalDragOut)
             return false;
 
-        _pendingDragOutFiles.AddRange(paths.Where(File.Exists));
-        if (_pendingDragOutFiles.Count > 0 && IsNearEdge(_lastMouseLocalPt))
+        foreach (var item in items)
+        {
+            if (_pendingDragOutItems.All(x => x.BlobId != item.BlobId))
+                _pendingDragOutItems.Add(item);
+        }
+        if (_pendingDragOutItems.Count > 0 && IsNearEdge(_lastMouseLocalPt))
         {
             BeginNativeWindowsDragOut();
         }
-        return _pendingDragOutFiles.Count > 0;
+        return _pendingDragOutItems.Count > 0;
     }
 
     private void BeginNativeWindowsDragOut()
     {
-        if (_didStartLocalDragOut || _pendingDragOutFiles.Count == 0) return;
+        if (_didStartLocalDragOut || _pendingDragOutItems.Count == 0) return;
+
+        var descriptors = _pendingDragOutItems.ToArray();
+        var (dropPaths, allowedEffects, preparedItems) = DragOutTransferCoordinator.Shared.PrepareDragSession(descriptors);
+        if (dropPaths.Length == 0) return;
+
         _didStartLocalDragOut = true;
-        var files = _pendingDragOutFiles.ToArray();
-        _pendingDragOutFiles.Clear();
+        _pendingDragOutItems.Clear();
 
         if (InteractiveSurface.IsMouseCaptured)
             InteractiveSurface.ReleaseMouseCapture();
 
-        // Cancel remote Host drag cleanly (Esc + mouseUp)
+        // Cancel remote Host-side drag safely: move remote drag cursor to the non-drop-target top-left corner (12, 12)
+        // and send Esc BEFORE releasing leftMouseUp 45ms later so WeChat never drops the file back into the chat or opens a preview!
         if (_currentWindowId != 0)
         {
-            _bridge.SendKey(_currentWindowId, 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0);
-            _bridge.SendKey(_currentWindowId, 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0);
-            var (rx, ry) = MapRemotePoint(_lastMouseLocalPt);
-            _bridge.SendMouse(_currentWindowId, rx, ry, type: 2, button: 0, clickCount: 1, modifiers: 0);
+            uint winId = _currentWindowId;
+            var b = _bridge;
+            b.SendMouse(winId, 12f, 12f, type: 3, button: 0, clickCount: 0, modifiers: 0);
+            b.SendKey(winId, 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0);
+            b.SendKey(winId, 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(45);
+                b.SendKey(winId, 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0);
+                b.SendKey(winId, 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0);
+                b.SendMouse(winId, 12f, 12f, type: 2, button: 0, clickCount: 0, modifiers: 0);
+            });
         }
 
-        _onDebugLog?.Invoke($"已接管拖出 {files.Length} 个文件，可松手放到本机桌面/资源管理器");
-        var dataObj = new System.Windows.DataObject(System.Windows.DataFormats.FileDrop, files);
-        DragDrop.DoDragDrop(InteractiveSurface, dataObj, System.Windows.DragDropEffects.Copy);
-
-        _isLeftMouseDown = false;
-        _didStartLocalDragOut = false;
+        _onDebugLog?.Invoke($"已接管拖出 {dropPaths.Length} 个文件，可松手放到本机桌面/资源管理器");
+        var dataObj = new System.Windows.DataObject(System.Windows.DataFormats.FileDrop, dropPaths);
+        System.Windows.DragDropEffects finalEffect = System.Windows.DragDropEffects.None;
+        try
+        {
+            finalEffect = DragDrop.DoDragDrop(InteractiveSurface, dataObj, allowedEffects);
+        }
+        finally
+        {
+            _isLeftMouseDown = false;
+            _didStartLocalDragOut = false;
+            DragOutTransferCoordinator.Shared.CompleteDragSession(preparedItems, finalEffect);
+        }
     }
 
     // ========================================================================

@@ -58,6 +58,7 @@ public static partial class WindowCatalog
         "ForegroundStaging",
         "tooltips_class32",
         "SysShadow",
+        "SysDragImage",
         "IME",
         "MSCTFIME UI"
     };
@@ -238,6 +239,7 @@ public static partial class WindowCatalog
 
                 string className = Win32Interop.GetWindowClassName(hwnd);
                 if (string.Equals(className, "SysShadow", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(className, "SysDragImage", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(className, "IME", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(className, "MSCTFIME UI", StringComparison.OrdinalIgnoreCase))
                 {

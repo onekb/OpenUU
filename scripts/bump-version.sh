@@ -35,7 +35,12 @@ BUILD_NUM="${2:-$DEFAULT_BUILD}"
 echo "==> Syncing OpenUU version -> v${NEW_VER} (build ${BUILD_NUM})"
 printf '%s\n' "$NEW_VER" > "$VERSION_FILE"
 
-python3 - "$ROOT_DIR" "$NEW_VER" "$BUILD_NUM" << 'PY'
+PY_BIN="python3"
+if ! command -v "$PY_BIN" >/dev/null 2>&1 || ! "$PY_BIN" -c "import sys" >/dev/null 2>&1; then
+  PY_BIN="python"
+fi
+
+"$PY_BIN" - "$ROOT_DIR" "$NEW_VER" "$BUILD_NUM" << 'PY'
 import pathlib
 import re
 import sys
@@ -69,18 +74,22 @@ replace_in("scripts/build-macos.sh", [
     (r'^APP_BUILD="[^"]*"', f'APP_BUILD="{build}"'),
 ])
 replace_in("apps/macos/Sources/OpenUUApp/Shared/AppUpdater.swift", [
-    (r'(static let fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+    (r'(static\s+let\s+fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
 
-# 3. Windows csproj, manifest, Inno Setup, AppUpdater, and scripts
+# 3. Windows csproj, manifest, XAML, AppUpdater, Inno Setup, and scripts
 replace_in("apps/windows/OpenUUApp/OpenUUApp.csproj", [
     (r'(<Version>)[0-9]+\.[0-9]+\.[0-9]+(</Version>)', rf'\g<1>{ver}\2'),
 ])
-replace_in("apps/windows/OpenUUApp/Shared/AppUpdater.cs", [
-    (r'(public const string Fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
-])
 replace_in("apps/windows/OpenUUApp/app.manifest", [
     (r'(assemblyIdentity\s+version=")[0-9]+\.[0-9]+\.[0-9]+\.0(")', rf'\g<1>{ver}.0\2'),
+])
+replace_in("apps/windows/OpenUUApp/Shared/AppUpdater.cs", [
+    (r'(public\s+const\s+string\s+Fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+])
+replace_in("apps/windows/OpenUUApp/Views/MainWindow.xaml", [
+    (r'(x:Name="SidebarVersionText"\s+Text=")v[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>v{ver}\2'),
+    (r'(x:Name="SettingsCurrentVerText"\s+Text="当前客户端版本：)v[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>v{ver}\2'),
 ])
 replace_in("apps/windows/installer/OpenUU.iss", [
     (r'(#define\s+MyAppVersion\s+")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
@@ -108,7 +117,8 @@ replace_in("apps/ios/Info.plist", [
     (r'(<key>CFBundleVersion</key>\s*<string>)[0-9]+(</string>)', rf'\g<1>{build}\2'),
 ])
 replace_in("apps/ios/Sources/MobileAppUpdater.swift", [
-    (r'(static let fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+    (r'(static\s+let\s+fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+])
 ])
 replace_in("apps/ios/generate_xcodeproj.py", [
     (r'(CURRENT_PROJECT_VERSION\s*=\s*)[0-9]+(;)', rf'\g<1>{build}\2'),
@@ -124,10 +134,13 @@ replace_in("deploy/cloudflare-worker/public/index.html", [
 replace_in("deploy/cloudflare-worker/public/app.js", [
     (r'Fallback to v[0-9]+\.[0-9]+\.[0-9]+ built-in URLs', f'Fallback to v{ver} built-in URLs'),
 ])
+replace_in("deploy/cloudflare-worker/src/index.js", [
+    (r'OpenUU-Coord-Worker/[0-9]+\.[0-9]+\.[0-9]+', f'OpenUU-Coord-Worker/{ver}'),
+])
 PY
 
 if [ -f "$ROOT_DIR/apps/ios/generate_xcodeproj.py" ]; then
-  python3 "$ROOT_DIR/apps/ios/generate_xcodeproj.py" >/dev/null
+  "$PY_BIN" "$ROOT_DIR/apps/ios/generate_xcodeproj.py" >/dev/null
   echo "    regenerated apps/ios/OpenUUMobile.xcodeproj"
 fi
 

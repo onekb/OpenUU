@@ -511,6 +511,16 @@ public sealed unsafe class OpenUUBridge : IDisposable
         OpenUUNativeMethods.openuu_stop_remote_session(_runtime, windowId);
     }
 
+    public static void CancelIncomingBlob(string blobId)
+    {
+        if (string.IsNullOrWhiteSpace(blobId)) return;
+        var bytes = ToNullTerminatedUtf8(blobId.Trim());
+        fixed (byte* p = bytes)
+        {
+            OpenUUNativeMethods.openuu_cancel_file_blob(p);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

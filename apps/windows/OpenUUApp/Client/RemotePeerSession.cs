@@ -365,24 +365,72 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
                         }
                         break;
                     }
+                    case "file_transfer_progress":
+                    {
+                        uint winId = evt.WindowId ?? 0;
+                        string blobId = evt.BlobId ?? "";
+                        string name = evt.Filename ?? "file.bin";
+                        ulong received = evt.ReceivedBytes ?? 0;
+                        ulong total = evt.TotalBytes ?? 0;
+                        uint state = evt.TransferState ?? 0;
+                        if (winId == 0xFFFF_FFFE && !string.IsNullOrEmpty(blobId))
+                        {
+                            if (state == 1)
+                            {
+                                var desc = DragOutTransferCoordinator.Shared.RegisterTransferStarted(blobId, name, total);
+                                foreach (var pw in _proxyWindows.Values)
+                                {
+                                    if (pw.DeliverDragOutItems(new[] { desc }))
+                                        break;
+                                }
+                            }
+                            else if (state == 2)
+                            {
+                                DragOutTransferCoordinator.Shared.UpdateTransferProgress(blobId, name, received, total);
+                            }
+                            else if (state == 3)
+                            {
+                                DragOutTransferCoordinator.Shared.MarkTransferFailed(blobId);
+                            }
+                        }
+                        break;
+                    }
                     case "file_drop":
                     {
                         if (!string.IsNullOrEmpty(evt.LocalPath) && System.IO.File.Exists(evt.LocalPath))
                         {
                             uint winId = evt.WindowId ?? 0;
+                            string blobId = evt.BlobId ?? "";
+                            ulong total = evt.TotalBytes ?? 0;
                             if (winId == 0xFFFF_FFFE)
                             {
-                                bool handedOff = false;
-                                foreach (var pw in _proxyWindows.Values)
+                                string effectiveId = string.IsNullOrEmpty(blobId) ? Guid.NewGuid().ToString("N") : blobId;
+                                bool wasClaimed = DragOutTransferCoordinator.Shared.MarkTransferCompleted(
+                                    effectiveId,
+                                    evt.LocalPath,
+                                    total
+                                );
+                                if (!wasClaimed)
                                 {
-                                    if (pw.DeliverDragOutFiles(new[] { evt.LocalPath }))
+                                    var desc = new DragOutItemDescriptor(
+                                        effectiveId,
+                                        System.IO.Path.GetFileName(evt.LocalPath),
+                                        total
+                                    );
+                                    bool handedOff = false;
+                                    foreach (var pw in _proxyWindows.Values)
                                     {
-                                        handedOff = true;
-                                        break;
+                                        if (pw.DeliverDragOutItems(new[] { desc }))
+                                        {
+                                            handedOff = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!handedOff)
+                                    {
+                                        DragOutTransferCoordinator.Shared.AbandonUnclaimedDragOut(effectiveId);
                                     }
                                 }
-                                if (!handedOff)
-                                    OnRemoteClipboardFile?.Invoke(evt.LocalPath);
                             }
                             else
                             {
@@ -526,6 +574,14 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
             _windowToBundleId[item.WindowId] = matchedApp.BundleId;
             return;
         }
+        var nonDesktopOpened = _openedBundleIds
+            .Where(b => !string.Equals(b, MultiWindowCaptureManager.FullDesktopBundleId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (nonDesktopOpened.Count == 1)
+        {
+            _windowToBundleId[item.WindowId] = nonDesktopOpened[0];
+            return;
+        }
         if (_openedBundleIds.Count == 1)
         {
             _windowToBundleId[item.WindowId] = _openedBundleIds.First();
@@ -651,6 +707,7 @@ public sealed class RemotePeerSession : ObservableBase, IDisposable
             {
                 _locallyClosedWindows.Add(cid);
                 VideoRouter.Suppress(cid);
+                _windowToBundleId.Remove(cid);
                 if (_proxyWindows.Remove(cid, out var childPw))
                     childPw.CloseProgrammatically();
             }
