@@ -133,6 +133,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == RESULT_OK && data != null) {
+            viewModel.startLocalHostWithProjection(result.resultCode, data)
+        }
+    }
+
+    private val audioRecordPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        launchScreenCaptureConsent()
+    }
+
+    private fun requestStartLocalHost() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val audioGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!audioGranted) {
+                audioRecordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                return
+            }
+        }
+        launchScreenCaptureConsent()
+    }
+
+    private fun launchScreenCaptureConsent() {
+        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+            ?: return
+        mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
@@ -196,13 +231,19 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         isImmersiveFullscreen = isImmersiveFullscreen,
                         isLandscape = isLandscape,
-                        onPickFile = { filePickerLauncher.launch("*/*") }
+                        onPickFile = { filePickerLauncher.launch("*/*") },
+                        onRequestStartHost = { requestStartLocalHost() }
                     )
                 }
             }
         }
 
         handleE2ELaunchIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshAccessibilityStatus()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -225,6 +266,20 @@ class MainActivity : ComponentActivity() {
 
     private fun handleE2ELaunchIntent(intent: Intent?) {
         if (intent == null) return
+        val hostStartRaw = intent.extras?.get("e2e_start_host")
+        val shouldStartHost = when (hostStartRaw) {
+            is Boolean -> hostStartRaw
+            is String -> hostStartRaw.trim().lowercase().let { it == "true" || it == "1" }
+            else -> false
+        }
+        if (shouldStartHost) {
+            val hostPort = intent.getIntExtra("e2e_host_port", OpenUUConstants.DEFAULT_PORT)
+            val hostPin = intent.getStringExtra("e2e_host_pin")?.trim().orEmpty()
+            intent.removeExtra("e2e_start_host")
+            viewModel.startLocalHostSyntheticE2E(port = hostPort, pin = hostPin)
+            return
+        }
+
         val target = intent.getStringExtra("e2e_target")?.trim().orEmpty()
         if (target.isEmpty()) return
 

@@ -6,7 +6,7 @@
   <title>OpenUU — 把另一台电脑上的软件，直接拉到眼前用</title>
   <meta
     name="description"
-    content="OpenUU 是完全免费的远程控制工具。不只是远程桌面，更能把家里或公司电脑上的某一个软件窗口单独拉到当前屏幕上并排使用，支持 Mac、Windows、iPhone、iPad 与安卓。"
+    content="OpenUU 是完全免费的远程控制工具。不只是远程桌面，更能把家里或公司电脑上的某一个软件窗口单独拉到当前屏幕上并排使用，也支持在电脑桌面直接远程操控安卓手机，覆盖 Mac、Windows、安卓与 iPhone / iPad。"
   />
   <meta name="theme-color" content="#fbfbfd" />
   <link rel="icon" type="image/png" href="/favicon.png" />
@@ -14,10 +14,10 @@
 
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://openuu.1kb.ren/" />
-  <meta property="og:title" content="OpenUU — 把另一台电脑上的软件，直接拉到眼前用" />
+  <meta property="og:title" content="OpenUU — 把另一台电脑或手机，直接拉到眼前用" />
   <meta
     property="og:description"
-    content="完全免费的开源远程控制软件：支持把远端 Mac / Windows 电脑的单个软件窗口单独拉到当前屏幕并排使用，全平台覆盖 Mac、Windows、iPhone / iPad 与安卓。"
+    content="完全免费的开源远程控制软件：支持把远端 Mac / Windows 电脑的单个软件窗口单独拉到当前屏幕并排使用，也支持免 Root 远程操控安卓手机，全平台覆盖 Mac、Windows、安卓与 iPhone / iPad。"
   />
   <meta property="og:image" content="https://openuu.1kb.ren/assets/single-window-mode.webp" />
   <meta name="twitter:card" content="summary_large_image" />
@@ -82,14 +82,14 @@
         <h1>把另一台电脑上的软件，<br />直接拉到眼前用。</h1>
 
         <p class="hero-sub">
-          免费、顺手的远程控制工具。不只是远程整块屏幕——你可以只把家里或公司电脑上的<strong>某一个窗口</strong>（比如聊天、文件夹、浏览器）单独拉过来，和手头的软件摆在一起用。
+          免费、顺手的远程控制工具。不只是远程整块屏幕——你可以只把家里或公司电脑上的<strong>某一个窗口</strong>（比如聊天、文件夹、浏览器）单独拉过来并排用，也能把<strong>安卓手机屏幕</strong>直接拉成电脑桌面上的独立小窗顺手操控。
         </p>
 
         <div class="hero-actions">
           <a
             id="hero-dl-btn"
             data-dl-role="macos"
-            href="https://github.com/onekb/OpenUU/releases/download/v0.7.2/OpenUU-v0.7.2-macOS-arm64.dmg"
+            href="https://github.com/onekb/OpenUU/releases/download/v0.7.3/OpenUU-v0.7.3-macOS-arm64.dmg"
             class="btn btn-lg btn-primary"
           >
             <span id="hero-dl-label">免费下载 Mac 版</span>
@@ -110,7 +110,7 @@
             rel="noopener noreferrer"
             class="ver-release-link"
           >
-            当前版本 <b data-ver>v0.7.2</b>
+            当前版本 <b data-ver>v0.7.3</b>
           </a>
         </div>
 
@@ -671,16 +671,15 @@
         <div class="mobile-showcase">
           <div>
             <h3 class="mobile-showcase-title">
-              出门没带电脑？手机和平板也能轻松操控
+              出门用手机控电脑，桌前也能用电脑直接控安卓手机
             </h3>
             <p class="mobile-showcase-desc">
-              无论躺在沙发上拿 iPad，还是在路上只带了手机，随时都能连回你的 Mac 或 Windows 电脑处理急事。
+              在路上拿 iPhone、iPad 或安卓随时连回 Mac / Windows 处理急事；坐在电脑前，也能把安卓手机画面直接拉成桌面上的独立竖屏窗口，免 Root 点击滑动与回消息。
             </p>
             <ul class="mobile-points">
-              <li>横屏自动铺满整块屏幕，没有多余黑边遮挡视线</li>
-              <li>像浏览器标签页一样切换多个电脑窗口，不会误触断开连接</li>
-              <li>系统中文输入法直接打字上屏，自带多排扩展快捷键键盘</li>
-              <li>手机相册里的照片和文档，点一下就能直接发到电脑上</li>
+              <li><strong>安卓免 Root 被控上线：</strong>开启无障碍与录屏后，电脑鼠标点击拖拽、滚轮滑动、本地中文输入法打字与内录声音同步全可用</li>
+              <li><strong>手机控电脑超顺手：</strong>横屏自动无黑边铺满，像浏览器标签页一样切换多个电脑窗口，右键浮层菜单原位可点</li>
+              <li><strong>应用直达与文件互传：</strong>电脑端可一键拉起手机已安装 App，手机相册与电脑文件、双向剪贴板随时互传</li>
             </ul>
           </div>
 
@@ -726,9 +725,9 @@
         <div class="cards-3">
           <div class="soft-card">
             <div class="step-number">1</div>
-            <h3>在电脑上开启「允许控制」</h3>
+            <h3>在被控设备上开启「允许控制」</h3>
             <p>
-              在你想远程访问的那台 Mac 或 Windows 电脑上打开 OpenUU，点一下开启按钮，屏幕上会自动显示本机的 <strong>9 位数字代码</strong>和访问密码。
+              在你想远程访问的那台 Mac、Windows 电脑或安卓手机上打开 OpenUU，点一下开启被控，屏幕上会自动显示本机的 <strong>9 位数字代码</strong>和访问密码。
             </p>
             <div class="code-demo">996 007 886</div>
           </div>
@@ -759,7 +758,7 @@
       <div class="container">
         <div class="sec-head">
           <h2>免费下载 OpenUU</h2>
-          <p>系统已自动为你标出适合当前设备的安装包（最新版本 <span data-ver>v0.7.2</span>）。</p>
+          <p>系统已自动为你标出适合当前设备的安装包（最新版本 <span data-ver>v0.7.3</span>）。</p>
         </div>
 
         <div class="dl-grid">
@@ -776,7 +775,7 @@
             </div>
             <a
               data-dl-link="macos"
-              href="https://github.com/onekb/OpenUU/releases/download/v0.7.2/OpenUU-v0.7.2-macOS-arm64.dmg"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.7.3/OpenUU-v0.7.3-macOS-arm64.dmg"
               class="btn btn-primary"
             >
               下载 Mac 版 (.dmg)
@@ -820,12 +819,12 @@
                 <span class="rec-tag" hidden>适合当前设备</span>
               </div>
               <p class="dl-desc">
-                用安卓手机或平板随时随地远程控制你的 Mac 或 Windows 电脑（需要 Android 8.0 及以上系统）。
+                既能远程控制你的 Mac、Windows 与其他安卓设备，也能开启免 Root 被控让电脑或手机连回来操作（支持 Android 8.0 及以上系统）。
               </p>
             </div>
             <a
               data-dl-link="android"
-              href="https://github.com/onekb/OpenUU/releases/download/v0.7.2/OpenUU-v0.7.2-Android-arm64.apk"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.7.3/OpenUU-v0.7.3-Android-arm64.apk"
               class="btn btn-secondary"
             >
               下载安卓版 (.apk)
@@ -845,7 +844,7 @@
             </div>
             <a
               data-dl-link="ios"
-              href="https://github.com/onekb/OpenUU/releases/download/v0.7.2/OpenUU-v0.7.2-iOS-unsigned.ipa"
+              href="https://github.com/onekb/OpenUU/releases/download/v0.7.3/OpenUU-v0.7.3-iOS-unsigned.ipa"
               class="btn btn-secondary"
             >
               下载安装包 (.ipa)
@@ -877,6 +876,19 @@
                 <code>xattr -cr /Applications/OpenUU.app</code>
                 <button type="button" class="btn btn-sm btn-secondary" id="copy-xattr">复制命令</button>
               </div>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span>安卓手机怎么开启被控，在电脑桌面上直接操作手机？</span>
+              <span class="faq-plus">+</span>
+            </summary>
+            <div class="faq-body">
+              无需 Root 也不用连数据线，三步即可搞定：<br />
+              1. 在安卓手机安装并打开 OpenUU，点击首页卡片上的<strong>「开启无障碍触控」</strong>，在系统设置中打开「OpenUU 远程触控服务」（若只需要把手机屏幕投屏给电脑看、不需要鼠标点击，可跳过此步）。<br />
+              2. 返回 OpenUU 点击<strong>「开启被控」</strong>并确认系统录屏授权，记下显示的 9 位设备码与访问码。<br />
+              3. 在你的 Mac、Windows 或另一台手机上连接该设备，就能直接在桌面上拉出独立手机窗口：左键点击拖拽、右键返回、中键回桌面、滚轮上下滑动、电脑中文输入法直接打字，拖进窗口的文件会自动存到手机 <code>Downloads/OpenUU</code> 文件夹。
             </div>
           </details>
 

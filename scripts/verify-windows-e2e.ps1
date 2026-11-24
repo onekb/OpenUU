@@ -15,8 +15,8 @@ if (-not $isCurrentShellAdmin) {
 
 if (-not $AppExe) {
     $candidates = @(
-        (Join-Path $RootDir "build\OpenUU-Windows-v0.7.2-stage\OpenUU.exe"),
-        (Join-Path $RootDir "build\OpenUU-Windows-v0.7.2\OpenUU.exe"),
+        (Join-Path $RootDir "build\OpenUU-Windows-v0.7.3-stage\OpenUU.exe"),
+        (Join-Path $RootDir "build\OpenUU-Windows-v0.7.3\OpenUU.exe"),
         (Join-Path $RootDir "build\OpenUU-Windows\OpenUU.exe")
     ) | Where-Object { Test-Path $_ } | Sort-Object { (Get-Item $_).LastWriteTime } -Descending
     $AppExe = $candidates | Select-Object -First 1

@@ -137,7 +137,8 @@ fun MainScreen(
     viewModel: OpenUUViewModel,
     isImmersiveFullscreen: Boolean = false,
     isLandscape: Boolean = false,
-    onPickFile: () -> Unit
+    onPickFile: () -> Unit,
+    onRequestStartHost: () -> Unit = {}
 ) {
     val selectedTab by viewModel.selectedTab.collectAsState()
     val connectionPhase by viewModel.connectionPhase.collectAsState()
@@ -158,7 +159,10 @@ fun MainScreen(
                 onPickFile = onPickFile
             )
         } else {
-            HostsHomeScreen(viewModel = viewModel)
+            HostsHomeScreen(
+                viewModel = viewModel,
+                onRequestStartHost = onRequestStartHost
+            )
         }
 
         AnimatedVisibility(
@@ -243,7 +247,10 @@ private fun RemoteNotificationCard(
 }
 
 @Composable
-private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
+private fun HostsHomeScreen(
+    viewModel: OpenUUViewModel,
+    onRequestStartHost: () -> Unit = {}
+) {
     val context = LocalContext.current
     val connectionPhase by viewModel.connectionPhase.collectAsState()
     val linkBadge by viewModel.linkBadge.collectAsState()
@@ -425,6 +432,14 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
             }
         }
 
+        // 2b. Local Controlled Host Card (Android as Host)
+        item {
+            LocalAndroidHostCard(
+                viewModel = viewModel,
+                onRequestStartHost = onRequestStartHost
+            )
+        }
+
         // 3. Available Hosts Unified Grouped List
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -505,7 +520,7 @@ private fun HostsHomeScreen(viewModel: OpenUUViewModel) {
                                 color = TextSecondary
                             )
                             Text(
-                                text = "正在扫描局域网 Mac，或点击右上角添加常用主机",
+                                text = "正在扫描局域网设备，或点击右上角添加常用主机",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )

@@ -389,11 +389,80 @@ else
   echo "    [WARN] MOCK_TICKET empty; skipping ticket check"
 fi
 
+echo "==> 8/8 Testing Android Controlled Host mode (QUIC Host + MediaCodec H.264 encode + Accessibility Input)..."
+HOST_E2E_PORT=39485
+HOST_E2E_PIN="654321"
+LOGCAT_HOST="/tmp/openuu_android_host_e2e.log"
+VERIFY_HOST_LOG="/tmp/openuu_verify_host_cli.log"
+rm -f "$LOGCAT_HOST" "$VERIFY_HOST_LOG"
+
+adb -s "$EMU_SERIAL" shell am force-stop "$PKG"
+sleep 1
+adb -s "$EMU_SERIAL" shell settings put secure enabled_accessibility_services "$PKG/$PKG.OpenUURemoteInputService" >/dev/null 2>&1 || true
+adb -s "$EMU_SERIAL" shell settings put secure accessibility_enabled 1 >/dev/null 2>&1 || true
+adb -s "$EMU_SERIAL" emu redir add "udp:${HOST_E2E_PORT}:${HOST_E2E_PORT}" >/dev/null 2>&1 || true
+adb -s "$EMU_SERIAL" logcat -c
+adb -s "$EMU_SERIAL" shell am start -W -n "$ACTIVITY" \
+  --ez e2e_start_host true \
+  --ei e2e_host_port "$HOST_E2E_PORT" \
+  --es e2e_host_pin "$HOST_E2E_PIN"
+
+HOST_READY_OK=0
+HOST_TICKET=""
+for i in $(seq 1 40); do
+  adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_HOST" 2>/dev/null || true
+  if grep -Eq "FATAL EXCEPTION|Fatal signal|SIGABRT" "$LOGCAT_HOST"; then
+    echo "    [FAIL] Crash while starting Android Host service!" >&2
+    grep -E -A 30 "FATAL EXCEPTION|Fatal signal|SIGABRT" "$LOGCAT_HOST" >&2
+    exit 1
+  fi
+  if grep -q "HOST_READY port=${HOST_E2E_PORT}" "$LOGCAT_HOST" \
+     && grep -q "HOST_TICKET_READY ticket=" "$LOGCAT_HOST"; then
+    HOST_READY_OK=1
+    HOST_TICKET="$(grep "HOST_TICKET_READY ticket=" "$LOGCAT_HOST" | tail -n 1 | sed -n 's/.*ticket=\([^[:space:]]*\).*/\1/p')"
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$HOST_READY_OK" -ne 1 ] || [ -z "$HOST_TICKET" ]; then
+  echo "    [FAIL] Android Host service did not report HOST_READY + HOST_TICKET_READY!" >&2
+  grep -E "OpenUU|AndroidRuntime" "$LOGCAT_HOST" | tail -n 80 >&2
+  exit 1
+fi
+echo "    [PASS] Android Host listening on UDP $HOST_E2E_PORT (ticket=${HOST_TICKET:0:44}...)"
+
+sleep 0.8
+adb -s "$EMU_SERIAL" exec-out screencap -p > "$ARTIFACT_DIR/android_04_host_active.png"
+echo "    Saved screenshot: $ARTIFACT_DIR/android_04_host_active.png ($(wc -c < "$ARTIFACT_DIR/android_04_host_active.png") bytes)"
+
+if ! "$MOCK_BIN" verify-host "$HOST_TICKET" "$HOST_E2E_PIN" --force-relay >"$VERIFY_HOST_LOG" 2>&1; then
+  echo "    [FAIL] openuu-cli verify-host failed against Android Host!" >&2
+  cat "$VERIFY_HOST_LOG" >&2
+  adb -s "$EMU_SERIAL" logcat -d | grep -E "OpenUU|MediaCodec|AndroidRuntime" | tail -n 100 >&2
+  exit 1
+fi
+cat "$VERIFY_HOST_LOG"
+
+sleep 0.8
+adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_HOST" 2>/dev/null || true
+
+check_cond "verify-host received H.264 frames & keyframes" grep -q "VERIFY_HOST_ALL_PASSED" "$VERIFY_HOST_LOG"
+check_cond "Android Host received IME text_commit" grep -q "HOST_TEXT_COMMIT.*你好，安卓被控端！" "$LOGCAT_HOST"
+check_cond "Android Host received clipboard_sync" grep -q "HOST_CLIPBOARD_SYNC.*Hello Android Host E2E" "$LOGCAT_HOST"
+check_cond "Zero FATAL EXCEPTION during Android Host session" bash -c "! grep -q 'FATAL EXCEPTION' '$LOGCAT_HOST'"
+
+if [ "$FAIL" -ne 0 ]; then
+  grep -E "OpenUU|AndroidRuntime" "$LOGCAT_HOST" | tail -n 80 >&2
+  exit 1
+fi
+
 echo ""
 echo "============================================================"
-echo " ALL ANDROID E2E ACCEPTANCE CHECKS PASSED!"
+echo " ALL ANDROID E2E ACCEPTANCE CHECKS (CLIENT + HOST) PASSED!"
 echo " Screenshots:"
 echo "   - $ARTIFACT_DIR/android_01_connect.png"
 echo "   - $ARTIFACT_DIR/android_02_remote_stream.png"
 echo "   - $ARTIFACT_DIR/android_03_landscape_fullscreen.png"
+echo "   - $ARTIFACT_DIR/android_04_host_active.png"
 echo "============================================================"

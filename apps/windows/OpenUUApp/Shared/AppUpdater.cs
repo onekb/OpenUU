@@ -12,7 +12,7 @@ namespace OpenUU.Shared;
 
 public static class AppVersion
 {
-    public const string Fallback = "0.7.2";
+    public const string Fallback = "0.7.3";
 
     public static string Current
     {
@@ -352,7 +352,7 @@ public sealed class AppUpdater : ObservableBase
 
                     var info = new ReleaseUpdateInfo
                     {
-                        HasUpdate = newer,
+                        HasUpdate = newer && asset != null,
                         CurrentVersion = curVer,
                         LatestVersion = latestClean,
                         TagName = rawTag.StartsWith('v') ? rawTag : $"v{rawTag}",

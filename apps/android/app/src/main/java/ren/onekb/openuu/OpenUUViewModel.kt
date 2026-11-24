@@ -217,6 +217,24 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+    private val hostPrefs = appContext.getSharedPreferences("openuu_host_prefs", Context.MODE_PRIVATE)
+    val localHostState: StateFlow<LocalHostUiState> = AndroidHostService.hostState
+
+    private val _isAccessibilityEnabled = MutableStateFlow(
+        OpenUURemoteInputService.isEnabledInSettings(appContext)
+    )
+    val isAccessibilityEnabled: StateFlow<Boolean> = _isAccessibilityEnabled.asStateFlow()
+
+    private val _suppressHostAntiFraud = MutableStateFlow(
+        hostPrefs.getBoolean("suppress_host_antifraud", false)
+    )
+    val suppressHostAntiFraud: StateFlow<Boolean> = _suppressHostAntiFraud.asStateFlow()
+
+    private val _savedHostPin = MutableStateFlow(
+        hostPrefs.getString("host_pin", "")?.trim().orEmpty()
+    )
+    val savedHostPin: StateFlow<String> = _savedHostPin.asStateFlow()
+
     val updater = AppUpdater(
         appContext = appContext,
         scope = viewModelScope,
@@ -252,6 +270,117 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         }
         startNsdDiscovery()
         startDiscoveryPollingLoop()
+        observeHostLogsAndAccessibility()
+    }
+
+    private fun observeHostLogsAndAccessibility() {
+        var seenHostLogCount = 0
+        viewModelScope.launch {
+            AndroidHostService.hostLogs.collect { list ->
+                if (list.size > seenHostLogCount) {
+                    val delta = list.subList(seenHostLogCount, list.size)
+                    delta.forEach { appendLog(it) }
+                }
+                seenHostLogCount = list.size
+            }
+        }
+        viewModelScope.launch {
+            OpenUURemoteInputService.connectedFlow.collect { connected ->
+                _isAccessibilityEnabled.value =
+                    connected || OpenUURemoteInputService.isEnabledInSettings(appContext)
+            }
+        }
+        viewModelScope.launch {
+            AndroidHostService.hostState.collect { st ->
+                if (st.pin.isNotBlank() && st.pin != _savedHostPin.value) {
+                    _savedHostPin.value = st.pin
+                }
+                if (st.isRunning) {
+                    refreshIdentityAndDeviceBook()
+                }
+            }
+        }
+    }
+
+    fun refreshAccessibilityStatus() {
+        _isAccessibilityEnabled.value =
+            OpenUURemoteInputService.instance != null ||
+                OpenUURemoteInputService.isEnabledInSettings(appContext)
+    }
+
+    fun ensureInitialHostPin(): String {
+        val cur = _savedHostPin.value
+        if (cur.isNotBlank()) return cur
+        val generated = OpenUUNativeBridge.nativeGenerateAccessCode(false).ifBlank { "123456" }
+        hostPrefs.edit().putString("host_pin", generated).apply()
+        _savedHostPin.value = generated
+        return generated
+    }
+
+    fun setSuppressHostAntiFraud(suppress: Boolean) {
+        hostPrefs.edit().putBoolean("suppress_host_antifraud", suppress).apply()
+        _suppressHostAntiFraud.value = suppress
+    }
+
+    fun startLocalHostWithProjection(resultCode: Int, resultData: android.content.Intent) {
+        val pin = ensureInitialHostPin()
+        val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+            action = AndroidHostService.ACTION_START_HOST
+            putExtra(AndroidHostService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(AndroidHostService.EXTRA_RESULT_DATA, resultData)
+            putExtra(AndroidHostService.EXTRA_PREFERRED_PIN, pin)
+            putExtra(AndroidHostService.EXTRA_BIND_PORT, OpenUUConstants.DEFAULT_PORT)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appContext.startForegroundService(svcIntent)
+        } else {
+            appContext.startService(svcIntent)
+        }
+    }
+
+    fun startLocalHostSyntheticE2E(port: Int, pin: String) {
+        val cleanPin = pin.ifBlank { ensureInitialHostPin() }
+        hostPrefs.edit().putString("host_pin", cleanPin).apply()
+        _savedHostPin.value = cleanPin
+        val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+            action = AndroidHostService.ACTION_START_HOST
+            putExtra(AndroidHostService.EXTRA_SYNTHETIC_MODE, true)
+            putExtra(AndroidHostService.EXTRA_BIND_PORT, port)
+            putExtra(AndroidHostService.EXTRA_PREFERRED_PIN, cleanPin)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appContext.startForegroundService(svcIntent)
+        } else {
+            appContext.startService(svcIntent)
+        }
+    }
+
+    fun stopLocalHost() {
+        val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+            action = AndroidHostService.ACTION_STOP_HOST
+        }
+        appContext.startService(svcIntent)
+    }
+
+    fun disconnectIncomingHostClient() {
+        val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+            action = AndroidHostService.ACTION_DISCONNECT_CLIENT
+        }
+        appContext.startService(svcIntent)
+    }
+
+    fun regenerateLocalHostPin() {
+        if (localHostState.value.isRunning) {
+            val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+                action = AndroidHostService.ACTION_REFRESH_PIN
+            }
+            appContext.startService(svcIntent)
+        } else {
+            val fresh = OpenUUNativeBridge.nativeGenerateAccessCode(false).ifBlank { "123456" }
+            hostPrefs.edit().putString("host_pin", fresh).apply()
+            _savedHostPin.value = fresh
+            appendLog("已生成新的本机访问密码")
+        }
     }
 
     private fun acquireMulticastLock() {
@@ -289,6 +418,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             }
 
             OpenUUNativeBridge.nativeStartDiscovery(runtimeHandle)
+            ensureInitialHostPin()
             refreshIdentityAndDeviceBook()
             appendLog("OpenUU Core 已就绪 ($deviceName)")
         } catch (e: Throwable) {
@@ -1524,7 +1654,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                 is ControlEvent.FileDrop -> {
                     appendLog("收到远程文件: ${evt.localPath}")
                 }
-                is ControlEvent.Unknown -> {}
+                else -> {}
             }
         }
     }

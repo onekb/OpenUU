@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenUU</string>
+    <string name="accessibility_service_label">OpenUU 远程触控服务</string>
+    <string name="accessibility_service_description">仅在你主动开启「允许控制本机」期间，用于接收已授权远端设备的点击、滑动、返回键与文字输入指令。OpenUU 不会读取或上传任何屏幕隐私信息。</string>
 </resources>

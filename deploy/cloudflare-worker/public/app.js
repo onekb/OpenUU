@@ -544,7 +544,7 @@
         ios: assets.find((a) => /\.ipa$/i.test(a.name)),
       };
       Object.entries(map).forEach(([k, asset]) => {
-        const url = asset ? asset.browser_download_url : k === "windows" ? fallbackReleaseUrl : null;
+        const url = asset ? asset.browser_download_url : null;
         if (!url) return;
         document.querySelectorAll(`a[data-dl-link="${k}"]`).forEach((a) => {
           a.href = url;
@@ -555,7 +555,7 @@
         }
       });
     } catch {
-      // Fallback to v0.7.2 built-in URLs
+      // Fallback to v0.7.3 built-in URLs
     }
   }
 

@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/macOS-控制端%20%26%20被控端-0F172A?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
   <img src="https://img.shields.io/badge/Windows-控制端%20%26%20被控端-0F172A?style=flat-square&logo=windows&logoColor=00A4EF" alt="Windows" />
   <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-控制端-0F172A?style=flat-square&logo=ios&logoColor=white" alt="iOS" />
-  <img src="https://img.shields.io/badge/Android-控制端-0F172A?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
+  <img src="https://img.shields.io/badge/Android-控制端%20%26%20被控端-0F172A?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-6366F1?style=flat-square" alt="MIT License" /></a>
   <a href="https://github.com/onekb/OpenUU/stargazers"><img src="https://img.shields.io/github/stars/onekb/OpenUU?style=flat-square&color=10B981" alt="GitHub Stars" /></a>
 </p>
@@ -88,7 +88,7 @@
 | **macOS** | ✅ 支持 | ✅ 支持 | 已可用（支持单应用窗口 + 整屏桌面） |
 | **Windows** | ✅ 支持 | ✅ 支持 | 已可用（Windows 10 / 11，支持单应用窗口 + 整屏桌面） |
 | **iOS / iPadOS** | ✅ 支持 | — | 已可用（iPhone & iPad 原生硬解） |
-| **Android** | ✅ 支持 | — | 已可用（手机 & 平板原生硬解） |
+| **Android** | ✅ 支持 | ✅ 支持 | 已可用（支持手机/平板远控与免 Root 无障碍被控） |
 
 > 欢迎点击右上角 **Star ⭐** 支持项目持续迭代，更多平台（如 Linux 端）欢迎提交 Issue / PR 共建。
 
@@ -103,7 +103,7 @@
 | **macOS (Apple Silicon / M 系列芯片)** | `OpenUU-*-macOS-arm64.dmg` | 控制端 + 被控端，需 macOS 14.0+ |
 | **Windows (64 位 · 安装版)** | `OpenUU-*-Windows-x64-Setup.exe` | **推荐** · 控制端 + 被控端，自动创建快捷方式与标准卸载，默认管理员权限启动以无缝操控提权窗口（Windows 10 / 11 `x64`） |
 | **Windows (64 位 · 便携版)** | `OpenUU-*-Windows-x64.zip` | 控制端 + 被控端，免安装解压即用（Windows 10 / 11 `x64`） |
-| **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端，需 Android 8.0+ (`arm64-v8a`) |
+| **Android (手机 / 平板)** | `OpenUU-*-Android-arm64.apk` | 控制端 + 被控端，需 Android 8.0+ (`arm64-v8a`) |
 | **iOS / iPadOS** | `OpenUU-*-iOS-unsigned.ipa` | 控制端，需 iOS 17.0+，未签名 IPA（需自签安装） |
 
 > **⚠️ 关于系统安全提示（必看）**  

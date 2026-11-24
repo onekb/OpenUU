@@ -350,8 +350,8 @@ data class WindowTopologyItem(
 
     val displayTitle: String
         get() = when {
-            windowId == OpenUUConstants.FULL_DESKTOP_WINDOW_ID -> "Mac 整屏桌面"
             title.isNotBlank() -> title
+            windowId == OpenUUConstants.FULL_DESKTOP_WINDOW_ID -> "整屏桌面"
             else -> "窗口 #$unsignedWindowId"
         }
 

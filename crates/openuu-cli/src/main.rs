@@ -733,6 +733,200 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
+        Some("verify-host") => {
+            let target = args
+                .get(2)
+                .ok_or("usage: openuu-cli verify-host <ip:port | 9-digit-code | openuu://ticket> <pin>")?;
+            let pin = args
+                .get(3)
+                .ok_or("usage: openuu-cli verify-host <ip:port | 9-digit-code | openuu://ticket> <pin>")?;
+            let tmp_dir = std::path::Path::new("/tmp/openuu-verify-host-client");
+            let _ = std::fs::remove_dir_all(tmp_dir);
+            let identity = DeviceIdentity::load_or_create(Some(tmp_dir), Some("OpenUU-E2E-Client".into()))?;
+
+            let mut _iroh_guard = None;
+            let (session, mut channels, ack) = if target.starts_with(TICKET_PREFIX)
+                || normalize_device_code(target).len() == 9
+            {
+                let iroh_ep = bind_iroh_endpoint(&identity, false).await?;
+                let _ = tokio::time::timeout(Duration::from_millis(2500), iroh_ep.online()).await;
+                let extra_relays = parse_custom_relay_urls(&identity.wan_config.relay_url);
+                let force_relay = args.iter().any(|a| a == "--force-relay");
+                let mut ticket = if target.starts_with(TICKET_PREFIX) {
+                    OpenUUTicket::decode(target)?
+                } else {
+                    let resp = coord_resolve_code(
+                        &identity.wan_config.coord_url,
+                        identity.wan_config.allow_insecure_tls,
+                        target,
+                        pin,
+                    )
+                    .await?;
+                    OpenUUTicket::decode(&resp.ticket)?
+                };
+                if force_relay {
+                    ticket.direct_addrs.clear();
+                }
+                let ep_addr = ticket.to_endpoint_addr(&extra_relays)?;
+                let (sess, ch, hello_ack, _) =
+                    connect_via_iroh_with_progress(&iroh_ep, &identity, ep_addr, pin, |step| {
+                        println!("[VerifyStep] {step}");
+                    })
+                    .await?;
+                _iroh_guard = Some(iroh_ep);
+                (sess, ch, hello_ack)
+            } else {
+                let addr: SocketAddr = target.parse()?;
+                connect_to_host(&identity, addr, pin).await?
+            };
+            println!("VERIFY_CONNECTED host={} os={}", ack.device_name, ack.os);
+
+            // Request app list explicitly as well
+            session
+                .send_control(&pb::ControlEnvelope {
+                    seq: 2,
+                    payload: Some(pb::control_envelope::Payload::ListAppsReq(
+                        pb::ListAppsRequest {},
+                    )),
+                })
+                .await?;
+
+            let mut got_apps = false;
+            let mut got_topo = false;
+            let mut started_session = false;
+            let mut rx_video_frames = 0usize;
+            let mut rx_keyframes = 0usize;
+            let deadline = Instant::now() + Duration::from_secs(18);
+
+            while Instant::now() < deadline {
+                tokio::select! {
+                    Some(env) = channels.control_rx.recv() => {
+                        match env.payload {
+                            Some(pb::control_envelope::Payload::ListAppsResp(resp)) => {
+                                println!("VERIFY_APPS count={}", resp.apps.len());
+                                got_apps = !resp.apps.is_empty();
+                                if !started_session {
+                                    started_session = true;
+                                    session.send_control(&pb::ControlEnvelope {
+                                        seq: 3,
+                                        payload: Some(pb::control_envelope::Payload::StartSession(
+                                            pb::StartSessionRequest {
+                                                bundle_id: FULL_DESKTOP_BUNDLE_ID.to_string(),
+                                                window_id: 0,
+                                                max_fps: 45,
+                                                codec: 1,
+                                            },
+                                        )),
+                                    }).await?;
+                                }
+                            }
+                            Some(pb::control_envelope::Payload::WindowTopology(wt)) => {
+                                println!("VERIFY_TOPO count={}", wt.windows.len());
+                                if let Some(first) = wt.windows.first() {
+                                    println!("VERIFY_WINDOW id={} w={} h={} title={}", first.window_id, first.width, first.height, first.title);
+                                    got_topo = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(vf) = channels.video_rx.recv() => {
+                        rx_video_frames += 1;
+                        if vf.is_keyframe() {
+                            rx_keyframes += 1;
+                        }
+                        if rx_video_frames == 1 || rx_video_frames == 5 {
+                            println!(
+                                "VERIFY_VIDEO count={} keyframes={} win={} {}x{} bytes={}",
+                                rx_video_frames,
+                                rx_keyframes,
+                                vf.window_id,
+                                vf.width,
+                                vf.height,
+                                vf.payload.len()
+                            );
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                }
+
+                if got_apps && got_topo && rx_video_frames >= 5 && rx_keyframes >= 1 {
+                    break;
+                }
+            }
+
+            if !got_apps || !got_topo || rx_video_frames < 5 || rx_keyframes < 1 {
+                return Err(format!(
+                    "verify-host incomplete: apps={got_apps} topo={got_topo} frames={rx_video_frames} keyframes={rx_keyframes}"
+                ).into());
+            }
+
+            // Send mouse tap, scroll, IME text commit, and clipboard sync to Android Host
+            for (seq, payload) in [
+                (
+                    10u64,
+                    pb::control_envelope::Payload::MouseEvent(pb::MouseEvent {
+                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        x: 180.0,
+                        y: 360.0,
+                        r#type: 1,
+                        button: 0,
+                        click_count: 1,
+                        modifiers: 0,
+                    }),
+                ),
+                (
+                    11u64,
+                    pb::control_envelope::Payload::MouseEvent(pb::MouseEvent {
+                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        x: 180.0,
+                        y: 360.0,
+                        r#type: 2,
+                        button: 0,
+                        click_count: 1,
+                        modifiers: 0,
+                    }),
+                ),
+                (
+                    12u64,
+                    pb::control_envelope::Payload::ScrollEvent(pb::ScrollEvent {
+                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        x: 180.0,
+                        y: 420.0,
+                        delta_x: 0.0,
+                        delta_y: -120.0,
+                        is_continuous: true,
+                        modifiers: 0,
+                    }),
+                ),
+                (
+                    13u64,
+                    pb::control_envelope::Payload::TextCommit(pb::TextCommitEvent {
+                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        text: "你好，安卓被控端！".to_string(),
+                    }),
+                ),
+                (
+                    14u64,
+                    pb::control_envelope::Payload::ClipboardSync(pb::ClipboardSync {
+                        content_hash: "verify-host-clip-01".to_string(),
+                        kind: 0,
+                        text: "Hello Android Host E2E".to_string(),
+                        blob_id: String::new(),
+                        mime_type: "text/plain".to_string(),
+                        image_data: Vec::new(),
+                    }),
+                ),
+            ] {
+                session.send_control(&pb::ControlEnvelope { seq, payload: Some(payload) }).await?;
+            }
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            println!("VERIFY_HOST_ALL_PASSED frames={rx_video_frames} keyframes={rx_keyframes}");
+            session.close();
+            if let Some(ep) = _iroh_guard.take() {
+                ep.close().await;
+            }
+        }
         Some("client") => {
             let addr_str = args
                 .get(2)
