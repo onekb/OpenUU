@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 enum MobileAppVersion {
-    static let fallback = "0.7.1"
+    static let fallback = "0.7.2"
 
     static var current: String {
         if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,

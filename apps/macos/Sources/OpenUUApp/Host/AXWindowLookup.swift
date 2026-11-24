@@ -80,6 +80,22 @@ enum AXWindowLookup {
         return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, val) == .success
     }
 
+    static func isMinimized(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &ref) == .success,
+              let num = ref as? NSNumber else {
+            return false
+        }
+        return num.boolValue
+    }
+
+    static func raise(_ element: AXUIElement) {
+        AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
     /// Live CG bounds (top-left global coordinates, same space as SCWindow.frame / CGEvent.location).
     static func cgBounds(of windowID: CGWindowID) -> CGRect? {
         guard windowID != 0,

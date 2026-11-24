@@ -25,6 +25,9 @@ enum StreamNetworkTier: String, Sendable {
 
 /// Captures a single macOS window via ScreenCaptureKit and hardware-encodes frames via VideoToolbox (H.264 / HEVC Annex-B).
 final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
+    private struct SendableSampleBuffer: @unchecked Sendable {
+        let value: CMSampleBuffer
+    }
     private var stream: SCStream?
     private var compressionSession: VTCompressionSession?
     private var encoderCache: [String: VTCompressionSession] = [:]
@@ -194,6 +197,29 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         try scStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
         try await scStream.startCapture()
         self.stream = scStream
+
+        // Guarantee an immediate IDR keyframe even when a newly opened window is completely static
+        // (e.g. WeChat Image Viewer showing a still photo) or resides on another macOS Space where
+        // SCStream may not push an initial damage frame until interacted with.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard let self else { return }
+            let needsInitialFallback: Bool = self.captureQueue.sync {
+                self.stream === scStream && self.encodedFrameCount == 0
+            }
+            guard needsInitialFallback else { return }
+            if let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
+                contentFilter: filter,
+                configuration: config
+            ) {
+                let wrapped = SendableSampleBuffer(value: shotBuffer)
+                self.captureQueue.async { [weak self] in
+                    guard let self, self.stream === scStream, self.encodedFrameCount == 0 else { return }
+                    self.forceNextKeyframe = true
+                    self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
+                }
+            }
+        }
     }
 
     /// Captures an entire macOS display (Full Remote Desktop mode) using `SCContentFilter(display:excludingWindows:)`.
@@ -249,6 +275,29 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         try scStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
         try await scStream.startCapture()
         self.stream = scStream
+
+        // Guarantee an immediate IDR keyframe even when a newly opened window is completely static
+        // (e.g. WeChat Image Viewer showing a still photo) or resides on another macOS Space where
+        // SCStream may not push an initial damage frame until interacted with.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard let self else { return }
+            let needsInitialFallback: Bool = self.captureQueue.sync {
+                self.stream === scStream && self.encodedFrameCount == 0
+            }
+            guard needsInitialFallback else { return }
+            if let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
+                contentFilter: filter,
+                configuration: config
+            ) {
+                let wrapped = SendableSampleBuffer(value: shotBuffer)
+                self.captureQueue.async { [weak self] in
+                    guard let self, self.stream === scStream, self.encodedFrameCount == 0 else { return }
+                    self.forceNextKeyframe = true
+                    self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
+                }
+            }
+        }
     }
 
     func checkWindowSizeNow() {
@@ -511,15 +560,20 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen,
-              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+        guard type == .screen else { return }
+        encodeCapturedSampleBuffer(sampleBuffer, ignoreIdleStatus: false)
+    }
+
+    private func encodeCapturedSampleBuffer(_ sampleBuffer: CMSampleBuffer, ignoreIdleStatus: Bool) {
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
               compressionSession != nil else {
             return
         }
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]]
 
         // Skip idle/unchanged frames (unless a keyframe was explicitly requested) to save CPU & LAN bandwidth.
-        if !forceNextKeyframe,
+        if !ignoreIdleStatus,
+           !forceNextKeyframe,
            let statusRaw = attachments?.first?[.status] as? Int,
            let status = SCFrameStatus(rawValue: statusRaw),
            status == .idle {

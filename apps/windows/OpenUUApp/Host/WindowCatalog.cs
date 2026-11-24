@@ -222,6 +222,7 @@ public static partial class WindowCatalog
     )
     {
         int myPid = Environment.ProcessId;
+        var expandedPids = Win32Interop.ExpandDescendantPids(sharedPids);
         var results = new List<ShareableWindowItem>();
 
         Win32Interop.EnumWindowsProc enumProc = (hwnd, _) =>
@@ -252,11 +253,16 @@ public static partial class WindowCatalog
 
                 string title = Win32Interop.GetWindowTitle(hwnd).Replace("\0", "").Trim();
                 var meta = ResolveProcessMetadata(pid, hwnd, title);
-                bool matchesApp = (!string.IsNullOrEmpty(meta.AppId) && sharedAppIds.Contains(meta.AppId)) ||
-                                  sharedPids.Contains(pid) ||
-                                  sharedPids.Contains(rawPid);
-                if (!matchesApp)
+                bool directAppMatch = !string.IsNullOrEmpty(meta.AppId) && sharedAppIds.Contains(meta.AppId);
+                bool descendantPidMatch = expandedPids.Contains(pid) || expandedPids.Contains(rawPid);
+                if (!directAppMatch && !descendantPidMatch)
                     return true;
+
+                string effectiveAppId = directAppMatch
+                    ? meta.AppId
+                    : (sharedAppIds.Contains(WeChatBundleId)
+                        ? WeChatBundleId
+                        : (sharedAppIds.FirstOrDefault() ?? meta.AppId));
 
                 uint style = Win32Interop.GetWindowLong(hwnd, Win32Interop.GWL_STYLE);
                 uint exStyle = Win32Interop.GetWindowLong(hwnd, Win32Interop.GWL_EXSTYLE);
@@ -268,10 +274,15 @@ public static partial class WindowCatalog
                 double logW = bounds.Width / scale;
                 double logH = bounds.Height / scale;
 
+                bool isUntitledCompactPopup =
+                    string.IsNullOrEmpty(title) &&
+                    (exStyle & Win32Interop.WS_EX_APPWINDOW) == 0 &&
+                    logW < 420 &&
+                    logH < 460;
                 bool isMenuOrPopup =
                     className == "#32768" ||
                     ((style & Win32Interop.WS_POPUP) != 0 &&
-                     ((exStyle & (Win32Interop.WS_EX_TOOLWINDOW | Win32Interop.WS_EX_NOACTIVATE)) != 0 || string.IsNullOrEmpty(title)));
+                     ((exStyle & (Win32Interop.WS_EX_TOOLWINDOW | Win32Interop.WS_EX_NOACTIVATE)) != 0 || isUntitledCompactPopup));
 
                 if (isMenuOrPopup)
                 {
@@ -291,7 +302,7 @@ public static partial class WindowCatalog
                 {
                     Hwnd = hwnd,
                     Pid = pid,
-                    AppId = meta.AppId,
+                    AppId = effectiveAppId,
                     AppName = meta.AppName,
                     Title = string.IsNullOrEmpty(title) ? (isMenuOrPopup ? "菜单" : meta.AppName) : title,
                     ExePath = meta.ExePath,
@@ -463,7 +474,10 @@ public static partial class WindowCatalog
         string appId;
         if (procName.Equals("WeChat", StringComparison.OrdinalIgnoreCase) ||
             procName.Equals("Weixin", StringComparison.OrdinalIgnoreCase) ||
-            procName.Equals("WeChatAppEx", StringComparison.OrdinalIgnoreCase))
+            procName.Equals("WeChatAppEx", StringComparison.OrdinalIgnoreCase) ||
+            procName.Equals("WeixinAppEx", StringComparison.OrdinalIgnoreCase) ||
+            procName.Equals("RadiumWMPF", StringComparison.OrdinalIgnoreCase) ||
+            procName.Equals("WeChatPlayer", StringComparison.OrdinalIgnoreCase))
         {
             appId = WeChatBundleId;
             if (string.IsNullOrWhiteSpace(friendlyName))

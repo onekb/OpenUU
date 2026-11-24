@@ -242,7 +242,7 @@ final class VirtualDisplayManager {
         Self.restoreWindows(snapshot, extraPIDs: pidsSnapshot, virtualDisplayID: currentVDID)
     }
 
-    private static func physicalDisplayBounds(excluding virtualDisplayID: CGDirectDisplayID) -> [CGRect] {
+    static func physicalDisplayBounds(excluding virtualDisplayID: CGDirectDisplayID) -> [CGRect] {
         var count: UInt32 = 0
         CGGetActiveDisplayList(0, nil, &count)
         guard count > 0 else { return [CGDisplayBounds(CGMainDisplayID())] }
@@ -261,6 +261,42 @@ final class VirtualDisplayManager {
             return b.width > 0 && b.height > 0 ? b : nil
         }
         return result.isEmpty ? [CGDisplayBounds(CGMainDisplayID())] : result
+    }
+
+    static func expandDescendantPIDs(from rootPIDs: Set<pid_t>) -> Set<pid_t> {
+        guard !rootPIDs.isEmpty else { return [] }
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size: Int = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return rootPIDs }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        let capacity = (size / stride) + 32
+        var procs = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
+        var actualSize = capacity * stride
+        guard sysctl(&mib, 4, &procs, &actualSize, nil, 0) == 0 else { return rootPIDs }
+        let count = actualSize / stride
+        var ppidMap: [pid_t: pid_t] = [:]
+        ppidMap.reserveCapacity(count)
+        for i in 0..<count {
+            let p = procs[i].kp_proc.p_pid
+            let pp = procs[i].kp_eproc.e_ppid
+            if p > 0 {
+                ppidMap[p] = pp
+            }
+        }
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        var matched = rootPIDs
+        for candidate in ppidMap.keys where candidate > 1 && candidate != myPID {
+            var cur = candidate
+            for _ in 0..<8 {
+                if matched.contains(cur) {
+                    matched.insert(candidate)
+                    break
+                }
+                guard let parent = ppidMap[cur], parent > 1, parent != cur else { break }
+                cur = parent
+            }
+        }
+        return matched
     }
 
     private static func allAXWindows(for pid: pid_t) -> [AXUIElement] {
@@ -325,9 +361,15 @@ final class VirtualDisplayManager {
         for entry in entries.values {
             candidatePIDs.insert(entry.pid)
         }
-        for app in NSWorkspace.shared.runningApplications where app.bundleIdentifier == "com.tencent.xinWeChat" {
-            candidatePIDs.insert(app.processIdentifier)
+        for app in NSWorkspace.shared.runningApplications {
+            guard let bid = app.bundleIdentifier, !bid.isEmpty else { continue }
+            if bid == "com.tencent.xinWeChat" ||
+               bid.hasPrefix("com.tencent.xinWeChat.") ||
+               bid.localizedCaseInsensitiveContains("WeChatAppEx") {
+                candidatePIDs.insert(app.processIdentifier)
+            }
         }
+        candidatePIDs = expandDescendantPIDs(from: candidatePIDs)
         if let cgList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
             let myPID = ProcessInfo.processInfo.processIdentifier
             for info in cgList {

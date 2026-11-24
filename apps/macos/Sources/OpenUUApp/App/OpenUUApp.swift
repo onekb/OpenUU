@@ -319,7 +319,7 @@ final class AppState: ObservableObject {
                 for s in self.sessions.values {
                     s.disconnect()
                 }
-                self.virtualDisplayManager.returnAllWindowsToMainDisplay()
+                self.virtualDisplayManager.destroyVirtualDisplay()
                 self.dockProxyManager.terminateAll()
             }
         }
@@ -1114,7 +1114,8 @@ final class AppState: ObservableObject {
         hostLinkBadge = ""
         captureManager.networkTier = .lan
         hostBridge.stopHost()
-        virtualDisplayManager.returnAllWindowsToMainDisplay()
+        inputInjector.setVirtualDisplayID(0)
+        virtualDisplayManager.destroyVirtualDisplay()
         isHostRunning = false
         coordStatusText = "未开启被控监听"
         statusLog = "[被控端] 已停止本机被控监听"
@@ -1124,7 +1125,8 @@ final class AppState: ObservableObject {
         await captureManager.stopAll()
         activeStreamCount = 0
         hostBridge.sendWindowTopology([])
-        virtualDisplayManager.returnAllWindowsToMainDisplay()
+        inputInjector.setVirtualDisplayID(0)
+        virtualDisplayManager.destroyVirtualDisplay()
         statusLog = "[被控端] 已停止所有正在共享的画面"
     }
 
@@ -1223,8 +1225,8 @@ final class AppState: ObservableObject {
     func returnWindowsToMainDisplay() {
         captureManager.isRelocationPaused = true
         inputInjector.setVirtualDisplayID(0)
-        virtualDisplayManager.returnAllWindowsToMainDisplay()
-        statusLog = "[被控端] 已将所有共享窗口移回主屏"
+        virtualDisplayManager.destroyVirtualDisplay()
+        statusLog = "[被控端] 已销毁虚拟副屏并将所有共享窗口移回主屏"
     }
 
     private func enqueueClipboardFile(_ fileURL: URL) {

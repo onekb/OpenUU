@@ -119,7 +119,6 @@ replace_in("apps/ios/Info.plist", [
 replace_in("apps/ios/Sources/MobileAppUpdater.swift", [
     (r'(static\s+let\s+fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
-])
 replace_in("apps/ios/generate_xcodeproj.py", [
     (r'(CURRENT_PROJECT_VERSION\s*=\s*)[0-9]+(;)', rf'\g<1>{build}\2'),
     (r'(MARKETING_VERSION\s*=\s*)[0-9]+\.[0-9]+\.[0-9]+(;)', rf'\g<1>{ver}\2'),

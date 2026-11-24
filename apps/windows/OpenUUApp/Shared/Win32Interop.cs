@@ -373,6 +373,84 @@ public static class Win32Interop
     [DllImport("kernel32.dll")]
     internal static extern uint SetThreadExecutionState(uint esFlags);
 
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+    private static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    internal static HashSet<uint> ExpandDescendantPids(ISet<uint> rootPids)
+    {
+        var matched = new HashSet<uint>(rootPids);
+        if (matched.Count == 0)
+            return matched;
+
+        IntPtr snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == IntPtr.Zero || snap == INVALID_HANDLE_VALUE)
+            return matched;
+
+        try
+        {
+            var ppidMap = new Dictionary<uint, uint>(256);
+            var entry = new PROCESSENTRY32W { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32W>() };
+            if (Process32FirstW(snap, ref entry))
+            {
+                do
+                {
+                    if (entry.th32ProcessID != 0)
+                        ppidMap[entry.th32ProcessID] = entry.th32ParentProcessID;
+                } while (Process32NextW(snap, ref entry));
+            }
+
+            uint myPid = (uint)Environment.ProcessId;
+            foreach (uint candidate in ppidMap.Keys)
+            {
+                if (candidate <= 4 || candidate == myPid || matched.Contains(candidate))
+                    continue;
+                uint cur = candidate;
+                for (int depth = 0; depth < 8; depth++)
+                {
+                    if (matched.Contains(cur))
+                    {
+                        matched.Add(candidate);
+                        break;
+                    }
+                    if (!ppidMap.TryGetValue(cur, out uint parent) || parent <= 4 || parent == cur)
+                        break;
+                    cur = parent;
+                }
+            }
+        }
+        finally
+        {
+            CloseHandle(snap);
+        }
+
+        return matched;
+    }
+
     [DllImport("imm32.dll")]
     internal static extern IntPtr ImmGetContext(IntPtr hWnd);
 
@@ -646,9 +724,18 @@ public static class Win32Interop
         uint exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
         if ((exStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0)
             return true;
+        if ((exStyle & WS_EX_APPWINDOW) != 0)
+            return false;
 
         string title = GetWindowTitle(hwnd).Trim();
-        return string.IsNullOrEmpty(title);
+        if (!string.IsNullOrEmpty(title))
+            return false;
+
+        var bounds = GetVisibleWindowBounds(hwnd);
+        double scale = GetDpiScale(hwnd);
+        double logW = bounds.Width / scale;
+        double logH = bounds.Height / scale;
+        return logW < 420 && logH < 460;
     }
 
     internal static bool IsProcessElevated(uint pid)
