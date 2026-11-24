@@ -86,9 +86,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -1758,21 +1763,19 @@ private fun SoftwareUpdateDialog(
                     border = BorderStroke(0.5.dp, BorderHairline),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 120.dp, max = 230.dp)
+                        .heightIn(min = 120.dp, max = 260.dp)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
-                            .padding(11.dp)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        Text(
-                            text = info?.releaseNotes?.ifBlank { "暂无详细更新说明，可前往 GitHub Releases 查看完整变更记录。" }
-                                ?: "暂无更新说明",
-                            fontSize = 12.5.sp,
-                            lineHeight = 18.sp,
-                            color = TextPrimary
-                        )
+                        val mdText = info?.releaseNotes?.ifBlank {
+                            "暂无详细更新说明，可前往 GitHub Releases 查看完整变更记录。"
+                        } ?: "暂无更新说明"
+                        MarkdownReleaseNotesContent(markdown = mdText)
                     }
                 }
 
@@ -1934,4 +1937,353 @@ private fun formatTargetTextFieldValue(
     }
 
     return TextFieldValue(formatted, TextRange(newCursor.coerceIn(0, formatted.length)))
+}
+
+private sealed interface MdBlock {
+    data class Heading(val level: Int, val text: String) : MdBlock
+    data object Divider : MdBlock
+    data class CodeBlock(val lang: String, val code: String) : MdBlock
+    data class Blockquote(val text: String) : MdBlock
+    data class Table(val headers: List<String>, val rows: List<List<String>>) : MdBlock
+    data class ListItem(val level: Int, val marker: String, val text: String) : MdBlock
+    data class Paragraph(val text: String) : MdBlock
+}
+
+@Composable
+private fun MarkdownReleaseNotesContent(markdown: String) {
+    val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
+    blocks.forEach { block ->
+        when (block) {
+            is MdBlock.Heading -> {
+                val sz = when (block.level) {
+                    1 -> 15.5.sp
+                    2 -> 14.2.sp
+                    3 -> 13.2.sp
+                    else -> 12.5.sp
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = buildInlineMarkdown(block.text),
+                        fontSize = sz,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        lineHeight = 20.sp
+                    )
+                    if (block.level <= 2) {
+                        HorizontalDivider(thickness = 0.5.dp, color = DividerHairline)
+                    }
+                }
+            }
+            MdBlock.Divider -> {
+                HorizontalDivider(thickness = 0.5.dp, color = DividerHairline)
+            }
+            is MdBlock.CodeBlock -> {
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = block.code,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.5.sp,
+                        color = TextPrimary,
+                        modifier = Modifier.padding(9.dp)
+                    )
+                }
+            }
+            is MdBlock.Blockquote -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(SurfaceCard)
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(3.dp)
+                            .height(20.dp)
+                            .clip(RoundedCornerShape(1.5.dp))
+                            .background(StatusOnline)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = buildInlineMarkdown(block.text),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = TextSecondary
+                    )
+                }
+            }
+            is MdBlock.Table -> {
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(0.5.dp, BorderHairline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SurfaceElevated)
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            block.headers.forEach { hdr ->
+                                Text(
+                                    text = buildInlineMarkdown(hdr),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        block.rows.forEach { row ->
+                            HorizontalDivider(thickness = 0.5.dp, color = DividerHairline)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                block.headers.indices.forEach { col ->
+                                    val cell = row.getOrElse(col) { "" }
+                                    Text(
+                                        text = buildInlineMarkdown(cell),
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.5.sp,
+                                        color = TextPrimary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            is MdBlock.ListItem -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = (block.level * 12).dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = block.marker,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary,
+                        modifier = Modifier.width(if (block.marker.endsWith(".")) 20.dp else 13.dp)
+                    )
+                    Text(
+                        text = buildInlineMarkdown(block.text),
+                        fontSize = 12.5.sp,
+                        lineHeight = 18.sp,
+                        color = TextPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            is MdBlock.Paragraph -> {
+                Text(
+                    text = buildInlineMarkdown(block.text),
+                    fontSize = 12.5.sp,
+                    lineHeight = 18.sp,
+                    color = TextPrimary
+                )
+            }
+        }
+    }
+}
+
+private fun buildInlineMarkdown(raw: String): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    while (i < raw.length) {
+        when {
+            raw.startsWith("`", i) -> {
+                val end = raw.indexOf('`', i + 1)
+                if (end > i + 1) {
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            background = SurfaceInput,
+                            color = TextPrimary
+                        )
+                    ) {
+                        append(" ${raw.substring(i + 1, end)} ")
+                    }
+                    i = end + 1
+                } else {
+                    append(raw[i])
+                    i++
+                }
+            }
+            raw.startsWith("**", i) -> {
+                val end = raw.indexOf("**", i + 2)
+                if (end > i + 2) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = TextPrimary)) {
+                        append(buildInlineMarkdown(raw.substring(i + 2, end)))
+                    }
+                    i = end + 2
+                } else {
+                    append(raw[i])
+                    i++
+                }
+            }
+            raw.startsWith("[", i) -> {
+                val mid = raw.indexOf("](", i + 1)
+                val end = if (mid > i) raw.indexOf(')', mid + 2) else -1
+                if (mid > i && end > mid) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Medium, color = StatusOnline)) {
+                        append(raw.substring(i + 1, mid))
+                    }
+                    i = end + 1
+                } else {
+                    append(raw[i])
+                    i++
+                }
+            }
+            raw.startsWith("*", i) && !raw.startsWith("**", i) -> {
+                val end = raw.indexOf('*', i + 1)
+                if (end > i + 1) {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(raw.substring(i + 1, end))
+                    }
+                    i = end + 1
+                } else {
+                    append(raw[i])
+                    i++
+                }
+            }
+            else -> {
+                append(raw[i])
+                i++
+            }
+        }
+    }
+}
+
+private fun parseMarkdownBlocks(source: String): List<MdBlock> {
+    val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+    val out = mutableListOf<MdBlock>()
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) {
+            i++
+            continue
+        }
+        if (trimmed.startsWith("```")) {
+            val lang = trimmed.removePrefix("```").trim()
+            val codeLines = mutableListOf<String>()
+            i++
+            while (i < lines.size) {
+                if (lines[i].trim().startsWith("```")) {
+                    i++
+                    break
+                }
+                codeLines.add(lines[i])
+                i++
+            }
+            out.add(MdBlock.CodeBlock(lang, codeLines.joinToString("\n")))
+            continue
+        }
+        if ((trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___")) &&
+            trimmed.all { it == '-' || it == '*' || it == '_' || it == ' ' } &&
+            trimmed.count { it != ' ' } >= 3
+        ) {
+            out.add(MdBlock.Divider)
+            i++
+            continue
+        }
+        if (trimmed.startsWith("#")) {
+            val hashes = trimmed.takeWhile { it == '#' }
+            val rest = trimmed.drop(hashes.length)
+            if (hashes.length <= 6 && rest.startsWith(" ")) {
+                out.add(MdBlock.Heading(hashes.length.coerceAtMost(4), rest.trim()))
+                i++
+                continue
+            }
+        }
+        if (trimmed.startsWith("|") && i + 1 < lines.size) {
+            val sep = lines[i + 1].trim()
+            if (sep.startsWith("|") && sep.contains("-") && sep.all { it in "|:- \t" }) {
+                val headers = parseMdTableRow(trimmed)
+                val rows = mutableListOf<List<String>>()
+                i += 2
+                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                    rows.add(parseMdTableRow(lines[i].trim()))
+                    i++
+                }
+                if (headers.isNotEmpty()) {
+                    out.add(MdBlock.Table(headers, rows))
+                    continue
+                }
+            }
+        }
+        if (trimmed.startsWith(">")) {
+            val quotes = mutableListOf<String>()
+            while (i < lines.size && lines[i].trim().startsWith(">")) {
+                val q = lines[i].trim().drop(1).trim()
+                if (q.isNotEmpty()) quotes.add(q)
+                i++
+            }
+            if (quotes.isNotEmpty()) out.add(MdBlock.Blockquote(quotes.joinToString("\n")))
+            continue
+        }
+        val listItem = parseMdListLine(line)
+        if (listItem != null) {
+            out.add(listItem)
+            i++
+            continue
+        }
+        val paras = mutableListOf(trimmed)
+        i++
+        while (i < lines.size) {
+            val nl = lines[i]
+            val nt = nl.trim()
+            if (nt.isEmpty() || nt.startsWith("#") || nt.startsWith("```") ||
+                nt.startsWith(">") || nt.startsWith("|") || nt.startsWith("---") ||
+                parseMdListLine(nl) != null
+            ) break
+            paras.add(nt)
+            i++
+        }
+        out.add(MdBlock.Paragraph(paras.joinToString(" ")))
+    }
+    return out
+}
+
+private fun parseMdTableRow(row: String): List<String> =
+    row.trim().removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+
+private fun parseMdListLine(rawLine: String): MdBlock.ListItem? {
+    var spaces = 0
+    for (ch in rawLine) {
+        if (ch == ' ') spaces += 1 else if (ch == '\t') spaces += 2 else break
+    }
+    val level = (spaces / 2).coerceAtMost(3)
+    val trimmed = rawLine.trim()
+    for (p in listOf("- ", "* ", "+ ")) {
+        if (trimmed.startsWith(p)) {
+            val bullet = when (level) {
+                0 -> "•"
+                1 -> "◦"
+                else -> "▪"
+            }
+            return MdBlock.ListItem(level, bullet, trimmed.removePrefix(p))
+        }
+    }
+    val digits = trimmed.takeWhile { it.isDigit() }
+    if (digits.isNotEmpty() && trimmed.drop(digits.length).startsWith(". ")) {
+        return MdBlock.ListItem(level, "$digits.", trimmed.drop(digits.length + 2))
+    }
+    return null
 }

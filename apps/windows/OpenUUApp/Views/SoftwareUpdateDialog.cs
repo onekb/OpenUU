@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -16,7 +17,8 @@ public sealed class SoftwareUpdateDialog : Window
     private readonly AppUpdater _updater;
     private readonly TextBlock _headingText;
     private readonly TextBlock _metaText;
-    private readonly System.Windows.Controls.TextBox _notesBox;
+    private readonly System.Windows.Controls.RichTextBox _notesViewer;
+    private string _lastRenderedMarkdown = "\0";
     private readonly Border _progressCard;
     private readonly TextBlock _progressLabel;
     private readonly System.Windows.Controls.ProgressBar _progressBar;
@@ -32,10 +34,10 @@ public sealed class SoftwareUpdateDialog : Window
     {
         _updater = updater;
         Title = "OpenUU 版本更新";
-        Width = 556;
-        Height = 468;
-        MinWidth = 496;
-        MinHeight = 410;
+        Width = 600;
+        Height = 520;
+        MinWidth = 520;
+        MinHeight = 430;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -166,22 +168,29 @@ public sealed class SoftwareUpdateDialog : Window
         Grid.SetRow(subLabel, 0);
         root.Children.Add(subLabel);
 
-        // 2. Release Notes Scrollable Box
-        _notesBox = new System.Windows.Controls.TextBox
+        // 2. Release Notes Markdown Viewer
+        _notesViewer = new System.Windows.Controls.RichTextBox
         {
             IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
+            IsDocumentEnabled = true,
+            BorderThickness = new Thickness(0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            Foreground = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextPrimary"),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Style = (Style)System.Windows.Application.Current.FindResource("RoundedTextBoxStyle"),
-            FontSize = 12.5,
-            Padding = new Thickness(12, 10, 12, 10),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(6, 4, 6, 4)
+        };
+        var notesCard = new Border
+        {
             Background = (SolidColorBrush)System.Windows.Application.Current.FindResource("SubtleSurfaceBg"),
             BorderBrush = (SolidColorBrush)System.Windows.Application.Current.FindResource("CardBorder"),
-            Foreground = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextPrimary")
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(6),
+            Child = _notesViewer
         };
-        Grid.SetRow(_notesBox, 1);
-        root.Children.Add(_notesBox);
+        Grid.SetRow(notesCard, 1);
+        root.Children.Add(notesCard);
 
         // 4. Live Progress / Error Banner
         var statusHost = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -371,9 +380,14 @@ public sealed class SoftwareUpdateDialog : Window
         }
         _metaText.Text = string.Join("  ·  ", metaParts);
 
-        _notesBox.Text = !string.IsNullOrWhiteSpace(info?.ReleaseNotes)
+        string rawMd = !string.IsNullOrWhiteSpace(info?.ReleaseNotes)
             ? info!.ReleaseNotes
             : "暂无详细更新说明，可点击左下角前往 GitHub Releases 查看完整变更记录。";
+        if (!string.Equals(rawMd, _lastRenderedMarkdown, StringComparison.Ordinal))
+        {
+            _lastRenderedMarkdown = rawMd;
+            _notesViewer.Document = BuildMarkdownDocument(rawMd);
+        }
 
         _progressCard.Visibility = _updater.IsInstalling ? Visibility.Visible : Visibility.Collapsed;
         _progressLabel.Text = _updater.InstallStatusText;
@@ -396,5 +410,371 @@ public sealed class SoftwareUpdateDialog : Window
         _primaryActionBtn.Content = hasUpdate
             ? (_updater.IsInstalling ? "正在更新..." : "⬇ 一键下载并重启更新")
             : (_updater.IsChecking ? "正在检查..." : "🔄 重新检查更新");
+    }
+
+    private static FlowDocument BuildMarkdownDocument(string markdown)
+    {
+        var textPrimary = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextPrimary");
+        var textSecondary = (SolidColorBrush)System.Windows.Application.Current.FindResource("TextSecondary");
+        var cardBorder = (SolidColorBrush)System.Windows.Application.Current.FindResource("CardBorder");
+        var dividerBrush = (SolidColorBrush)System.Windows.Application.Current.FindResource("DividerBrush");
+        var codeBg = new SolidColorBrush(System.Windows.Media.Color.FromArgb(22, 15, 23, 42));
+        var quoteBar = new SolidColorBrush(System.Windows.Media.Color.FromRgb(14, 165, 233));
+
+        var doc = new FlowDocument
+        {
+            PagePadding = new Thickness(6, 4, 6, 4),
+            FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"),
+            FontSize = 12.5,
+            Foreground = textPrimary,
+            LineHeight = 20
+        };
+
+        string[] lines = markdown.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        int i = 0;
+        while (i < lines.Length)
+        {
+            string line = lines[i];
+            string trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                i++;
+                continue;
+            }
+
+            // 1. Fenced code block
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                var codeLines = new List<string>();
+                i++;
+                while (i < lines.Length)
+                {
+                    if (lines[i].Trim().StartsWith("```", StringComparison.Ordinal))
+                    {
+                        i++;
+                        break;
+                    }
+                    codeLines.Add(lines[i]);
+                    i++;
+                }
+                var codePara = new Paragraph(new Run(string.Join("\n", codeLines)))
+                {
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas, Microsoft YaHei UI"),
+                    FontSize = 11.5,
+                    Background = codeBg,
+                    BorderBrush = cardBorder,
+                    BorderThickness = new Thickness(1),
+                    Padding = new Thickness(9, 7, 9, 7),
+                    Margin = new Thickness(0, 4, 0, 6)
+                };
+                doc.Blocks.Add(codePara);
+                continue;
+            }
+
+            // 2. Horizontal rule
+            if ((trimmed.StartsWith("---", StringComparison.Ordinal) ||
+                 trimmed.StartsWith("***", StringComparison.Ordinal) ||
+                 trimmed.StartsWith("___", StringComparison.Ordinal)) &&
+                trimmed.All(c => c is '-' or '*' or '_' or ' '))
+            {
+                doc.Blocks.Add(new BlockUIContainer(new Border
+                {
+                    Height = 1,
+                    Background = dividerBrush,
+                    Margin = new Thickness(0, 6, 0, 6)
+                }));
+                i++;
+                continue;
+            }
+
+            // 3. Heading
+            if (trimmed.StartsWith('#'))
+            {
+                int hashes = 0;
+                while (hashes < trimmed.Length && trimmed[hashes] == '#') hashes++;
+                if (hashes <= 6 && hashes < trimmed.Length && trimmed[hashes] == ' ')
+                {
+                    double sz = hashes switch { 1 => 16.0, 2 => 14.5, 3 => 13.5, _ => 12.8 };
+                    var hp = new Paragraph
+                    {
+                        FontSize = sz,
+                        FontWeight = FontWeights.Bold,
+                        Margin = new Thickness(0, hashes <= 2 ? 8 : 5, 0, 4)
+                    };
+                    AppendInlineRuns(hp.Inlines, trimmed[(hashes + 1)..].Trim(), codeBg);
+                    doc.Blocks.Add(hp);
+                    if (hashes <= 2)
+                    {
+                        doc.Blocks.Add(new BlockUIContainer(new Border
+                        {
+                            Height = 1,
+                            Background = dividerBrush,
+                            Margin = new Thickness(0, 0, 0, 5)
+                        }));
+                    }
+                    i++;
+                    continue;
+                }
+            }
+
+            // 4. Table
+            if (trimmed.StartsWith('|') && i + 1 < lines.Length)
+            {
+                string sep = lines[i + 1].Trim();
+                if (sep.StartsWith('|') && sep.Contains('-') && sep.All(c => "|:- \t".Contains(c)))
+                {
+                    var headers = ParseTableRow(trimmed);
+                    var rows = new List<string[]>();
+                    i += 2;
+                    while (i < lines.Length && lines[i].Trim().StartsWith('|'))
+                    {
+                        rows.Add(ParseTableRow(lines[i].Trim()));
+                        i++;
+                    }
+                    if (headers.Length > 0)
+                    {
+                        var tbl = new Table
+                        {
+                            CellSpacing = 0,
+                            BorderBrush = cardBorder,
+                            BorderThickness = new Thickness(1),
+                            Margin = new Thickness(0, 4, 0, 6)
+                        };
+                        for (int c = 0; c < headers.Length; c++)
+                            tbl.Columns.Add(new TableColumn());
+
+                        var rg = new TableRowGroup();
+                        var hr = new TableRow { Background = codeBg };
+                        foreach (string h in headers)
+                        {
+                            var p = new Paragraph { Margin = new Thickness(0), FontWeight = FontWeights.SemiBold, FontSize = 11.5 };
+                            AppendInlineRuns(p.Inlines, h, codeBg);
+                            hr.Cells.Add(new TableCell(p)
+                            {
+                                Padding = new Thickness(7, 5, 7, 5),
+                                BorderBrush = dividerBrush,
+                                BorderThickness = new Thickness(0, 0, 0, 1)
+                            });
+                        }
+                        rg.Rows.Add(hr);
+
+                        foreach (var row in rows)
+                        {
+                            var tr = new TableRow();
+                            for (int c = 0; c < headers.Length; c++)
+                            {
+                                string cellText = c < row.Length ? row[c] : "";
+                                var p = new Paragraph { Margin = new Thickness(0), FontSize = 11.5 };
+                                AppendInlineRuns(p.Inlines, cellText, codeBg);
+                                tr.Cells.Add(new TableCell(p)
+                                {
+                                    Padding = new Thickness(7, 5, 7, 5),
+                                    BorderBrush = dividerBrush,
+                                    BorderThickness = new Thickness(0, 0, 0, 0.5)
+                                });
+                            }
+                            rg.Rows.Add(tr);
+                        }
+                        tbl.RowGroups.Add(rg);
+                        doc.Blocks.Add(tbl);
+                        continue;
+                    }
+                }
+            }
+
+            // 5. Blockquote
+            if (trimmed.StartsWith('>'))
+            {
+                var qLines = new List<string>();
+                while (i < lines.Length && lines[i].Trim().StartsWith('>'))
+                {
+                    string q = lines[i].Trim()[1..].Trim();
+                    if (!string.IsNullOrEmpty(q)) qLines.Add(q);
+                    i++;
+                }
+                if (qLines.Count > 0)
+                {
+                    var qp = new Paragraph
+                    {
+                        Foreground = textSecondary,
+                        Background = codeBg,
+                        BorderBrush = quoteBar,
+                        BorderThickness = new Thickness(3, 0, 0, 0),
+                        Padding = new Thickness(9, 5, 9, 5),
+                        Margin = new Thickness(0, 4, 0, 6),
+                        FontSize = 12
+                    };
+                    AppendInlineRuns(qp.Inlines, string.Join("\n", qLines), codeBg);
+                    doc.Blocks.Add(qp);
+                }
+                continue;
+            }
+
+            // 6. List item
+            if (TryParseListLine(line, out int level, out string marker, out string itemBody))
+            {
+                var lp = new Paragraph
+                {
+                    Margin = new Thickness(14 + level * 16, 1.5, 0, 2.5),
+                    TextIndent = -14
+                };
+                lp.Inlines.Add(new Run(marker + " ") { FontWeight = FontWeights.SemiBold, Foreground = textSecondary });
+                AppendInlineRuns(lp.Inlines, itemBody, codeBg);
+                doc.Blocks.Add(lp);
+                i++;
+                continue;
+            }
+
+            // 7. Paragraph
+            var pLines = new List<string> { trimmed };
+            i++;
+            while (i < lines.Length)
+            {
+                string nl = lines[i];
+                string nt = nl.Trim();
+                if (string.IsNullOrEmpty(nt) || nt.StartsWith('#') || nt.StartsWith("```", StringComparison.Ordinal) ||
+                    nt.StartsWith('>') || nt.StartsWith('|') || nt.StartsWith("---", StringComparison.Ordinal) ||
+                    TryParseListLine(nl, out _, out _, out _))
+                {
+                    break;
+                }
+                pLines.Add(nt);
+                i++;
+            }
+            var para = new Paragraph { Margin = new Thickness(0, 2, 0, 5) };
+            AppendInlineRuns(para.Inlines, string.Join(" ", pLines), codeBg);
+            doc.Blocks.Add(para);
+        }
+
+        return doc;
+    }
+
+    private static string[] ParseTableRow(string row)
+    {
+        string s = row.Trim();
+        if (s.StartsWith('|')) s = s[1..];
+        if (s.EndsWith('|')) s = s[..^1];
+        return s.Split('|').Select(c => c.Trim()).ToArray();
+    }
+
+    private static bool TryParseListLine(string rawLine, out int level, out string marker, out string text)
+    {
+        int spaces = 0;
+        foreach (char ch in rawLine)
+        {
+            if (ch == ' ') spaces += 1;
+            else if (ch == '\t') spaces += 2;
+            else break;
+        }
+        level = Math.Min(3, spaces / 2);
+        string trimmed = rawLine.Trim();
+        foreach (string p in new[] { "- ", "* ", "+ " })
+        {
+            if (trimmed.StartsWith(p, StringComparison.Ordinal))
+            {
+                marker = level == 0 ? "•" : (level == 1 ? "◦" : "▪");
+                text = trimmed[p.Length..];
+                return true;
+            }
+        }
+        int d = 0;
+        while (d < trimmed.Length && char.IsDigit(trimmed[d])) d++;
+        if (d > 0 && trimmed[d..].StartsWith(". ", StringComparison.Ordinal))
+        {
+            marker = trimmed[..d] + ".";
+            text = trimmed[(d + 2)..];
+            return true;
+        }
+        marker = "";
+        text = "";
+        return false;
+    }
+
+    private static void AppendInlineRuns(InlineCollection inlines, string raw, System.Windows.Media.Brush codeBg)
+    {
+        int i = 0;
+        var plain = new System.Text.StringBuilder();
+        void FlushPlain()
+        {
+            if (plain.Length > 0)
+            {
+                inlines.Add(new Run(plain.ToString()));
+                plain.Clear();
+            }
+        }
+
+        while (i < raw.Length)
+        {
+            if (raw[i] == '`')
+            {
+                int end = raw.IndexOf('`', i + 1);
+                if (end > i + 1)
+                {
+                    FlushPlain();
+                    inlines.Add(new Run(" " + raw[(i + 1)..end] + " ")
+                    {
+                        FontFamily = new System.Windows.Media.FontFamily("Consolas, Microsoft YaHei UI"),
+                        FontSize = 11.5,
+                        Background = codeBg
+                    });
+                    i = end + 1;
+                    continue;
+                }
+            }
+            if (i + 1 < raw.Length && raw[i] == '*' && raw[i + 1] == '*')
+            {
+                int end = raw.IndexOf("**", i + 2, StringComparison.Ordinal);
+                if (end > i + 2)
+                {
+                    FlushPlain();
+                    var bold = new Bold();
+                    AppendInlineRuns(bold.Inlines, raw[(i + 2)..end], codeBg);
+                    inlines.Add(bold);
+                    i = end + 2;
+                    continue;
+                }
+            }
+            if (raw[i] == '[')
+            {
+                int mid = raw.IndexOf("](", i + 1, StringComparison.Ordinal);
+                int end = mid > i ? raw.IndexOf(')', mid + 2) : -1;
+                if (mid > i && end > mid)
+                {
+                    FlushPlain();
+                    string label = raw[(i + 1)..mid];
+                    string url = raw[(mid + 2)..end];
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    {
+                        var link = new Hyperlink(new Run(label)) { NavigateUri = uri };
+                        link.RequestNavigate += (_, e) =>
+                        {
+                            try { Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); } catch { }
+                            e.Handled = true;
+                        };
+                        inlines.Add(link);
+                    }
+                    else
+                    {
+                        inlines.Add(new Run(label));
+                    }
+                    i = end + 1;
+                    continue;
+                }
+            }
+            if (raw[i] == '*' && (i + 1 >= raw.Length || raw[i + 1] != '*'))
+            {
+                int end = raw.IndexOf('*', i + 1);
+                if (end > i + 1)
+                {
+                    FlushPlain();
+                    inlines.Add(new Italic(new Run(raw[(i + 1)..end])));
+                    i = end + 1;
+                    continue;
+                }
+            }
+            plain.Append(raw[i]);
+            i++;
+        }
+        FlushPlain();
     }
 }

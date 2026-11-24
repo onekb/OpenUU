@@ -347,14 +347,11 @@ struct MobileUpdateSheet: View {
                     .foregroundStyle(OpenUUTheme.textSecondary)
 
                 ScrollView {
-                    Text(
-                        (info?.releaseNotes.isEmpty == false)
+                    MobileMarkdownReleaseNotesView(
+                        markdown: (info?.releaseNotes.isEmpty == false)
                             ? info!.releaseNotes
                             : "暂无详细更新说明，可前往 GitHub Releases 查看完整变更记录。"
                     )
-                    .font(.system(size: 13))
-                    .foregroundStyle(OpenUUTheme.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
                 }
                 .background(OpenUUTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -444,5 +441,344 @@ struct MobileUpdateSheet: View {
                 }
             }
         }
+    }
+}
+
+// ============================================================================
+// Structured GitHub-Flavored Markdown Renderer for Release Notes (iOS)
+// ============================================================================
+
+private enum MobileMarkdownBlock: Identifiable {
+    case heading(id: Int, level: Int, text: String)
+    case divider(id: Int)
+    case codeBlock(id: Int, language: String, code: String)
+    case blockquote(id: Int, text: String)
+    case table(id: Int, headers: [String], rows: [[String]])
+    case listItem(id: Int, level: Int, marker: String, text: String)
+    case paragraph(id: Int, text: String)
+
+    var id: Int {
+        switch self {
+        case .heading(let id, _, _),
+             .divider(let id),
+             .codeBlock(let id, _, _),
+             .blockquote(let id, _),
+             .table(let id, _, _),
+             .listItem(let id, _, _, _),
+             .paragraph(let id, _):
+            return id
+        }
+    }
+}
+
+struct MobileMarkdownReleaseNotesView: View {
+    let markdown: String
+
+    var body: some View {
+        let blocks = Self.parseBlocks(markdown)
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(blocks) { block in
+                switch block {
+                case .heading(_, let level, let text):
+                    VStack(alignment: .leading, spacing: 4) {
+                        Self.inlineText(
+                            text,
+                            baseFont: .system(
+                                size: level == 1 ? 16.5 : (level == 2 ? 15 : (level == 3 ? 14 : 13.2)),
+                                weight: .bold
+                            )
+                        )
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                        if level <= 2 {
+                            Rectangle()
+                                .fill(OpenUUTheme.hairline)
+                                .frame(height: 0.5)
+                        }
+                    }
+                    .padding(.top, level <= 2 ? 4 : 2)
+
+                case .divider:
+                    Rectangle()
+                        .fill(OpenUUTheme.hairline)
+                        .frame(height: 0.5)
+                        .padding(.vertical, 3)
+
+                case .codeBlock(_, let lang, let code):
+                    VStack(alignment: .leading, spacing: 5) {
+                        if !lang.isEmpty {
+                            Text(lang)
+                                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(OpenUUTheme.textSecondary)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text(code)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(OpenUUTheme.textPrimary)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(OpenUUTheme.background.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+                    )
+
+                case .blockquote(_, let text):
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(OpenUUTheme.primaryCTA)
+                            .frame(width: 3)
+                        Self.inlineText(text, baseFont: .system(size: 12.5))
+                            .foregroundStyle(OpenUUTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(OpenUUTheme.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                case .table(_, let headers, let rows):
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            HStack(alignment: .top, spacing: 10) {
+                                ForEach(headers.indices, id: \.self) { col in
+                                    Self.inlineText(headers[col], baseFont: .system(size: 11.5, weight: .semibold))
+                                        .foregroundStyle(OpenUUTheme.textPrimary)
+                                        .frame(width: 145, alignment: .leading)
+                                }
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(OpenUUTheme.background.opacity(0.7))
+
+                            ForEach(rows.indices, id: \.self) { rIdx in
+                                Rectangle().fill(OpenUUTheme.hairline).frame(height: 0.5)
+                                let row = rows[rIdx]
+                                HStack(alignment: .top, spacing: 10) {
+                                    ForEach(headers.indices, id: \.self) { col in
+                                        let cell = col < row.count ? row[col] : ""
+                                        Self.inlineText(cell, baseFont: .system(size: 11.5))
+                                            .foregroundStyle(OpenUUTheme.textPrimary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .frame(width: 145, alignment: .leading)
+                                    }
+                                }
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(OpenUUTheme.hairline, lineWidth: 0.5)
+                        )
+                    }
+
+                case .listItem(_, let level, let marker, let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(marker)
+                            .font(.system(size: 12.5, weight: .semibold, design: marker.hasSuffix(".") ? .monospaced : .default))
+                            .foregroundStyle(OpenUUTheme.textSecondary)
+                            .frame(minWidth: marker.hasSuffix(".") ? 18 : 10, alignment: .trailing)
+                        Self.inlineText(text, baseFont: .system(size: 13))
+                            .foregroundStyle(OpenUUTheme.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.leading, CGFloat(level) * 14)
+
+                case .paragraph(_, let text):
+                    Self.inlineText(text, baseFont: .system(size: 13))
+                        .foregroundStyle(OpenUUTheme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static func inlineText(_ raw: String, baseFont: Font) -> Text {
+        if var attr = try? AttributedString(
+            markdown: raw,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            for run in attr.runs {
+                if run.inlinePresentationIntent?.contains(.code) == true {
+                    attr[run.range].font = .system(size: 12, weight: .medium, design: .monospaced)
+                    attr[run.range].backgroundColor = Color.white.opacity(0.1)
+                }
+            }
+            return Text(attr).font(baseFont)
+        }
+        return Text(raw).font(baseFont)
+    }
+
+    private static func parseBlocks(_ source: String) -> [MobileMarkdownBlock] {
+        let lines = source
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+
+        var out: [MobileMarkdownBlock] = []
+        var nextID = 1
+        var i = 0
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.isEmpty {
+                i += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("```") {
+                let lang = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                var codeLines: [String] = []
+                i += 1
+                while i < lines.count {
+                    let cl = lines[i]
+                    if cl.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                        i += 1
+                        break
+                    }
+                    codeLines.append(cl)
+                    i += 1
+                }
+                out.append(.codeBlock(id: nextID, language: lang, code: codeLines.joined(separator: "\n")))
+                nextID += 1
+                continue
+            }
+
+            if (trimmed.hasPrefix("---") || trimmed.hasPrefix("***") || trimmed.hasPrefix("___")),
+               trimmed.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" || $0 == " " }),
+               trimmed.filter({ $0 != " " }).count >= 3 {
+                out.append(.divider(id: nextID))
+                nextID += 1
+                i += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("#") {
+                let hashes = trimmed.prefix(while: { $0 == "#" })
+                let rest = trimmed.dropFirst(hashes.count)
+                if hashes.count <= 6, rest.first == " " {
+                    out.append(.heading(
+                        id: nextID,
+                        level: min(4, hashes.count),
+                        text: rest.trimmingCharacters(in: .whitespaces)
+                    ))
+                    nextID += 1
+                    i += 1
+                    continue
+                }
+            }
+
+            if trimmed.hasPrefix("|"), i + 1 < lines.count {
+                let sepTrim = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                if sepTrim.hasPrefix("|") && sepTrim.contains("-") &&
+                   sepTrim.allSatisfy({ "|:- \t".contains($0) }) {
+                    let headers = parseTableRow(trimmed)
+                    var rows: [[String]] = []
+                    i += 2
+                    while i < lines.count {
+                        let rl = lines[i].trimmingCharacters(in: .whitespaces)
+                        guard rl.hasPrefix("|") else { break }
+                        rows.append(parseTableRow(rl))
+                        i += 1
+                    }
+                    if !headers.isEmpty {
+                        out.append(.table(id: nextID, headers: headers, rows: rows))
+                        nextID += 1
+                        continue
+                    }
+                }
+            }
+
+            if trimmed.hasPrefix(">") {
+                var quoteLines: [String] = []
+                while i < lines.count {
+                    let ql = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard ql.hasPrefix(">") else { break }
+                    let body = ql.dropFirst().trimmingCharacters(in: .whitespaces)
+                    if !body.isEmpty {
+                        quoteLines.append(body)
+                    }
+                    i += 1
+                }
+                if !quoteLines.isEmpty {
+                    out.append(.blockquote(id: nextID, text: quoteLines.joined(separator: "\n")))
+                    nextID += 1
+                }
+                continue
+            }
+
+            if let listMatch = parseListLine(line) {
+                out.append(.listItem(
+                    id: nextID,
+                    level: listMatch.level,
+                    marker: listMatch.marker,
+                    text: listMatch.text
+                ))
+                nextID += 1
+                i += 1
+                continue
+            }
+
+            var paraLines: [String] = [trimmed]
+            i += 1
+            while i < lines.count {
+                let nl = lines[i]
+                let nt = nl.trimmingCharacters(in: .whitespaces)
+                if nt.isEmpty || nt.hasPrefix("#") || nt.hasPrefix("```") ||
+                   nt.hasPrefix(">") || nt.hasPrefix("|") || nt.hasPrefix("---") ||
+                   parseListLine(nl) != nil {
+                    break
+                }
+                paraLines.append(nt)
+                i += 1
+            }
+            out.append(.paragraph(id: nextID, text: paraLines.joined(separator: " ")))
+            nextID += 1
+        }
+
+        return out
+    }
+
+    private static func parseTableRow(_ row: String) -> [String] {
+        var s = row.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("|") { s.removeFirst() }
+        if s.hasSuffix("|") { s.removeLast() }
+        return s.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func parseListLine(_ rawLine: String) -> (level: Int, marker: String, text: String)? {
+        var leadingSpaces = 0
+        for ch in rawLine {
+            if ch == " " { leadingSpaces += 1 }
+            else if ch == "\t" { leadingSpaces += 2 }
+            else { break }
+        }
+        let level = min(3, leadingSpaces / 2)
+        let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+
+        for prefix in ["- ", "* ", "+ "] {
+            if trimmed.hasPrefix(prefix) {
+                let bullet = level == 0 ? "•" : (level == 1 ? "◦" : "▪")
+                return (level, bullet, String(trimmed.dropFirst(prefix.count)))
+            }
+        }
+
+        let digits = trimmed.prefix(while: \.isNumber)
+        if !digits.isEmpty {
+            let afterDigits = trimmed.dropFirst(digits.count)
+            if afterDigits.hasPrefix(". ") {
+                return (level, "\(digits).", String(afterDigits.dropFirst(2)))
+            }
+        }
+        return nil
     }
 }
