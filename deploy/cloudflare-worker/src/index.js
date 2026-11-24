@@ -573,16 +573,19 @@ async function handleResolveBatch(request, env) {
   return jsonResponse({ items });
 }
 
-async function handleLatestRelease() {
+async function handleLatestRelease(reqUrl) {
   try {
-    const upstream = await fetch("https://api.github.com/repos/onekb/OpenUU/releases/latest", {
+    const forceRefresh = reqUrl?.searchParams?.get("refresh") === "1";
+    const bucket = forceRefresh ? Date.now() : Math.floor(Date.now() / 60000);
+    const ghUrl = `https://api.github.com/repos/onekb/OpenUU/releases/latest?_b=${bucket}`;
+    const upstream = await fetch(ghUrl, {
       headers: {
         Accept: "application/vnd.github+json",
-        "User-Agent": "OpenUU-Coord-Worker/0.7.0",
+        "User-Agent": "OpenUU-Coord-Worker/0.7.1",
       },
       cf: {
-        cacheEverything: true,
-        cacheTtl: 600,
+        cacheEverything: !forceRefresh,
+        cacheTtl: forceRefresh ? 0 : 60,
       },
     });
     if (!upstream.ok) {
@@ -612,7 +615,7 @@ async function handleLatestRelease() {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "cache-control": "public, max-age=300",
+          "cache-control": "public, max-age=30",
           "access-control-allow-origin": "*",
         },
       }
@@ -636,7 +639,7 @@ export default {
     }
 
     if (request.method === "GET" && path === "/v1/latest-release") {
-      return handleLatestRelease();
+      return handleLatestRelease(url);
     }
 
     if (request.method === "POST" && path === "/v1/register") {
