@@ -164,4 +164,58 @@ object OpenUUNativeBridge {
         filename: String,
         localPath: String
     ): Int
+
+    @JvmStatic
+    external fun nativeGenerateAccessCode(strongAlphanumeric: Boolean): String
+
+    @JvmStatic
+    external fun nativeStartHost(
+        handle: Long,
+        bindPort: Int,
+        preferredPin: String
+    ): String
+
+    @JvmStatic
+    external fun nativeStopHost(handle: Long)
+
+    @JvmStatic
+    external fun nativeSendAppListJson(handle: Long, appsJson: String): Int
+
+    @JvmStatic
+    external fun nativeSendWindowTopologyJson(handle: Long, windowsJson: String): Int
+
+    @JvmStatic
+    external fun nativeSendVideoFrame(
+        handle: Long,
+        codec: Int,
+        flags: Int,
+        windowId: Int,
+        timestampUs: Long,
+        width: Int,
+        height: Int,
+        data: ByteArray,
+        dataLen: Int
+    ): Int
+
+    @JvmStatic
+    external fun nativeSendAudioFrame(
+        handle: Long,
+        codec: Int,
+        flags: Int,
+        channels: Int,
+        sampleRate: Int,
+        timestampUs: Long,
+        data: ByteArray,
+        dataLen: Int
+    ): Int
+
+    @JvmStatic
+    external fun nativeSendNotification(
+        handle: Long,
+        appBundleId: String,
+        title: String,
+        subtitle: String,
+        body: String,
+        timestampMs: Long
+    ): Int
 }

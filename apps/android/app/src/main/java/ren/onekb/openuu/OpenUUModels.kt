@@ -483,7 +483,39 @@ data class RemoteNotificationBanner(
 )
 
 sealed class ControlEvent {
+    data object ListAppsReq : ControlEvent()
     data class ListAppsResp(val apps: List<RemoteAppSummary>) : ControlEvent()
+    data class StartSession(val bundleId: String, val windowId: Int) : ControlEvent()
+    data class StopSession(val windowId: Int) : ControlEvent()
+    data class RequestKeyframe(val windowId: Int) : ControlEvent()
+    data class AudioControl(val audioEnabled: Boolean, val muteHost: Boolean) : ControlEvent()
+    data class ResizeWindow(val windowId: Int, val width: Float, val height: Float) : ControlEvent()
+    data class Mouse(
+        val windowId: Int,
+        val x: Float,
+        val y: Float,
+        val eventType: Int,
+        val button: Int,
+        val clickCount: Int,
+        val modifiers: Int
+    ) : ControlEvent()
+    data class Scroll(
+        val windowId: Int,
+        val x: Float,
+        val y: Float,
+        val deltaX: Float,
+        val deltaY: Float,
+        val isContinuous: Boolean,
+        val modifiers: Int
+    ) : ControlEvent()
+    data class Key(
+        val windowId: Int,
+        val keyCode: Int,
+        val isDown: Boolean,
+        val isRepeat: Boolean,
+        val modifiers: Int
+    ) : ControlEvent()
+    data class TextCommit(val windowId: Int, val text: String) : ControlEvent()
     data class WindowTopology(val windows: List<WindowTopologyItem>) : ControlEvent()
     data class LinkQuality(val linkMode: String, val rttMs: Int, val remoteAddr: String) : ControlEvent()
     data class Cursor(val kind: String, val hotspotX: Float, val hotspotY: Float) : ControlEvent()
@@ -507,7 +539,8 @@ sealed class ControlEvent {
         val x: Float,
         val y: Float,
         val blobId: String,
-        val localPath: String
+        val localPath: String,
+        val totalBytes: Long = 0L
     ) : ControlEvent()
     data class Unknown(val rawType: String) : ControlEvent()
 
@@ -516,6 +549,7 @@ sealed class ControlEvent {
             return try {
                 val obj = JSONObject(json)
                 when (val type = obj.optString("type", "")) {
+                    "list_apps_req" -> ListAppsReq
                     "list_apps_resp" -> {
                         val arr = obj.optJSONArray("apps") ?: JSONArray()
                         val list = buildList {
@@ -525,6 +559,54 @@ sealed class ControlEvent {
                         }
                         ListAppsResp(list)
                     }
+                    "start_session" -> StartSession(
+                        bundleId = obj.optString("bundle_id", ""),
+                        windowId = obj.optLong("window_id", 0L).toInt()
+                    )
+                    "stop_session" -> StopSession(
+                        windowId = obj.optLong("window_id", 0L).toInt()
+                    )
+                    "request_keyframe" -> RequestKeyframe(
+                        windowId = obj.optLong("window_id", 0L).toInt()
+                    )
+                    "audio_control" -> AudioControl(
+                        audioEnabled = obj.optBoolean("audio_enabled", true),
+                        muteHost = obj.optBoolean("mute_host", false)
+                    )
+                    "resize_window" -> ResizeWindow(
+                        windowId = obj.optLong("window_id", 0L).toInt(),
+                        width = obj.optDouble("width", 0.0).toFloat(),
+                        height = obj.optDouble("height", 0.0).toFloat()
+                    )
+                    "mouse" -> Mouse(
+                        windowId = obj.optLong("window_id", 0L).toInt(),
+                        x = obj.optDouble("x", 0.0).toFloat(),
+                        y = obj.optDouble("y", 0.0).toFloat(),
+                        eventType = obj.optInt("event_type", 0),
+                        button = obj.optInt("button", 0),
+                        clickCount = obj.optInt("click_count", 1),
+                        modifiers = obj.optInt("modifiers", 0)
+                    )
+                    "scroll" -> Scroll(
+                        windowId = obj.optLong("window_id", 0L).toInt(),
+                        x = obj.optDouble("x", 0.0).toFloat(),
+                        y = obj.optDouble("y", 0.0).toFloat(),
+                        deltaX = obj.optDouble("delta_x", 0.0).toFloat(),
+                        deltaY = obj.optDouble("delta_y", 0.0).toFloat(),
+                        isContinuous = obj.optBoolean("is_continuous", true),
+                        modifiers = obj.optInt("modifiers", 0)
+                    )
+                    "key" -> Key(
+                        windowId = obj.optLong("window_id", 0L).toInt(),
+                        keyCode = obj.optInt("key_code", 0),
+                        isDown = obj.optBoolean("is_down", true),
+                        isRepeat = obj.optBoolean("is_repeat", false),
+                        modifiers = obj.optInt("modifiers", 0)
+                    )
+                    "text_commit" -> TextCommit(
+                        windowId = obj.optLong("window_id", 0L).toInt(),
+                        text = obj.optString("text", "")
+                    )
                     "window_topology" -> {
                         val arr = obj.optJSONArray("windows") ?: JSONArray()
                         val list = buildList {
@@ -567,7 +649,8 @@ sealed class ControlEvent {
                         x = obj.optDouble("x", 0.0).toFloat(),
                         y = obj.optDouble("y", 0.0).toFloat(),
                         blobId = obj.optString("blob_id", ""),
-                        localPath = obj.optString("local_path", "")
+                        localPath = obj.optString("local_path", ""),
+                        totalBytes = obj.optLong("total_bytes", 0L)
                     )
                     else -> Unknown(type)
                 }
@@ -577,3 +660,17 @@ sealed class ControlEvent {
         }
     }
 }
+
+data class LocalHostUiState(
+    val isRunning: Boolean = false,
+    val boundPort: Int = OpenUUConstants.DEFAULT_PORT,
+    val pin: String = "",
+    val hostTicket: String = "",
+    val coordStatus: String = "未开启被控",
+    val connectedClientName: String = "",
+    val linkBadge: String = "",
+    val isStreamingScreen: Boolean = false,
+    val encodedFrames: Long = 0L,
+    val audioCaptureActive: Boolean = false,
+    val lastError: String = ""
+)

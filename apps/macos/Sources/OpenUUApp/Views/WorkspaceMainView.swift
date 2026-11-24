@@ -1,8 +1,24 @@
 import AppKit
 import SwiftUI
 
+private struct MainPanelWindowAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in
+            MainPanelCoordinator.shared.registerMainPanelWindow(view?.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if let win = nsView.window {
+            MainPanelCoordinator.shared.registerMainPanelWindow(win)
+        }
+    }
+}
+
 struct WorkspaceMainView: View {
-    @StateObject private var state = AppState()
+    @ObservedObject var state: AppState
     @State private var showingAddDeviceSheet = false
     @State private var editingDevice: ManagedRemoteDevice?
 
@@ -13,6 +29,7 @@ struct WorkspaceMainView: View {
             showingAddDeviceSheet: $showingAddDeviceSheet,
             editingDevice: $editingDevice
         )
+        .background(MainPanelWindowAccessor())
     }
 }
 
@@ -70,9 +87,7 @@ private struct WorkspaceBodyView: View {
         .frame(minWidth: 880, minHeight: 590)
         .ignoresSafeArea(.container, edges: .top)
         .onAppear {
-            state.refreshPermission()
-            state.startDiscovery()
-            state.updater.startScheduledChecks()
+            state.handleMainPanelAppear()
         }
         .sheet(isPresented: $showingAddDeviceSheet) {
             DeviceEditorSheet(

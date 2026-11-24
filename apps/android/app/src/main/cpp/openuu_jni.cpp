@@ -749,7 +749,7 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendFileBlob(
     std::string bid = jstring_to_utf8(env, blob_id);
     std::string fname = jstring_to_utf8(env, filename);
     std::string path = jstring_to_utf8(env, local_path);
-    return openuu_send_file_blob(
+    jint rc = openuu_send_file_blob(
         entry->rt,
         static_cast<uint32_t>(window_id),
         x,
@@ -757,5 +757,196 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendFileBlob(
         bid.c_str(),
         fname.c_str(),
         path.c_str()
+    );
+    return rc;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeGenerateAccessCode(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jboolean strong_alphanumeric
+) {
+    char *raw = openuu_generate_access_code(strong_alphanumeric == JNI_TRUE);
+    if (!raw) {
+        return utf8_to_jstring(env, "");
+    }
+    jstring out = utf8_to_jstring(env, raw);
+    openuu_free_string(raw);
+    return out;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeStartHost(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jint bind_port,
+    jstring preferred_pin
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) {
+        return utf8_to_jstring(env, "");
+    }
+
+    char pin_buf[64];
+    std::memset(pin_buf, 0, sizeof(pin_buf));
+    std::string pref = jstring_to_utf8(env, preferred_pin);
+    if (!pref.empty() && pref.size() < sizeof(pin_buf)) {
+        std::memcpy(pin_buf, pref.data(), pref.size());
+        pin_buf[pref.size()] = '\0';
+    }
+
+    void *ctx = reinterpret_cast<void *>(static_cast<uintptr_t>(entry->id));
+    uint16_t bound_port = openuu_start_host(
+        entry->rt,
+        static_cast<uint16_t>(bind_port),
+        pin_buf,
+        sizeof(pin_buf),
+        cb_on_control,
+        cb_on_video,
+        cb_on_status,
+        ctx
+    );
+    if (bound_port == 0) {
+        return utf8_to_jstring(env, "");
+    }
+    std::string result = std::to_string(bound_port) + ":" + std::string(pin_buf);
+    return utf8_to_jstring(env, result.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeStopHost(
+    JNIEnv * /*env*/,
+    jclass /*clazz*/,
+    jlong handle
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) return;
+    openuu_stop_host(entry->rt);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendAppListJson(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jstring apps_json
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) return -1;
+    std::string json = jstring_to_utf8(env, apps_json);
+    return openuu_send_app_list_json(entry->rt, json.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendWindowTopologyJson(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jstring windows_json
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) return -1;
+    std::string json = jstring_to_utf8(env, windows_json);
+    return openuu_send_window_topology_json(entry->rt, json.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendVideoFrame(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jint codec,
+    jint flags,
+    jint window_id,
+    jlong timestamp_us,
+    jint width,
+    jint height,
+    jbyteArray data,
+    jint data_len
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt || !data || data_len <= 0) return -1;
+    jsize arr_len = env->GetArrayLength(data);
+    jsize valid_len = data_len <= arr_len ? data_len : arr_len;
+    if (valid_len <= 0) return -2;
+
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    if (!bytes) return -3;
+    jint rc = openuu_send_video_frame(
+        entry->rt,
+        static_cast<uint8_t>(codec),
+        static_cast<uint8_t>(flags),
+        static_cast<uint32_t>(window_id),
+        static_cast<uint64_t>(timestamp_us),
+        static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height),
+        reinterpret_cast<const uint8_t *>(bytes),
+        static_cast<size_t>(valid_len)
+    );
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return rc;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendAudioFrame(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jint codec,
+    jint flags,
+    jint channels,
+    jint sample_rate,
+    jlong timestamp_us,
+    jbyteArray data,
+    jint data_len
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt || !data || data_len <= 0) return -1;
+    jsize arr_len = env->GetArrayLength(data);
+    jsize valid_len = data_len <= arr_len ? data_len : arr_len;
+    if (valid_len <= 0) return -2;
+
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    if (!bytes) return -3;
+    jint rc = openuu_send_audio_frame(
+        entry->rt,
+        static_cast<uint8_t>(codec),
+        static_cast<uint8_t>(flags),
+        static_cast<uint8_t>(channels),
+        static_cast<uint32_t>(sample_rate),
+        static_cast<uint64_t>(timestamp_us),
+        reinterpret_cast<const uint8_t *>(bytes),
+        static_cast<size_t>(valid_len)
+    );
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return rc;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendNotification(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jlong handle,
+    jstring app_bundle_id,
+    jstring title,
+    jstring subtitle,
+    jstring body,
+    jlong timestamp_ms
+) {
+    auto entry = lookup_entry(static_cast<uint64_t>(handle));
+    if (!entry || !entry->rt) return -1;
+    std::string bid = jstring_to_utf8(env, app_bundle_id);
+    std::string t = jstring_to_utf8(env, title);
+    std::string sub = jstring_to_utf8(env, subtitle);
+    std::string b = jstring_to_utf8(env, body);
+    return openuu_send_notification(
+        entry->rt,
+        bid.c_str(),
+        t.c_str(),
+        sub.c_str(),
+        b.c_str(),
+        static_cast<uint64_t>(timestamp_ms)
     );
 }

@@ -2,6 +2,20 @@ import AppKit
 import AVFoundation
 import Foundation
 
+/// Dedicated `NSWindow` subclass for remote proxy windows so `MainPanelCoordinator` can cleanly distinguish
+/// remote app windows from OpenUU's own main control panel window during Dock clicks and app activation.
+final class RemoteProxyNSWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            MainPanelCoordinator.shared.markRemoteWindowFocusRequested()
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
+}
+
 /// Native macOS proxy window that renders the remote app like a local Coherence window,
 /// forwarding mouse/scroll/keyboard events and supporting native local Chinese IME input.
 @MainActor
@@ -43,7 +57,7 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         self.renderer = renderer
         self.interactiveView = ProxyInteractiveView(bridge: bridge, renderer: renderer, onDebugLog: onDebugLog)
 
-        let window = NSWindow(
+        let window = RemoteProxyNSWindow(
             contentRect: NSRect(x: origin.x, y: origin.y, width: 960, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -232,6 +246,7 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
             if isOverlayPreview {
                 win.orderFront(nil)
             } else {
+                MainPanelCoordinator.shared.markRemoteWindowFocusRequested()
                 win.makeKeyAndOrderFront(nil)
             }
         }

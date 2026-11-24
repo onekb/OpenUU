@@ -256,6 +256,7 @@ final class AppState: ObservableObject {
 
     private var discoveryTimer: Timer?
     private var presenceTickCounter: Int = 0
+    private var didStartBackgroundServices = false
     private var updaterCancellables: Set<AnyCancellable> = []
 
     var connectedSessions: [RemotePeerSession] {
@@ -804,6 +805,7 @@ final class AppState: ObservableObject {
     }
 
     private func handleDockOrNotificationFocus(compositeKey: String) {
+        MainPanelCoordinator.shared.markRemoteWindowFocusRequested()
         let parts = compositeKey.components(separatedBy: "::")
         if parts.count == 2, let sess = sessions[parts[0]] {
             let subKey = parts[1]
@@ -1130,6 +1132,14 @@ final class AppState: ObservableObject {
         statusLog = "[被控端] 已停止所有正在共享的画面"
     }
 
+    func handleMainPanelAppear() {
+        refreshPermission()
+        guard !didStartBackgroundServices else { return }
+        didStartBackgroundServices = true
+        startDiscovery()
+        updater.startScheduledChecks()
+    }
+
     func startDiscovery() {
         refreshIdentitySnapshot(syncWanFields: true)
         probeBridge.startDiscovery()
@@ -1367,6 +1377,106 @@ final class AppState: ObservableObject {
     }
 }
 
+/// Coordinates showing & focusing OpenUU's main control panel window whenever the user clicks the OpenUU icon
+/// in the macOS Dock (even while remote `RemoteProxyNSWindow` windows are visible in the same process), while
+/// preserving direct clicks on remote windows and clicks on per-app Dock proxy icons.
+@MainActor
+final class MainPanelCoordinator {
+    static let shared = MainPanelCoordinator()
+    static let mainPanelSceneID = "main-panel"
+    static let mainPanelWindowIdentifier = NSUserInterfaceItemIdentifier("openuu.main.panel")
+
+    weak var mainPanelWindow: NSWindow?
+    var openMainScene: (() -> Void)?
+    private var lastRemoteFocusRequestAt: CFAbsoluteTime = 0
+    private var hasFinishedInitialLaunch = false
+
+    func markInitialLaunchFinished() {
+        hasFinishedInitialLaunch = true
+    }
+
+    func markRemoteWindowFocusRequested() {
+        lastRemoteFocusRequestAt = CFAbsoluteTimeGetCurrent()
+    }
+
+    func wasRemoteWindowFocusRecentlyRequested(within seconds: CFAbsoluteTime = 0.45) -> Bool {
+        (CFAbsoluteTimeGetCurrent() - lastRemoteFocusRequestAt) <= seconds
+    }
+
+    func registerMainPanelWindow(_ window: NSWindow?) {
+        guard let window, !(window is RemoteProxyNSWindow) else { return }
+        window.identifier = Self.mainPanelWindowIdentifier
+        mainPanelWindow = window
+    }
+
+    private func resolveMainPanelWindow() -> NSWindow? {
+        if let cached = mainPanelWindow, !(cached is RemoteProxyNSWindow) {
+            return cached
+        }
+        if let tagged = NSApp.windows.first(where: { $0.identifier == Self.mainPanelWindowIdentifier && !($0 is RemoteProxyNSWindow) }) {
+            mainPanelWindow = tagged
+            return tagged
+        }
+        if let candidate = NSApp.windows.first(where: {
+            !($0 is RemoteProxyNSWindow) &&
+            !($0 is NSPanel) &&
+            $0.level == .normal &&
+            $0.styleMask.contains(.titled)
+        }) {
+            candidate.identifier = Self.mainPanelWindowIdentifier
+            mainPanelWindow = candidate
+            return candidate
+        }
+        return nil
+    }
+
+    /// Returns `true` if the user activated `OpenUU` by clicking directly inside a visible remote proxy window.
+    func isUserClickingRemoteProxyWindow() -> Bool {
+        let mouseScreenPt = NSEvent.mouseLocation
+        let topWinNum = NSWindow.windowNumber(at: mouseScreenPt, belowWindowWithWindowNumber: 0)
+        if topWinNum > 0,
+           NSApp.windows.contains(where: { ($0 is RemoteProxyNSWindow) && $0.isVisible && $0.windowNumber == topWinNum }) {
+            if NSEvent.pressedMouseButtons != 0 {
+                return true
+            }
+            if let evType = NSApp.currentEvent?.type,
+               evType == .leftMouseDown || evType == .rightMouseDown || evType == .otherMouseDown {
+                return true
+            }
+        }
+        return false
+    }
+
+    func handleApplicationDidBecomeActive() {
+        guard hasFinishedInitialLaunch else { return }
+        if wasRemoteWindowFocusRecentlyRequested() || isUserClickingRemoteProxyWindow() {
+            return
+        }
+        showMainPanel()
+    }
+
+    func showMainPanel() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let win = resolveMainPanelWindow() {
+            if win.isMiniaturized {
+                win.deminiaturize(nil)
+            }
+            if win.isVisible {
+                win.makeKeyAndOrderFront(nil)
+                return
+            }
+        }
+        openMainScene?()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let win = self.resolveMainPanelWindow() else { return }
+            if win.isMiniaturized {
+                win.deminiaturize(nil)
+            }
+            win.makeKeyAndOrderFront(nil)
+        }
+    }
+}
+
 @MainActor
 final class OpenUUAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1375,16 +1485,50 @@ final class OpenUUAppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = icon
         }
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) {
+            MainPanelCoordinator.shared.markInitialLaunchFinished()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        MainPanelCoordinator.shared.showMainPanel()
+        return false
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainPanelCoordinator.shared.handleApplicationDidBecomeActive()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 }
 
 struct OpenUUApp: App {
     @NSApplicationDelegateAdaptor(OpenUUAppDelegate.self) var appDelegate
+    @StateObject private var state = AppState()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        WindowGroup("OpenUU") {
-            WorkspaceMainView()
+        Window("OpenUU", id: MainPanelCoordinator.mainPanelSceneID) {
+            WorkspaceMainView(state: state)
+                .onAppear {
+                    MainPanelCoordinator.shared.openMainScene = { [openWindow] in
+                        openWindow(id: MainPanelCoordinator.mainPanelSceneID)
+                    }
+                }
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .windowArrangement) {
+                Button("打开 OpenUU 主面板") {
+                    MainPanelCoordinator.shared.openMainScene = { [openWindow] in
+                        openWindow(id: MainPanelCoordinator.mainPanelSceneID)
+                    }
+                    MainPanelCoordinator.shared.showMainPanel()
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+            }
+        }
     }
 }
