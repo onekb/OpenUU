@@ -141,6 +141,7 @@ final class AppUpdater: NSObject, ObservableObject {
 
     var coordURLProvider: (() -> String)?
     var onLog: ((String) -> Void)?
+    var onPrepareForRelaunch: (() -> Void)?
 
     private var dailyTimer: Timer?
     private var activeDownloadTask: URLSessionDownloadTask?
@@ -447,43 +448,89 @@ final class AppUpdater: NSObject, ObservableObject {
         }
 
         installPhase = .installing("正在替换 OpenUU (\(tagName)) 并自动重启...")
+        onLog?("[更新] 校验通过，正在写入 \(tagName) 并自动重启...")
         let pid = ProcessInfo.processInfo.processIdentifier
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("openuu-apply-update-\(pid).sh")
+        let stageAppURL = targetAppURL.deletingLastPathComponent()
+            .appendingPathComponent(".OpenUU-Update-\(pid).app")
 
         let escapedSrc = mountedApp.path.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedStage = stageAppURL.path.replacingOccurrences(of: "'", with: "'\\''")
         let escapedDst = targetAppURL.path.replacingOccurrences(of: "'", with: "'\\''")
         let escapedMnt = mountPoint.path.replacingOccurrences(of: "'", with: "'\\''")
         let escapedDmg = dmgURL.path.replacingOccurrences(of: "'", with: "'\\''")
 
+        // Note: AppKit silently vetoes `NSApp.terminate(nil)` while a modal `.sheet` is attached (`attachedSheet != nil`),
+        // AND `/usr/bin/open` merely re-activates the old in-memory process if `pid` is still alive.
+        // We therefore: (1) ignore HUP/INT/TERM in the detached helper, (2) ensure `pid` has completely exited
+        // (escalating TERM -> KILL if needed), (3) stage atomically before replacing `targetAppURL`, and (4) launch fresh.
         let script = """
         #!/bin/sh
-        for _ in $(seq 1 40); do
+        trap '' HUP INT TERM
+        for _ in $(seq 1 15); do
           if ! kill -0 \(pid) 2>/dev/null; then
             break
           fi
           sleep 0.2
         done
-        rm -rf '\(escapedDst)'
-        /usr/bin/ditto '\(escapedSrc)' '\(escapedDst)'
-        /usr/bin/xattr -cr '\(escapedDst)' >/dev/null 2>&1 || true
-        /usr/bin/hdiutil detach '\(escapedMnt)' -quiet >/dev/null 2>&1 || true
+        if kill -0 \(pid) 2>/dev/null; then
+          kill -TERM \(pid) 2>/dev/null || true
+          for _ in $(seq 1 8); do
+            if ! kill -0 \(pid) 2>/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+        fi
+        if kill -0 \(pid) 2>/dev/null; then
+          kill -9 \(pid) 2>/dev/null || true
+          sleep 0.2
+        fi
+        rm -rf '\(escapedStage)'
+        if /usr/bin/ditto '\(escapedSrc)' '\(escapedStage)' && [ -d '\(escapedStage)/Contents/MacOS' ]; then
+          /usr/bin/xattr -cr '\(escapedStage)' >/dev/null 2>&1 || true
+          rm -rf '\(escapedDst)'
+          mv '\(escapedStage)' '\(escapedDst)'
+        else
+          rm -rf '\(escapedStage)'
+          rm -rf '\(escapedDst)'
+          /usr/bin/ditto '\(escapedSrc)' '\(escapedDst)'
+          /usr/bin/xattr -cr '\(escapedDst)' >/dev/null 2>&1 || true
+        fi
+        /usr/bin/hdiutil detach '\(escapedMnt)' -force -quiet >/dev/null 2>&1 || true
         rm -rf '\(escapedMnt)' '\(escapedDmg)' "$0"
-        /usr/bin/open '\(escapedDst)'
+        /usr/bin/open -n '\(escapedDst)' || /usr/bin/open '\(escapedDst)'
         """
 
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
         let launcher = Process()
-        launcher.executableURL = URL(fileURLWithPath: "/bin/sh")
-        launcher.arguments = [scriptURL.path]
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        launcher.arguments = ["/bin/sh", scriptURL.path]
         launcher.standardOutput = FileHandle.nullDevice
         launcher.standardError = FileHandle.nullDevice
         try launcher.run()
 
-        try? await Task.sleep(for: .milliseconds(250))
+        // Dismiss the update modal sheet & all attached AppKit sheets FIRST so AppKit never blocks termination,
+        // run synchronous resource cleanup, then guarantee process exit.
+        showingUpdateSheet = false
+        for win in NSApp.windows {
+            if let sheet = win.attachedSheet {
+                win.endSheet(sheet)
+                sheet.orderOut(nil)
+            }
+        }
+        onPrepareForRelaunch?()
+
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(450)) {
+            Darwin._exit(0)
+        }
+        try? await Task.sleep(for: .milliseconds(120))
         NSApp.terminate(nil)
+        try? await Task.sleep(for: .milliseconds(150))
+        Darwin.exit(0)
     }
 }
 

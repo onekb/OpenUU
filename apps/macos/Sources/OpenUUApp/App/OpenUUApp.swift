@@ -304,6 +304,9 @@ final class AppState: ObservableObject {
         updater.onLog = { [weak self] msg in
             self?.statusLog = msg
         }
+        updater.onPrepareForRelaunch = { [weak self] in
+            self?.prepareForImmediateExit()
+        }
         updater.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &updaterCancellables)
@@ -1076,21 +1079,57 @@ final class AppState: ObservableObject {
         }
     }
 
-    func relaunchApplication() {
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "app" {
-            let config = NSWorkspace.OpenConfiguration()
-            config.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-                Task { @MainActor in
-                    NSApp.terminate(nil)
-                }
+    /// Synchronously dismisses all modal sheets (which otherwise cause AppKit to silently veto `NSApp.terminate`)
+    /// and tears down Host/Client resources before an in-place update or permission relaunch.
+    func prepareForImmediateExit() {
+        updater.showingUpdateSheet = false
+        showingPermissionGuideSheet = false
+        showingAntiFraudSheet = false
+        for win in NSApp.windows {
+            if let sheet = win.attachedSheet {
+                win.endSheet(sheet)
+                sheet.orderOut(nil)
             }
+        }
+        hostBridge.stopHost()
+        captureManager.audioStreamer.stopSynchronously()
+        for s in sessions.values {
+            s.disconnect()
+        }
+        virtualDisplayManager.returnAllWindowsToMainDisplay()
+        dockProxyManager.terminateAll()
+    }
+
+    func relaunchApplication() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let bundleURL = Bundle.main.bundleURL
+        prepareForImmediateExit()
+
+        if bundleURL.pathExtension == "app" {
+            let escaped = bundleURL.path.replacingOccurrences(of: "'", with: "'\\''")
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+            proc.arguments = [
+                "/bin/sh", "-c",
+                "for _ in $(seq 1 15); do kill -0 \(pid) 2>/dev/null || break; sleep 0.1; done; /usr/bin/open -n '\(escaped)' || /usr/bin/open '\(escaped)'",
+            ]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            try? proc.run()
         } else if let execPath = Bundle.main.executablePath {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: execPath)
             try? proc.run()
+        }
+
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(350)) {
+            Darwin._exit(0)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80)) {
             NSApp.terminate(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) {
+                Darwin.exit(0)
+            }
         }
     }
 
