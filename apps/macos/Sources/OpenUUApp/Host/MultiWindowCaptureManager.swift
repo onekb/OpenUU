@@ -195,6 +195,49 @@ final class MultiWindowCaptureManager {
         }
     }
 
+    private func resolvedSharedBundleID(for win: SCWindow, pidToSharedBundle: [pid_t: String] = [:]) -> String? {
+        if let bid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) {
+            return bid
+        }
+        if let pid = win.owningApplication?.processID {
+            return pidToSharedBundle[pid]
+        }
+        return nil
+    }
+
+    private func isMainBundleProcessWindow(_ win: SCWindow, canonicalBundleID: String) -> Bool {
+        let rawBid = win.owningApplication?.bundleIdentifier ?? ""
+        guard !rawBid.isEmpty, !rawBid.localizedCaseInsensitiveContains("AppEx") else {
+            return false
+        }
+        return rawBid == canonicalBundleID
+    }
+
+    private func pickPreferredPrimaryWindow(candidates: [SCWindow], canonicalBundleID: String) -> SCWindow? {
+        guard !candidates.isEmpty else { return nil }
+        let appName = NSRunningApplication.runningApplications(withBundleIdentifier: canonicalBundleID).first?.localizedName ?? ""
+        return candidates.max { a, b in
+            let aMainProc = isMainBundleProcessWindow(a, canonicalBundleID: canonicalBundleID)
+            let bMainProc = isMainBundleProcessWindow(b, canonicalBundleID: canonicalBundleID)
+            if aMainProc != bMainProc { return !aMainProc && bMainProc }
+
+            if !appName.isEmpty {
+                let aTitle = (a.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let bTitle = (b.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let aExact = aTitle == appName
+                let bExact = bTitle == appName
+                if aExact != bExact { return !aExact && bExact }
+                let aPrefix = aTitle.hasPrefix(appName)
+                let bPrefix = bTitle.hasPrefix(appName)
+                if aPrefix != bPrefix { return !aPrefix && bPrefix }
+            }
+
+            let aArea = a.frame.width * a.frame.height
+            let bArea = b.frame.width * b.frame.height
+            return aArea < bArea
+        }
+    }
+
     func stopWindow(windowID: UInt32) async {
         if windowID == Self.fullDesktopWindowID {
             isSharingFullDesktop = false
@@ -376,6 +419,10 @@ final class MultiWindowCaptureManager {
         engines[window.windowID] = engine
     }
 
+    /// Maximum `windowLayer` captured as an interactive popover/menu (`NSMenu` is `101`); excludes macOS
+    /// `kCGDraggingWindowLevel` (`500`) drag-preview overlays that would otherwise render as opaque white boxes.
+    private static let maxCapturablePopoverLayer: Int = min(400, Int(CGWindowLevelForKey(.draggingWindow)))
+
     /// Filters out tiny transient system overlays while always capturing compact context menus (including single-item Copy/Paste ~52x26pt).
     private static func isCapturablePopoverFrame(_ frame: CGRect) -> Bool {
         frame.width >= 42 && frame.height >= 22 && (frame.width >= 50 || frame.height >= 36)
@@ -399,7 +446,7 @@ final class MultiWindowCaptureManager {
                 continue
             }
             let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
-            guard layer >= 0 && layer <= 1000 else { continue }
+            guard layer >= 0 && layer < Self.maxCapturablePopoverLayer else { continue }
             guard let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: boundsDict) else {
                 continue
@@ -547,16 +594,31 @@ final class MultiWindowCaptureManager {
             if win.windowLayer == 0 {
                 return win.frame.width >= 140 && win.frame.height >= 120
             }
-            if win.windowLayer > 0 && win.windowLayer <= 1000 {
+            if win.windowLayer > 0 && win.windowLayer < Self.maxCapturablePopoverLayer {
                 return Self.isCapturablePopoverFrame(win.frame)
             }
             return false
         }
 
-        for win in appWindows where win.windowLayer == 0 {
-            let bid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) ?? (win.owningApplication?.bundleIdentifier ?? "")
-            if primaryWindowByBundle[bid] == nil {
-                primaryWindowByBundle[bid] = win.windowID
+        let normalWindowsByBundle = Dictionary(grouping: appWindows.filter { $0.windowLayer == 0 }) { win in
+            resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
+                ?? (win.owningApplication?.bundleIdentifier ?? "")
+        }
+        for existingBid in Array(primaryWindowByBundle.keys) {
+            if (normalWindowsByBundle[existingBid] ?? []).isEmpty {
+                primaryWindowByBundle.removeValue(forKey: existingBid)
+            }
+        }
+        for (bid, candidates) in normalWindowsByBundle where !bid.isEmpty {
+            if let curPrimaryID = primaryWindowByBundle[bid],
+               let curWin = candidates.first(where: { $0.windowID == curPrimaryID }) {
+                if !isMainBundleProcessWindow(curWin, canonicalBundleID: bid),
+                   candidates.contains(where: { isMainBundleProcessWindow($0, canonicalBundleID: bid) }),
+                   let promoted = pickPreferredPrimaryWindow(candidates: candidates, canonicalBundleID: bid) {
+                    primaryWindowByBundle[bid] = promoted.windowID
+                }
+            } else if let elected = pickPreferredPrimaryWindow(candidates: candidates, canonicalBundleID: bid) {
+                primaryWindowByBundle[bid] = elected.windowID
             }
         }
 
@@ -588,7 +650,7 @@ final class MultiWindowCaptureManager {
         lastAppWindows = appWindows
         // Publish topology BEFORE starting new engines so the Client knows each window's `kind` (floating popover vs
         // normal window), live Dock icon, original title, and relative offset `(rel_x, rel_y)` before its first video frame arrives.
-        publishTopology(from: appWindows, force: forcePublish)
+        publishTopology(from: appWindows, pidToSharedBundle: pidToSharedBundle, force: forcePublish)
 
         // 2. Start engines for newly opened windows across all shared apps, and sync size for existing windows
         //    (including floating popovers such as WeChat's search dropdown, which expands dynamically while typing).
@@ -598,9 +660,12 @@ final class MultiWindowCaptureManager {
                 engines[win.windowID]?.updateWindowLogicalSize(win.frame.size)
                 continue
             }
-            let bid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) ?? (win.owningApplication?.bundleIdentifier ?? "")
-            if primaryWindowByBundle[bid] == nil {
-                primaryWindowByBundle[bid] = win.windowID
+            if win.windowLayer == 0 {
+                let bid = resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
+                    ?? (win.owningApplication?.bundleIdentifier ?? "")
+                if !bid.isEmpty, primaryWindowByBundle[bid] == nil {
+                    primaryWindowByBundle[bid] = win.windowID
+                }
             }
             do {
                 try await startEngine(for: win)
@@ -621,24 +686,26 @@ final class MultiWindowCaptureManager {
         }
 
         if startedAny || forcePublish {
-            publishTopology(from: appWindows, force: forcePublish)
+            publishTopology(from: appWindows, pidToSharedBundle: pidToSharedBundle, force: forcePublish)
         }
     }
 
-    private func publishTopology(from windows: [SCWindow], force: Bool) {
+    private func publishTopology(from windows: [SCWindow], pidToSharedBundle: [pid_t: String] = [:], force: Bool) {
         let frameByID: [UInt32: CGRect] = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0.frame) })
         let normalWindowsByBundle = Dictionary(grouping: windows.filter { $0.windowLayer == 0 }) { win in
-            canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) ?? (win.owningApplication?.bundleIdentifier ?? "")
+            resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
+                ?? (win.owningApplication?.bundleIdentifier ?? "")
         }
         let hasPopover = windows.contains { $0.windowLayer > 0 }
         let zOrderRank = hasPopover ? currentNormalWindowZOrder() : [:]
 
         var items: [WindowTopologyItem] = windows.map { win in
-            let bid = canonicalSharedBundleID(for: win.owningApplication?.bundleIdentifier) ?? (win.owningApplication?.bundleIdentifier ?? "")
+            let bid = resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
+                ?? (win.owningApplication?.bundleIdentifier ?? "")
             let appName = win.owningApplication?.applicationName ?? "App"
             let primaryID = primaryWindowByBundle[bid] ?? win.windowID
-            let isMain = win.windowID == primaryID
             let isPopover = win.windowLayer > 0
+            let isMain = !isPopover && win.windowID == primaryID
             let anchorID: UInt32
             if isMain {
                 anchorID = 0

@@ -287,6 +287,9 @@ int32_t openuu_send_file_blob(
     const char *local_path
 );
 
+/// Cancel an in-flight incoming QUIC Blob Stream by its blob_id (aborts QUIC stream and cleans partial file).
+int32_t openuu_cancel_file_blob(const char *blob_id);
+
 /// Request list of running apps/windows from Host (Client -> Host).
 int32_t openuu_request_app_list(OpenUURuntime *rt);
 

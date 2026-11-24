@@ -114,6 +114,10 @@ struct ControlEventMessage: Codable, Sendable {
     let image_b64: String?
     let blob_id: String?
     let local_path: String?
+    let filename: String?
+    let received_bytes: UInt64?
+    let total_bytes: UInt64?
+    let transfer_state: UInt32?
     let link_mode: String?
     let rtt_ms: UInt32?
     let remote_addr: String?
@@ -476,6 +480,12 @@ final class OpenUUBridge: @unchecked Sendable {
 
     func stopRemoteSession(windowID: UInt32) {
         _ = openuu_stop_remote_session(runtime, windowID)
+    }
+
+    static func cancelIncomingBlob(blobID: String) {
+        blobID.withCString { ptr in
+            _ = openuu_cancel_file_blob(ptr)
+        }
     }
 }
 

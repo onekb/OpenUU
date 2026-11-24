@@ -366,6 +366,17 @@ enum ControlEventJson {
         y: f32,
         blob_id: String,
         local_path: String,
+        total_bytes: u64,
+    },
+    FileTransferProgress {
+        window_id: u32,
+        x: f32,
+        y: f32,
+        blob_id: String,
+        filename: String,
+        received_bytes: u64,
+        total_bytes: u64,
+        transfer_state: u32,
     },
     LinkQuality {
         link_mode: String,
@@ -491,13 +502,29 @@ fn envelope_to_json(env: &pb::ControlEnvelope) -> String {
                 BASE64_STD.encode(&cb.image_data)
             },
         },
-        Some(pb::control_envelope::Payload::FileDrop(fd)) => ControlEventJson::FileDrop {
-            window_id: fd.window_id,
-            x: fd.x,
-            y: fd.y,
-            blob_id: fd.blob_id.clone(),
-            local_path: fd.filename.clone(),
-        },
+        Some(pb::control_envelope::Payload::FileDrop(fd)) => {
+            if fd.state == 0 {
+                ControlEventJson::FileDrop {
+                    window_id: fd.window_id,
+                    x: fd.x,
+                    y: fd.y,
+                    blob_id: fd.blob_id.clone(),
+                    local_path: fd.filename.clone(),
+                    total_bytes: fd.total_bytes,
+                }
+            } else {
+                ControlEventJson::FileTransferProgress {
+                    window_id: fd.window_id,
+                    x: fd.x,
+                    y: fd.y,
+                    blob_id: fd.blob_id.clone(),
+                    filename: fd.filename.clone(),
+                    received_bytes: fd.received_bytes,
+                    total_bytes: fd.total_bytes,
+                    transfer_state: fd.state,
+                }
+            }
+        }
         other => ControlEventJson::Other {
             debug: format!("{other:?}"),
         },
@@ -3051,6 +3078,18 @@ pub unsafe extern "C" fn openuu_send_file_blob(
             tracing::warn!("send_file_blob failed: {e}");
         }
     });
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_cancel_file_blob(blob_id: *const c_char) -> i32 {
+    if blob_id.is_null() {
+        return -1;
+    }
+    let Ok(blob_str) = CStr::from_ptr(blob_id).to_str() else {
+        return -2;
+    };
+    crate::transport::cancel_incoming_blob(blob_str);
     0
 }
 

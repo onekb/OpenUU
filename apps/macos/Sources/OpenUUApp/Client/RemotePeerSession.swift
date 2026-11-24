@@ -77,6 +77,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
     var compositedIcons: [String: NSImage] = [:]
     var openedBundleIDs: Set<String> = []
     var windowToBundleID: [UInt32: String] = [:]
+    private var primaryWindowByBundleID: [String: UInt32] = [:]
     private var lastOpenedBundleID: String?
 
     // Callbacks wired by AppState
@@ -215,20 +216,65 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                     if !bid.isEmpty {
                         self.onUpdateDockBadge?(self.dockKey(for: bid), badge)
                     }
+                case "file_transfer_progress":
+                    let winID = evt.window_id ?? 0
+                    let blobID = evt.blob_id ?? ""
+                    let name = evt.filename ?? "file.bin"
+                    let received = evt.received_bytes ?? 0
+                    let total = evt.total_bytes ?? 0
+                    let state = evt.transfer_state ?? 0
+                    if winID == 0xFFFF_FFFE, !blobID.isEmpty {
+                        if state == 1 {
+                            let desc = DragOutTransferCoordinator.shared.registerTransferStarted(
+                                blobID: blobID,
+                                filename: name,
+                                totalBytes: total
+                            )
+                            for ctrl in self.proxyWindows.values {
+                                if ctrl.deliverDragOutItems([desc]) {
+                                    break
+                                }
+                            }
+                        } else if state == 2 {
+                            DragOutTransferCoordinator.shared.updateTransferProgress(
+                                blobID: blobID,
+                                filename: name,
+                                receivedBytes: received,
+                                totalBytes: total
+                            )
+                        } else if state == 3 {
+                            DragOutTransferCoordinator.shared.markTransferFailed(blobID: blobID)
+                        }
+                    }
                 case "file_drop":
                     if let path = evt.local_path, !path.isEmpty {
                         let url = URL(fileURLWithPath: path)
                         let winID = evt.window_id ?? 0
+                        let blobID = evt.blob_id ?? ""
+                        let total = evt.total_bytes ?? 0
                         if winID == 0xFFFF_FFFE {
-                            var handedOff = false
-                            for ctrl in self.proxyWindows.values {
-                                if ctrl.deliverDragOutFiles([url]) {
-                                    handedOff = true
-                                    break
+                            let effectiveID = blobID.isEmpty ? UUID().uuidString : blobID
+                            let wasClaimed = DragOutTransferCoordinator.shared.markTransferCompleted(
+                                blobID: effectiveID,
+                                inboxURL: url,
+                                totalBytes: total
+                            )
+                            if !wasClaimed {
+                                let desc = DragOutItemDescriptor(
+                                    blobID: effectiveID,
+                                    filename: url.lastPathComponent,
+                                    totalBytes: total
+                                )
+                                var handedOff = false
+                                for ctrl in self.proxyWindows.values {
+                                    if ctrl.deliverDragOutItems([desc]) {
+                                        handedOff = true
+                                        break
+                                    }
                                 }
-                            }
-                            if !handedOff {
-                                self.onRemoteClipboardFile?(url)
+                                if !handedOff {
+                                    DragOutTransferCoordinator.shared.abandonUnclaimedDragOut(blobID: effectiveID)
+                                }
                             }
                         } else {
                             self.onRemoteClipboardFile?(url)
@@ -347,6 +393,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         }
         knownWindows.removeAll()
         windowToBundleID.removeAll()
+        primaryWindowByBundleID.removeAll()
         openedBundleIDs.removeAll()
         lastOpenedBundleID = nil
     }
@@ -399,6 +446,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             windowToBundleID[item.window_id] = app.bundle_id
             return
         }
+        let nonDesktopOpened = openedBundleIDs.subtracting([MultiWindowCaptureManager.fullDesktopBundleID])
+        if nonDesktopOpened.count == 1, let sole = nonDesktopOpened.first {
+            windowToBundleID[item.window_id] = sole
+            return
+        }
         if openedBundleIDs.count == 1, let sole = openedBundleIDs.first {
             windowToBundleID[item.window_id] = sole
             return
@@ -408,6 +460,29 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             if !alreadyBound || item.kind == 0 {
                 windowToBundleID[item.window_id] = last
             }
+        }
+    }
+
+    private func pickPreferredClientPrimaryWindow(candidates: [WindowTopologyItem], bundleID: String) -> WindowTopologyItem? {
+        guard !candidates.isEmpty else { return nil }
+        let appName = remoteApps.first(where: { $0.bundle_id == bundleID })?.name ?? ""
+        return candidates.max { a, b in
+            let aMainApp = (a.icon_png_b64 ?? "").isEmpty
+            let bMainApp = (b.icon_png_b64 ?? "").isEmpty
+            if aMainApp != bMainApp { return !aMainApp && bMainApp }
+
+            if !appName.isEmpty {
+                let aTitle = a.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let bTitle = b.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let aExact = aTitle == appName
+                let bExact = bTitle == appName
+                if aExact != bExact { return !aExact && bExact }
+                let aPrefix = aTitle.hasPrefix(appName)
+                let bPrefix = bTitle.hasPrefix(appName)
+                if aPrefix != bPrefix { return !aPrefix && bPrefix }
+            }
+
+            return (a.width * a.height) < (b.width * b.height)
         }
     }
 
@@ -422,6 +497,12 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         for (winID, _) in knownWindows where !activeIDs.contains(winID) {
             knownWindows.removeValue(forKey: winID)
             onRemoveDockIcon?(dockKey(for: "win-\(winID)"))
+            if let bid = windowToBundleID.removeValue(forKey: winID),
+               !windowToBundleID.values.contains(bid) {
+                primaryWindowByBundleID.removeValue(forKey: bid)
+                openedBundleIDs.remove(bid)
+                onRemoveDockIcon?(dockKey(for: bid))
+            }
         }
 
         // Bind primary windows first so child/secondary windows can inherit parent_window_id's bundle ID.
@@ -432,12 +513,81 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             bindBundleID(for: item)
         }
 
+        // Elect one effective primary window per bundle so the bundle-level Dock icon (`dockKey(for: bid)`)
+        // and per-window Dock icons (`dockKey(for: "win-...")`) never duplicate the same window — even if an
+        // older remote Host sends all remaining windows of an app with `kind == 1`.
+        let prevPrimaryByBundle = primaryWindowByBundleID
+        let normalByBundle = Dictionary(grouping: remoteWindows.filter { $0.kind == 0 || $0.kind == 1 }) { item in
+            windowToBundleID[item.window_id] ?? ""
+        }
+        for existingBid in Array(primaryWindowByBundleID.keys) {
+            if (normalByBundle[existingBid] ?? []).isEmpty {
+                primaryWindowByBundleID.removeValue(forKey: existingBid)
+            }
+        }
+        for (bid, normals) in normalByBundle where !bid.isEmpty && bid != MultiWindowCaptureManager.fullDesktopBundleID {
+            if let explicitPrimary = normals.first(where: { $0.kind == 0 }) {
+                primaryWindowByBundleID[bid] = explicitPrimary.window_id
+            } else if let curID = primaryWindowByBundleID[bid],
+                      let curItem = normals.first(where: { $0.window_id == curID }) {
+                let curHasCustomIcon = !(curItem.icon_png_b64 ?? "").isEmpty
+                let hasStandardMainWindow = normals.contains { ($0.icon_png_b64 ?? "").isEmpty }
+                if curHasCustomIcon && hasStandardMainWindow,
+                   let promoted = pickPreferredClientPrimaryWindow(candidates: normals, bundleID: bid) {
+                    primaryWindowByBundleID[bid] = promoted.window_id
+                }
+            } else if let elected = pickPreferredClientPrimaryWindow(candidates: normals, bundleID: bid) {
+                primaryWindowByBundleID[bid] = elected.window_id
+            }
+        }
+
         for item in remoteWindows {
             let prevItem = knownWindows[item.window_id]
             knownWindows[item.window_id] = item
             let dockTitle = displayWindowTitle(item.title)
+            let bid = windowToBundleID[item.window_id]
+            let isNormal = item.kind == 0 || item.kind == 1
+            let isEffectivePrimary: Bool
+            if let bid, bid != MultiWindowCaptureManager.fullDesktopBundleID, isNormal {
+                isEffectivePrimary = primaryWindowByBundleID[bid] == item.window_id
+            } else {
+                isEffectivePrimary = item.kind == 0
+            }
 
-            if item.kind == 1 {
+            if isEffectivePrimary {
+                // Ensure no secondary `win-<id>` Dock proxy coexists with the bundle-level Dock icon.
+                onRemoveDockIcon?(dockKey(for: "win-\(item.window_id)"))
+                if let bid, bid != MultiWindowCaptureManager.fullDesktopBundleID {
+                    let key = dockKey(for: bid)
+                    let prevPrimaryID = prevPrimaryByBundle[bid]
+                    openedBundleIDs.insert(bid)
+                    if let b64 = item.icon_png_b64, !b64.isEmpty {
+                        let icon = resolveCompositedIcon(for: item)
+                        onEnsureDockIcon?(key, dockTitle, icon)
+                        if b64 != prevItem?.icon_png_b64 || prevPrimaryID != item.window_id {
+                            onUpdateDockIcon?(key, icon)
+                        }
+                        // Helper/Mini-Program running as the sole primary window: keep its Dock title synced too.
+                        if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            onUpdateDockTitle?(key, dockTitle)
+                        }
+                    } else if bid.localizedCaseInsensitiveContains("AppEx") {
+                        let icon = resolveCompositedIcon(for: item)
+                        onEnsureDockIcon?(key, dockTitle, icon)
+                        if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            onUpdateDockTitle?(key, dockTitle)
+                        }
+                    } else {
+                        let appSummary = remoteApps.first(where: { $0.bundle_id == bid })
+                        let canonicalTitle = (appSummary?.name.isEmpty == false) ? appSummary!.name : dockTitle
+                        let canonicalIcon = compositedIcons[bid] ?? resolveCompositedIcon(for: item)
+                        onEnsureDockIcon?(key, canonicalTitle, canonicalIcon)
+                        if !(prevItem?.icon_png_b64 ?? "").isEmpty || (prevPrimaryID != nil && prevPrimaryID != item.window_id) {
+                            onUpdateDockIcon?(key, canonicalIcon)
+                        }
+                    }
+                }
+            } else if item.kind == 1 {
                 let icon = resolveCompositedIcon(for: item)
                 let key = dockKey(for: "win-\(item.window_id)")
                 onEnsureDockIcon?(key, dockTitle, icon)
@@ -445,22 +595,6 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                     onUpdateDockIcon?(key, icon)
                 }
                 if prevItem != nil && item.title != prevItem?.title && !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    onUpdateDockTitle?(key, dockTitle)
-                }
-            } else if item.kind == 0, let bid = windowToBundleID[item.window_id],
-                      bid != MultiWindowCaptureManager.fullDesktopBundleID {
-                let key = dockKey(for: bid)
-                if let b64 = item.icon_png_b64, !b64.isEmpty {
-                    let icon = resolveCompositedIcon(for: item)
-                    if b64 != prevItem?.icon_png_b64 {
-                        onUpdateDockIcon?(key, icon)
-                    }
-                    // Helper/Mini-Program running as the sole primary window: keep its Dock title synced too.
-                    if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        onUpdateDockTitle?(key, dockTitle)
-                    }
-                } else if bid.localizedCaseInsensitiveContains("AppEx"),
-                          !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     onUpdateDockTitle?(key, dockTitle)
                 }
             }
@@ -476,6 +610,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             onRemoveDockIcon?(dockKey(for: "win-\(winID)"))
             if let bid = windowToBundleID.removeValue(forKey: winID) {
                 if !windowToBundleID.values.contains(bid) {
+                    primaryWindowByBundleID.removeValue(forKey: bid)
                     openedBundleIDs.remove(bid)
                     onRemoveDockIcon?(dockKey(for: bid))
                 }
@@ -486,6 +621,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             for bid in openedBundleIDs {
                 onRemoveDockIcon?(dockKey(for: bid))
             }
+            primaryWindowByBundleID.removeAll()
             openedBundleIDs.removeAll()
         }
         openWindowCount = proxyWindows.count
@@ -546,6 +682,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             for childID in childIDs {
                 self.locallyClosedWindows.insert(childID)
                 self.fastVideoRouter.suppress(windowID: childID)
+                self.windowToBundleID.removeValue(forKey: childID)
                 self.onRemoveDockIcon?(self.dockKey(for: "win-\(childID)"))
                 if let childCtrl = self.proxyWindows.removeValue(forKey: childID) {
                     childCtrl.closeProgrammatically()
@@ -554,7 +691,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
 
             self.bridge.stopRemoteSession(windowID: closedID)
             if let bid = self.windowToBundleID.removeValue(forKey: closedID) {
+                if self.primaryWindowByBundleID[bid] == closedID {
+                    self.primaryWindowByBundleID.removeValue(forKey: bid)
+                }
                 if !self.windowToBundleID.values.contains(bid) {
+                    self.primaryWindowByBundleID.removeValue(forKey: bid)
                     self.openedBundleIDs.remove(bid)
                     self.onRemoveDockIcon?(self.dockKey(for: bid))
                 }
@@ -615,6 +756,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             ctrl.window?.makeKeyAndOrderFront(nil)
             return
         }
+        if let primaryID = primaryWindowByBundleID[subKey],
+           let primaryCtrl = proxyWindows[primaryID] {
+            primaryCtrl.window?.makeKeyAndOrderFront(nil)
+            return
+        }
         var matched = false
         for (winID, ctrl) in proxyWindows {
             let winTitle = knownWindows[winID]?.title ?? ""
@@ -646,6 +792,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
             return
         }
         openedBundleIDs.remove(subKey)
+        primaryWindowByBundleID.removeValue(forKey: subKey)
         let appName = remoteApps.first(where: { $0.bundle_id == subKey })?.name ?? ""
         for (winID, ctrl) in proxyWindows {
             let winTitle = knownWindows[winID]?.title ?? ""

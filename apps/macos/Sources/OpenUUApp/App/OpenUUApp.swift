@@ -1252,7 +1252,7 @@ final class AppState: ObservableObject {
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.writeObjects(urls as [NSURL])
-            self.clipboardSync.ignoreCurrentPasteboardChange()
+            self.clipboardSync.ignoreCurrentPasteboardChange(forFiles: urls)
             self.inputInjector.pasteDroppedFiles(windowID: CGWindowID(windowID), fileURLs: urls)
             self.statusLog = "[被控端] 已接收并粘贴 \(urls.count) 个拖入文件"
         }

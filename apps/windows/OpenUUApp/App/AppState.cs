@@ -1401,7 +1401,7 @@ public sealed class AppState : ObservableBase, IDisposable
                     if (!_pendingDroppedFiles.Remove(windowId, out var files) || files.Count == 0)
                         return;
 
-                    ClipboardSync.ApplyRemoteClipboardFiles(files);
+                    ClipboardSync.ApplyRemoteClipboardFiles(files, forceWriteForDropPaste: true);
                     InputInjector.PasteDroppedFiles(windowId, files);
                     StatusLog = $"[被控端] 已接收并粘贴 {files.Count} 个拖入文件";
                 });

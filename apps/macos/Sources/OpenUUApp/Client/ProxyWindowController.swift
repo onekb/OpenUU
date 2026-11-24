@@ -254,8 +254,8 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         interactiveView.setAudioMuted(muted)
     }
 
-    func deliverDragOutFiles(_ urls: [URL]) -> Bool {
-        interactiveView.deliverDragOutFiles(urls)
+    func deliverDragOutItems(_ items: [DragOutItemDescriptor]) -> Bool {
+        interactiveView.deliverDragOutItems(items)
     }
 }
 
@@ -294,7 +294,8 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     private var hudIdleTimer: Timer?
     private var isHoverBarVisible = false
     private var lastHoverSentAt: CFAbsoluteTime = 0
-    private var pendingDragOutFiles: [URL] = []
+    private var pendingDragOutItems: [DragOutItemDescriptor] = []
+    private var activeDraggedOutBlobIDs: [String] = []
     private var lastDragEvent: NSEvent?
     private var isLocalLeftMouseDown = false
     private var didStartLocalDragOut = false
@@ -487,9 +488,13 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard !isFloatingPopover, remoteWindowID != 0 else { return [] }
+        // Never allow a drag-out initiated from this same proxy window to loop back into itself!
+        if (sender.draggingSource as? ProxyInteractiveView) === self {
+            return []
+        }
         let urls = extractRegularFileURLs(from: sender.draggingPasteboard)
         guard !urls.isEmpty else { return [] }
-        dropOverlay.setCount(urls.count)
+        dropOverlay.setCount(urls.count, targetTitle: window?.title)
         dropOverlay.isHidden = false
         return .copy
     }
@@ -505,6 +510,9 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         dropOverlay.isHidden = true
         guard !isFloatingPopover, remoteWindowID != 0 else { return false }
+        if (sender.draggingSource as? ProxyInteractiveView) === self {
+            return false
+        }
         let urls = extractRegularFileURLs(from: sender.draggingPasteboard)
         guard !urls.isEmpty else { return false }
 
@@ -577,7 +585,8 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
         window?.makeFirstResponder(self)
         isLocalLeftMouseDown = true
         didStartLocalDragOut = false
-        pendingDragOutFiles.removeAll()
+        pendingDragOutItems.removeAll()
+        activeDraggedOutBlobIDs.removeAll()
         lastDragEvent = event
         let (x, y) = remotePoint(from: event)
         onDebugLog?(String(format: "发送点击 (%.0f, %.0f) win=%u", x, y, remoteWindowID))
@@ -589,8 +598,15 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
         lastDragEvent = nil
         if didStartLocalDragOut {
             didStartLocalDragOut = false
-            pendingDragOutFiles.removeAll()
+            pendingDragOutItems.removeAll()
             return
+        }
+        if !pendingDragOutItems.isEmpty {
+            let unclaimed = pendingDragOutItems
+            pendingDragOutItems.removeAll()
+            for item in unclaimed {
+                DragOutTransferCoordinator.shared.abandonUnclaimedDragOut(blobID: item.blobID)
+            }
         }
         let (x, y) = remotePoint(from: event)
         bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 2, button: 0, clickCount: UInt32(event.clickCount), modifiers: modifierMask(event.modifierFlags))
@@ -602,58 +618,75 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
             return
         }
         let local = convert(event.locationInWindow, from: nil)
-        // If Host already streamed the dragged file(s) and the user dragged past the proxy window boundary,
+        // As soon as Host notifies drag-out metadata (or finishes streaming) and cursor reaches the window edge,
         // hand off immediately to a native local macOS NSDraggingSession onto Client Desktop / Finder!
-        if !pendingDragOutFiles.isEmpty && !bounds.insetBy(dx: 8, dy: 8).contains(local) {
-            beginNativeLocalDragOut(with: pendingDragOutFiles, event: event)
+        if !pendingDragOutItems.isEmpty && !bounds.insetBy(dx: 2, dy: 2).contains(local) {
+            beginNativeLocalDragOut(with: pendingDragOutItems, event: event)
             return
         }
         let (x, y) = remotePoint(from: event)
         bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 3, button: 0, modifiers: modifierMask(event.modifierFlags))
     }
 
-    /// Receives file(s) streamed from Host when the user started dragging a file inside the remote window.
+    /// Receives drag-out file descriptor(s) from Host as soon as the user begins dragging inside the remote window.
     /// Returns `true` if this view accepted the drag-out (either queued while still inside window or started immediately).
-    func deliverDragOutFiles(_ urls: [URL]) -> Bool {
-        guard !urls.isEmpty, isLocalLeftMouseDown, !didStartLocalDragOut else {
+    func deliverDragOutItems(_ descriptors: [DragOutItemDescriptor]) -> Bool {
+        guard !descriptors.isEmpty, isLocalLeftMouseDown, !didStartLocalDragOut else {
             return false
         }
-        pendingDragOutFiles.append(contentsOf: urls)
+        for desc in descriptors where !pendingDragOutItems.contains(where: { $0.blobID == desc.blobID }) {
+            pendingDragOutItems.append(desc)
+        }
         if let ev = lastDragEvent {
             let local = convert(ev.locationInWindow, from: nil)
-            if !bounds.insetBy(dx: 8, dy: 8).contains(local) {
-                beginNativeLocalDragOut(with: pendingDragOutFiles, event: ev)
+            if !bounds.insetBy(dx: 2, dy: 2).contains(local) {
+                beginNativeLocalDragOut(with: pendingDragOutItems, event: ev)
             }
         }
         return true
     }
 
-    private func beginNativeLocalDragOut(with urls: [URL], event: NSEvent) {
-        guard !didStartLocalDragOut, !urls.isEmpty else { return }
-        didStartLocalDragOut = true
-        let files = urls
-        pendingDragOutFiles.removeAll()
-
-        // Cancel the remote Host-side drag cleanly (Esc + mouseUp) so Host never drops it onto its own desktop.
-        if remoteWindowID != 0 {
-            bridge.sendKey(windowID: remoteWindowID, keyCode: 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0)
-            bridge.sendKey(windowID: remoteWindowID, keyCode: 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0)
-            let (x, y) = remotePoint(from: event)
-            bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 2, button: 0, clickCount: 1, modifiers: 0)
-        }
-
+    private func beginNativeLocalDragOut(with descriptors: [DragOutItemDescriptor], event: NSEvent) {
+        guard !didStartLocalDragOut, !descriptors.isEmpty else { return }
         let localPt = convert(event.locationInWindow, from: nil)
-        let items: [NSDraggingItem] = files.enumerated().map { idx, url in
-            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 48, height: 48)
-            let offset = CGFloat(idx * 6)
-            let frame = NSRect(x: localPt.x - 24 + offset, y: localPt.y - 24 - offset, width: 48, height: 48)
-            item.setDraggingFrame(frame, contents: icon)
-            return item
+        var dragItems: [NSDraggingItem] = []
+        var claimedIDs: [String] = []
+        for (idx, desc) in descriptors.enumerated() {
+            if let item = DragOutTransferCoordinator.shared.makeDraggingItem(
+                for: desc,
+                localPoint: localPt,
+                offsetIndex: idx
+            ) {
+                dragItems.append(item)
+                claimedIDs.append(desc.blobID)
+            }
         }
-        onDebugLog?("已接管拖出 \(files.count) 个文件，可松手放到本机桌面/访达")
-        beginDraggingSession(with: items, event: event, source: self)
+        guard !dragItems.isEmpty else { return }
+
+        didStartLocalDragOut = true
+        activeDraggedOutBlobIDs = claimedIDs
+        pendingDragOutItems.removeAll()
+
+        // Cancel the remote Host-side drag safely: move the remote drag cursor to the non-drop-target top-left
+        // titlebar corner `(12, 12)` and send Esc BEFORE releasing `leftMouseUp` 45ms later, so WeChat never
+        // treats the release as dropping the file back into the active conversation or opening a file preview!
+        if remoteWindowID != 0 {
+            let winID = remoteWindowID
+            let b = bridge
+            b.sendMouse(windowID: winID, x: 12, y: 12, type: 3, button: 0, modifiers: 0)
+            b.sendKey(windowID: winID, keyCode: 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0)
+            b.sendKey(windowID: winID, keyCode: 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0)
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(45))
+                b.sendKey(windowID: winID, keyCode: 53 /* Esc */, isDown: true, isRepeat: false, modifiers: 0)
+                b.sendKey(windowID: winID, keyCode: 53 /* Esc */, isDown: false, isRepeat: false, modifiers: 0)
+                b.sendMouse(windowID: winID, x: 12, y: 12, type: 2, button: 0, clickCount: 0, modifiers: 0)
+            }
+        }
+
+        onDebugLog?("已接管拖出 \(dragItems.count) 个文件，可松手放到本机桌面/访达")
+        let session = beginDraggingSession(with: dragItems, event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = false
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
@@ -662,10 +695,13 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         // AppKit consumes the final mouseUp inside NSDraggingSession, so reset drag state cleanly here!
+        let finishedIDs = activeDraggedOutBlobIDs
+        activeDraggedOutBlobIDs.removeAll()
         isLocalLeftMouseDown = false
         didStartLocalDragOut = false
         lastDragEvent = nil
-        pendingDragOutFiles.removeAll()
+        pendingDragOutItems.removeAll()
+        DragOutTransferCoordinator.shared.noteDraggingSessionEnded(blobIDs: finishedIDs, operation: operation)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -995,15 +1031,19 @@ private final class FileDropOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setCount(_ count: Int) {
-        label.stringValue = count > 1 ? "松手发送 \(count) 个文件到远端窗口" : "松手发送文件到远端窗口"
+    func setCount(_ count: Int, targetTitle: String? = nil) {
+        let trimmed = (targetTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetDesc = trimmed.isEmpty ? "远端窗口" : "「\(trimmed)」"
+        label.stringValue = count > 1 ? "松手发送 \(count) 个文件到\(targetDesc)" : "松手发送文件到\(targetDesc)"
+        needsLayout = true
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func layout() {
         super.layout()
-        let pw: CGFloat = min(280, max(180, bounds.width - 40))
+        let fittingW = ceil(label.intrinsicContentSize.width) + 32
+        let pw: CGFloat = min(max(220, fittingW), max(220, bounds.width - 40))
         let ph: CGFloat = 42
         pill.frame = NSRect(x: (bounds.width - pw) / 2, y: (bounds.height - ph) / 2, width: pw, height: ph)
         label.frame = NSRect(x: 12, y: (ph - 20) / 2, width: pw - 24, height: 20)

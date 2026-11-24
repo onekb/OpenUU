@@ -193,6 +193,9 @@ message FileDropAction {
   float y = 3;
   string blob_id = 4;
   string filename = 5;
+  uint64 total_bytes = 6;
+  uint64 received_bytes = 7;
+  uint32 state = 8;            // 0 = COMPLETED, 1 = STARTED, 2 = PROGRESS, 3 = FAILED
 }
 
 message NotificationEvent {

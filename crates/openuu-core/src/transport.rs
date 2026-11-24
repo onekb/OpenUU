@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Once};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use iroh::{EndpointAddr, PublicKey, Signature};
@@ -276,6 +276,41 @@ impl BackendRecvStream {
                 .map_err(|e| OpenUUError::Wan(format!("iroh read failed: {e}"))),
         }
     }
+
+    fn stop_zero(&mut self) {
+        match self {
+            Self::Quinn(s) => {
+                let _ = s.stop(0u32.into());
+            }
+            Self::Iroh(s) => {
+                let _ = s.stop(0u32.into());
+            }
+        }
+    }
+}
+
+static CANCELLED_BLOBS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+
+pub fn cancel_incoming_blob(blob_id: &str) {
+    if blob_id.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = CANCELLED_BLOBS.lock() {
+        if !guard.iter().any(|x| x == blob_id) {
+            if guard.len() >= 256 {
+                guard.pop_front();
+            }
+            guard.push_back(blob_id.to_string());
+        }
+    }
+}
+
+fn is_blob_cancelled(blob_id: &str) -> bool {
+    CANCELLED_BLOBS
+        .lock()
+        .map(|g| g.iter().any(|x| x == blob_id))
+        .unwrap_or(false)
 }
 
 /// Sign TLS 1.3 channel-bound authentication token `"<endpoint_id>:<sig_hex>"` so peer identity cannot be
@@ -1245,26 +1280,117 @@ async fn read_blob_stream(
     if std::fs::create_dir_all(&inbox_dir).is_err() {
         return;
     }
+    let part_path = inbox_dir.join(format!(".{safe_filename}.part"));
     let dest_path = inbox_dir.join(&safe_filename);
-    let Ok(mut out_file) = std::fs::File::create(&dest_path) else {
+    let Ok(mut out_file) = std::fs::File::create(&part_path) else {
         return;
     };
 
+    // Notify local UI immediately with file metadata before streaming body bytes.
+    let _ = ctrl_tx
+        .send(pb::ControlEnvelope {
+            seq: 0,
+            payload: Some(pb::control_envelope::Payload::FileDrop(pb::FileDropAction {
+                window_id,
+                x,
+                y,
+                blob_id: blob_id.clone(),
+                filename: safe_filename.clone(),
+                total_bytes: file_size,
+                received_bytes: 0,
+                state: 1, // STARTED
+            })),
+        })
+        .await;
+
     let mut buf = vec![0u8; 64 * 1024];
     let mut remaining = file_size;
+    let mut last_progress_emit = Instant::now();
+    let mut failed = false;
     while remaining > 0 {
+        if is_blob_cancelled(&blob_id) || is_blob_cancelled(&safe_blob_id) {
+            stream.stop_zero();
+            failed = true;
+            break;
+        }
         let to_read = (remaining as usize).min(buf.len());
         match stream.read_chunk(&mut buf[..to_read]).await {
             Ok(Some(n)) if n > 0 => {
                 if out_file.write_all(&buf[..n]).is_err() {
-                    return;
+                    failed = true;
+                    break;
                 }
                 remaining -= n as u64;
+                if remaining > 0 && last_progress_emit.elapsed() >= Duration::from_millis(100) {
+                    last_progress_emit = Instant::now();
+                    let _ = ctrl_tx
+                        .send(pb::ControlEnvelope {
+                            seq: 0,
+                            payload: Some(pb::control_envelope::Payload::FileDrop(
+                                pb::FileDropAction {
+                                    window_id,
+                                    x,
+                                    y,
+                                    blob_id: blob_id.clone(),
+                                    filename: safe_filename.clone(),
+                                    total_bytes: file_size,
+                                    received_bytes: file_size - remaining,
+                                    state: 2, // PROGRESS
+                                },
+                            )),
+                        })
+                        .await;
+                }
             }
-            _ => return,
+            _ => {
+                failed = true;
+                break;
+            }
         }
     }
+
     let _ = out_file.flush();
+    drop(out_file);
+
+    if failed || is_blob_cancelled(&blob_id) || is_blob_cancelled(&safe_blob_id) {
+        let _ = std::fs::remove_dir_all(&inbox_dir);
+        let _ = ctrl_tx
+            .send(pb::ControlEnvelope {
+                seq: 0,
+                payload: Some(pb::control_envelope::Payload::FileDrop(pb::FileDropAction {
+                    window_id,
+                    x,
+                    y,
+                    blob_id,
+                    filename: safe_filename,
+                    total_bytes: file_size,
+                    received_bytes: file_size.saturating_sub(remaining),
+                    state: 3, // FAILED / CANCELLED
+                })),
+            })
+            .await;
+        return;
+    }
+
+    if std::fs::rename(&part_path, &dest_path).is_err() {
+        let _ = std::fs::remove_dir_all(&inbox_dir);
+        let _ = ctrl_tx
+            .send(pb::ControlEnvelope {
+                seq: 0,
+                payload: Some(pb::control_envelope::Payload::FileDrop(pb::FileDropAction {
+                    window_id,
+                    x,
+                    y,
+                    blob_id,
+                    filename: safe_filename,
+                    total_bytes: file_size,
+                    received_bytes: file_size,
+                    state: 3, // FAILED
+                })),
+            })
+            .await;
+        return;
+    }
 
     let saved_path = dest_path.to_string_lossy().to_string();
     let env = pb::ControlEnvelope {
@@ -1275,6 +1401,9 @@ async fn read_blob_stream(
             y,
             blob_id,
             filename: saved_path,
+            total_bytes: file_size,
+            received_bytes: file_size,
+            state: 0, // COMPLETED
         })),
     };
     let _ = ctrl_tx.send(env).await;
