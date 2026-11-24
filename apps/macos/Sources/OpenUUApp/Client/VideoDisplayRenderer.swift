@@ -155,6 +155,8 @@ final class VideoDisplayRenderer: @unchecked Sendable {
 
     init() {
         displayLayer.backgroundColor = CGColor.clear
+        displayLayer.minificationFilter = .trilinear
+        displayLayer.magnificationFilter = .linear
         displayLayer.actions = [
             "contents": NSNull(),
             "bounds": NSNull(),
@@ -186,6 +188,9 @@ final class VideoDisplayRenderer: @unchecked Sendable {
     func configureOnMainActor() {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = CGColor.clear
+        displayLayer.minificationFilter = .trilinear
+        displayLayer.magnificationFilter = .linear
+        displayLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         sbRenderer = displayLayer.sampleBufferRenderer
         if let tb = controlTimebase {
             displayLayer.controlTimebase = tb
@@ -577,9 +582,6 @@ final class VideoDisplayRenderer: @unchecked Sendable {
         }
         if merged[kCMFormatDescriptionExtension_YCbCrMatrix] == nil {
             merged[kCMFormatDescriptionExtension_YCbCrMatrix] = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2
-        }
-        if rawExts[kCMFormatDescriptionExtension_ColorPrimaries] == nil {
-            merged[kCMFormatDescriptionExtension_FullRangeVideo] = kCFBooleanTrue
         }
 
         let dims = CMVideoFormatDescriptionGetDimensions(baseDesc)

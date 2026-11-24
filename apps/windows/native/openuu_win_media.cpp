@@ -78,42 +78,228 @@ uint64_t compute_bgra_fast_hash(const uint8_t *bgra, int width, int height, int 
     return hash;
 }
 
+void query_physical_screen_size(int32_t *out_w, int32_t *out_h) {
+    int32_t w = GetSystemMetrics(SM_CXSCREEN);
+    int32_t h = GetSystemMetrics(SM_CYSCREEN);
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm)) {
+        if (dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
+            w = static_cast<int32_t>(dm.dmPelsWidth);
+            h = static_cast<int32_t>(dm.dmPelsHeight);
+        }
+    }
+    if (out_w) *out_w = std::max(640, w);
+    if (out_h) *out_h = std::max(480, h);
+}
+
+struct FilterSpan {
+    int32_t start;
+    int32_t count;
+    uint16_t weights[6]; // Normalized so sum(weights[0..count-1]) == 256
+};
+
+void build_filter_spans(int32_t src_len, int32_t dst_len, std::vector<FilterSpan> &spans) {
+    spans.resize(static_cast<size_t>(dst_len));
+    if (dst_len <= 0 || src_len <= 0) return;
+
+    if (dst_len < src_len) {
+        // Exact box-area integration for downscaling: every source scanline/column contributes proportional weight,
+        // guaranteeing 1px horizontal and vertical font strokes are NEVER skipped!
+        for (int32_t d = 0; d < dst_len; ++d) {
+            const int64_t s0_fp = (static_cast<int64_t>(d) * src_len * 256) / dst_len;
+            const int64_t s1_fp = (static_cast<int64_t>(d + 1) * src_len * 256) / dst_len;
+            int32_t i0 = std::clamp(static_cast<int32_t>(s0_fp >> 8), 0, src_len - 1);
+            int32_t i1 = std::clamp(static_cast<int32_t>((std::max(s0_fp, s1_fp - 1)) >> 8), i0, src_len - 1);
+            int32_t cnt = std::min(6, i1 - i0 + 1);
+
+            int64_t raw[6] = {};
+            int64_t rawSum = 0;
+            for (int32_t k = 0; k < cnt; ++k) {
+                const int64_t p0 = static_cast<int64_t>(i0 + k) * 256;
+                const int64_t p1 = p0 + 256;
+                const int64_t ov = std::max<int64_t>(1, std::min(s1_fp, p1) - std::max(s0_fp, p0));
+                raw[k] = ov;
+                rawSum += ov;
+            }
+
+            FilterSpan sp = {};
+            sp.start = i0;
+            sp.count = cnt;
+            int32_t normSum = 0;
+            for (int32_t k = 0; k < cnt; ++k) {
+                uint16_t w = static_cast<uint16_t>((raw[k] * 256 + rawSum / 2) / rawSum);
+                sp.weights[k] = w;
+                normSum += w;
+            }
+            sp.weights[0] = static_cast<uint16_t>(static_cast<int32_t>(sp.weights[0]) + (256 - normSum));
+            spans[static_cast<size_t>(d)] = sp;
+        }
+    } else {
+        // Center-aligned bilinear interpolation for 1:1 or upscaling
+        for (int32_t d = 0; d < dst_len; ++d) {
+            int64_t fp = ((static_cast<int64_t>(d) * 2 + 1) * src_len * 128) / dst_len - 128;
+            const int64_t maxFp = static_cast<int64_t>(src_len - 1) * 256;
+            fp = std::clamp<int64_t>(fp, 0, maxFp);
+            int32_t i0 = static_cast<int32_t>(fp >> 8);
+            uint16_t frac = static_cast<uint16_t>(fp & 255);
+
+            FilterSpan sp = {};
+            sp.start = i0;
+            if (frac == 0 || i0 + 1 >= src_len) {
+                sp.count = 1;
+                sp.weights[0] = 256;
+            } else {
+                sp.count = 2;
+                sp.weights[0] = static_cast<uint16_t>(256 - frac);
+                sp.weights[1] = frac;
+            }
+            spans[static_cast<size_t>(d)] = sp;
+        }
+    }
+}
+
+void resample_bgra_area_bilinear(
+    const uint8_t *src_bgra,
+    int32_t src_stride,
+    int32_t src_w,
+    int32_t src_h,
+    uint8_t *dst_bgra,
+    int32_t dst_stride,
+    int32_t dst_w,
+    int32_t dst_h
+) {
+    if (!src_bgra || !dst_bgra || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
+
+    if (src_w == dst_w && src_h == dst_h) {
+        const size_t rowBytes = static_cast<size_t>(dst_w) * 4;
+        for (int32_t y = 0; y < dst_h; ++y) {
+            uint8_t *dRow = dst_bgra + static_cast<size_t>(y) * dst_stride;
+            std::memcpy(dRow, src_bgra + static_cast<size_t>(y) * src_stride, rowBytes);
+            for (int32_t x = 0; x < dst_w; ++x) {
+                dRow[x * 4 + 3] = 255;
+            }
+        }
+        return;
+    }
+
+    std::vector<FilterSpan> xSpans;
+    std::vector<FilterSpan> ySpans;
+    build_filter_spans(src_w, dst_w, xSpans);
+    build_filter_spans(src_h, dst_h, ySpans);
+
+    // 8-slot rolling horizontal row cache (each source row is horizontally filtered at most once)
+    constexpr int kCacheSlots = 8;
+    const size_t hRowStride = static_cast<size_t>(dst_w) * 3;
+    std::vector<uint8_t> hCacheBuf(static_cast<size_t>(kCacheSlots) * hRowStride);
+    int32_t cachedSy[kCacheSlots];
+    for (int i = 0; i < kCacheSlots; ++i) cachedSy[i] = -1;
+
+    auto getHorizontalRow = [&](int32_t sy) -> const uint8_t * {
+        const int slot = sy & (kCacheSlots - 1);
+        uint8_t *slotPtr = hCacheBuf.data() + static_cast<size_t>(slot) * hRowStride;
+        if (cachedSy[slot] == sy) {
+            return slotPtr;
+        }
+        cachedSy[slot] = sy;
+        const uint8_t *sRow = src_bgra + static_cast<size_t>(sy) * src_stride;
+        for (int32_t dx = 0; dx < dst_w; ++dx) {
+            const FilterSpan &xs = xSpans[static_cast<size_t>(dx)];
+            uint32_t accB = 128, accG = 128, accR = 128;
+            const uint8_t *p = sRow + static_cast<size_t>(xs.start) * 4;
+            for (int32_t k = 0; k < xs.count; ++k) {
+                const uint32_t w = xs.weights[k];
+                accB += static_cast<uint32_t>(p[k * 4 + 0]) * w;
+                accG += static_cast<uint32_t>(p[k * 4 + 1]) * w;
+                accR += static_cast<uint32_t>(p[k * 4 + 2]) * w;
+            }
+            slotPtr[dx * 3 + 0] = static_cast<uint8_t>(accB >> 8);
+            slotPtr[dx * 3 + 1] = static_cast<uint8_t>(accG >> 8);
+            slotPtr[dx * 3 + 2] = static_cast<uint8_t>(accR >> 8);
+        }
+        return slotPtr;
+    };
+
+    for (int32_t dy = 0; dy < dst_h; ++dy) {
+        const FilterSpan &ys = ySpans[static_cast<size_t>(dy)];
+        const uint8_t *rows[6] = {};
+        for (int32_t k = 0; k < ys.count; ++k) {
+            rows[k] = getHorizontalRow(ys.start + k);
+        }
+
+        uint8_t *dRow = dst_bgra + static_cast<size_t>(dy) * dst_stride;
+        if (ys.count == 1) {
+            const uint8_t *r0 = rows[0];
+            for (int32_t dx = 0; dx < dst_w; ++dx) {
+                dRow[dx * 4 + 0] = r0[dx * 3 + 0];
+                dRow[dx * 4 + 1] = r0[dx * 3 + 1];
+                dRow[dx * 4 + 2] = r0[dx * 3 + 2];
+                dRow[dx * 4 + 3] = 255;
+            }
+        } else {
+            for (int32_t dx = 0; dx < dst_w; ++dx) {
+                uint32_t accB = 128, accG = 128, accR = 128;
+                const size_t off = static_cast<size_t>(dx) * 3;
+                for (int32_t k = 0; k < ys.count; ++k) {
+                    const uint32_t w = ys.weights[k];
+                    accB += static_cast<uint32_t>(rows[k][off + 0]) * w;
+                    accG += static_cast<uint32_t>(rows[k][off + 1]) * w;
+                    accR += static_cast<uint32_t>(rows[k][off + 2]) * w;
+                }
+                dRow[dx * 4 + 0] = static_cast<uint8_t>(accB >> 8);
+                dRow[dx * 4 + 1] = static_cast<uint8_t>(accG >> 8);
+                dRow[dx * 4 + 2] = static_cast<uint8_t>(accR >> 8);
+                dRow[dx * 4 + 3] = 255;
+            }
+        }
+    }
+}
+
 void convert_bgra_to_nv12_bt709(
     const uint8_t *bgra,
     int bgra_stride,
+    int src_width,
+    int src_height,
     uint8_t *dst_y,
     int y_stride,
     uint8_t *dst_uv,
     int uv_stride,
-    int width,
-    int height
+    int enc_width,
+    int enc_height
 ) {
-    const int evenW = width & ~1;
-    const int evenH = height & ~1;
+    const int evenEncW = enc_width & ~1;
+    const int evenEncH = enc_height & ~1;
+    const int maxSrcX = std::max(0, src_width - 1);
+    const int maxSrcY = std::max(0, src_height - 1);
 
-    for (int y = 0; y < evenH; y += 2) {
-        const uint8_t *srcRow0 = bgra + static_cast<size_t>(y) * bgra_stride;
-        const uint8_t *srcRow1 = bgra + static_cast<size_t>(y + 1) * bgra_stride;
+    for (int y = 0; y < evenEncH; y += 2) {
+        const int sy0 = std::min(y, maxSrcY);
+        const int sy1 = std::min(y + 1, maxSrcY);
+        const uint8_t *srcRow0 = bgra + static_cast<size_t>(sy0) * bgra_stride;
+        const uint8_t *srcRow1 = bgra + static_cast<size_t>(sy1) * bgra_stride;
         uint8_t *yRow0 = dst_y + static_cast<size_t>(y) * y_stride;
         uint8_t *yRow1 = dst_y + static_cast<size_t>(y + 1) * y_stride;
         uint8_t *uvRow = dst_uv + static_cast<size_t>(y / 2) * uv_stride;
 
-        for (int x = 0; x < evenW; x += 2) {
-            const int b00 = srcRow0[(x + 0) * 4 + 0];
-            const int g00 = srcRow0[(x + 0) * 4 + 1];
-            const int r00 = srcRow0[(x + 0) * 4 + 2];
+        for (int x = 0; x < evenEncW; x += 2) {
+            const int sx0 = std::min(x, maxSrcX);
+            const int sx1 = std::min(x + 1, maxSrcX);
 
-            const int b01 = srcRow0[(x + 1) * 4 + 0];
-            const int g01 = srcRow0[(x + 1) * 4 + 1];
-            const int r01 = srcRow0[(x + 1) * 4 + 2];
+            const int b00 = srcRow0[sx0 * 4 + 0];
+            const int g00 = srcRow0[sx0 * 4 + 1];
+            const int r00 = srcRow0[sx0 * 4 + 2];
 
-            const int b10 = srcRow1[(x + 0) * 4 + 0];
-            const int g10 = srcRow1[(x + 0) * 4 + 1];
-            const int r10 = srcRow1[(x + 0) * 4 + 2];
+            const int b01 = srcRow0[sx1 * 4 + 0];
+            const int g01 = srcRow0[sx1 * 4 + 1];
+            const int r01 = srcRow0[sx1 * 4 + 2];
 
-            const int b11 = srcRow1[(x + 1) * 4 + 0];
-            const int g11 = srcRow1[(x + 1) * 4 + 1];
-            const int r11 = srcRow1[(x + 1) * 4 + 2];
+            const int b10 = srcRow1[sx0 * 4 + 0];
+            const int g10 = srcRow1[sx0 * 4 + 1];
+            const int r10 = srcRow1[sx0 * 4 + 2];
+
+            const int b11 = srcRow1[sx1 * 4 + 0];
+            const int g11 = srcRow1[sx1 * 4 + 1];
+            const int r11 = srcRow1[sx1 * 4 + 2];
 
             // BT.709 studio-range Y [16..235]
             yRow0[x + 0] = clamp_u8(((47 * r00 + 157 * g00 + 16 * b00 + 128) >> 8) + 16);
@@ -241,6 +427,8 @@ struct OpenUUWinEncoder {
     bool isAsync = false;
     bool isHardware = false;
     uint8_t codec = 1; // 1 = H.264, 2 = HEVC
+    int32_t srcWidth = 0;
+    int32_t srcHeight = 0;
     int32_t width = 0;
     int32_t height = 0;
     int32_t fps = 30;
@@ -363,6 +551,7 @@ bool try_init_encoder_mft(
         if (codecApi) {
             set_variant_bool_or_u32(codecApi.Get(), CODECAPI_AVLowLatencyMode, true);
             set_variant_u32(codecApi.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+            set_variant_u32(codecApi.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 72);
             set_variant_u32(codecApi.Get(), CODECAPI_AVEncMPVGOPSize, static_cast<uint32_t>(std::max(24, enc->fps) * 60));
         }
 
@@ -376,22 +565,59 @@ bool try_init_encoder_mft(
         outType->SetGUID(MF_MT_SUBTYPE, outInfo.guidSubtype);
         outType->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(enc->bitrate));
         outType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+        outType->SetUINT32(MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709);
+        outType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709);
+        outType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
         MFSetAttributeSize(outType.Get(), MF_MT_FRAME_SIZE, static_cast<UINT32>(enc->width), static_cast<UINT32>(enc->height));
         MFSetAttributeRatio(outType.Get(), MF_MT_FRAME_RATE, static_cast<UINT32>(enc->fps), 1);
         MFSetAttributeRatio(outType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-        if (targetCodec == 1) {
-            // Prefer Baseline profile first so SPS guarantees zero reorder frames (instant 0-frame DPB latency)
-            outType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
+
+        if (enc->srcWidth > 0 && enc->srcHeight > 0 &&
+            (enc->srcWidth != enc->width || enc->srcHeight != enc->height)) {
+            MFVideoArea area = {};
+            area.Area.cx = enc->srcWidth;
+            area.Area.cy = enc->srcHeight;
+            outType->SetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<const UINT8 *>(&area), sizeof(area));
         }
 
-        if (FAILED(mft->SetOutputType(outId, outType.Get(), 0))) {
-            if (targetCodec == 1) {
-                outType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
+        bool outSet = false;
+        if (targetCodec == 1) {
+            // Prefer High Profile (CABAC + 8x8 transform) for ~30% sharper text/UI glyph edges at the same bitrate,
+            // while CODECAPI_AVLowLatencyMode + BPictureCount=0 guarantees zero reorder frames (instant 0-frame DPB latency).
+            const UINT32 profiles[3] = {
+                eAVEncH264VProfile_High,
+                eAVEncH264VProfile_Main,
+                eAVEncH264VProfile_Base
+            };
+            for (int pass = 0; pass < 2 && !outSet; ++pass) {
+                if (pass == 1) {
+                    outType->DeleteItem(MF_MT_VIDEO_PRIMARIES);
+                    outType->DeleteItem(MF_MT_YUV_MATRIX);
+                    outType->DeleteItem(MF_MT_VIDEO_NOMINAL_RANGE);
+                }
+                for (UINT32 prof : profiles) {
+                    outType->SetUINT32(MF_MT_MPEG2_PROFILE, prof);
+                    if (SUCCEEDED(mft->SetOutputType(outId, outType.Get(), 0))) {
+                        outSet = true;
+                        break;
+                    }
+                }
             }
-            if (FAILED(mft->SetOutputType(outId, outType.Get(), 0))) {
-                activates[i]->ShutdownObject();
-                continue;
+        } else {
+            if (SUCCEEDED(mft->SetOutputType(outId, outType.Get(), 0))) {
+                outSet = true;
+            } else {
+                outType->DeleteItem(MF_MT_VIDEO_PRIMARIES);
+                outType->DeleteItem(MF_MT_YUV_MATRIX);
+                outType->DeleteItem(MF_MT_VIDEO_NOMINAL_RANGE);
+                if (SUCCEEDED(mft->SetOutputType(outId, outType.Get(), 0))) {
+                    outSet = true;
+                }
             }
+        }
+        if (!outSet) {
+            activates[i]->ShutdownObject();
+            continue;
         }
 
         // 2. Select NV12 Input MediaType
@@ -408,6 +634,14 @@ bool try_init_encoder_mft(
                 MFSetAttributeRatio(avail.Get(), MF_MT_FRAME_RATE, static_cast<UINT32>(enc->fps), 1);
                 MFSetAttributeRatio(avail.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
                 avail->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+                avail->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709);
+                avail->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
+                if (SUCCEEDED(mft->SetInputType(inId, avail.Get(), 0))) {
+                    inSet = true;
+                    break;
+                }
+                avail->DeleteItem(MF_MT_YUV_MATRIX);
+                avail->DeleteItem(MF_MT_VIDEO_NOMINAL_RANGE);
                 if (SUCCEEDED(mft->SetInputType(inId, avail.Get(), 0))) {
                     inSet = true;
                     break;
@@ -436,6 +670,7 @@ bool try_init_encoder_mft(
         if (codecApi) {
             set_variant_bool_or_u32(codecApi.Get(), CODECAPI_AVLowLatencyMode, true);
             set_variant_u32(codecApi.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+            set_variant_u32(codecApi.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 72);
         }
 
         MFT_OUTPUT_STREAM_INFO outStreamInfo = {};
@@ -587,33 +822,42 @@ OPENUU_MEDIA_API OpenUUWinEncoder *openuu_encoder_create(
     ensure_mf_started();
     if (FAILED(g_mfInitHr)) return nullptr;
 
-    // Macroblock-align (16x16) for universal H.264 / HEVC hardware & software MFT compatibility
-    width = std::max(64, (width + 7) & ~15);
-    height = std::max(64, (height + 7) & ~15);
+    // Preserve exact even dimensions (e.g. 1920x1080) without vertical/horizontal stretching!
+    const int32_t evenW = std::max(64, width & ~1);
+    const int32_t evenH = std::max(64, height & ~1);
     fps = std::clamp(fps, 15, 60);
     bitrate_bps = std::max(500000, bitrate_bps);
 
     auto *enc = new OpenUUWinEncoder();
-    enc->width = width;
-    enc->height = height;
+    enc->srcWidth = evenW;
+    enc->srcHeight = evenH;
+    enc->width = evenW;
+    enc->height = evenH;
     enc->fps = fps;
     enc->bitrate = bitrate_bps;
-    enc->nv12Scratch.resize(static_cast<size_t>(width) * height * 3 / 2, 0);
 
-    // Prefer synchronous MFT first for deterministic zero-deadlock low-latency operation across all GPUs/VMs,
-    // and support HEVC when requested & installed (falling back to H.264 automatically).
-    bool initialized = false;
-    if (preferred_codec == 2) {
-        initialized = try_init_encoder_mft(enc, 2, false) || try_init_encoder_mft(enc, 2, true);
-    }
-    if (!initialized) {
-        initialized = try_init_encoder_mft(enc, 1, false) || try_init_encoder_mft(enc, 1, true);
+    auto tryAllCodecs = [&]() -> bool {
+        if (preferred_codec == 2) {
+            if (try_init_encoder_mft(enc, 2, false) || try_init_encoder_mft(enc, 2, true)) {
+                return true;
+            }
+        }
+        return try_init_encoder_mft(enc, 1, false) || try_init_encoder_mft(enc, 1, true);
+    };
+
+    bool initialized = tryAllCodecs();
+    if (!initialized && ((evenW & 15) != 0 || (evenH & 15) != 0)) {
+        // Fallback for legacy MFTs requiring 16x16 macroblock-aligned buffers: pad edge pixels without stretching!
+        enc->width = (evenW + 15) & ~15;
+        enc->height = (evenH + 15) & ~15;
+        initialized = tryAllCodecs();
     }
     if (!initialized) {
         delete enc;
         return nullptr;
     }
 
+    enc->nv12Scratch.resize(static_cast<size_t>(enc->width) * enc->height * 3 / 2, 0);
     if (out_actual_codec) *out_actual_codec = enc->codec;
     if (out_is_hw) *out_is_hw = enc->isHardware ? 1 : 0;
     return enc;
@@ -675,6 +919,8 @@ OPENUU_MEDIA_API int32_t openuu_encoder_encode_bgra(
     convert_bgra_to_nv12_bt709(
         bgra_data,
         bgra_stride,
+        enc->srcWidth > 0 ? enc->srcWidth : w,
+        enc->srcHeight > 0 ? enc->srcHeight : h,
         nv12Ptr,
         w,
         nv12Ptr + ySize,
@@ -1276,8 +1522,8 @@ OPENUU_MEDIA_API int32_t openuu_capture_hwnd_bgra(
 
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = dst_width;
-    bmi.bmiHeader.biHeight = -dst_height; // Top-down BGRA
+    bmi.bmiHeader.biWidth = srcCropW;
+    bmi.bmiHeader.biHeight = -srcCropH; // Top-down BGRA at native source crop resolution
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -1289,23 +1535,21 @@ OPENUU_MEDIA_API int32_t openuu_capture_hwnd_bgra(
 
     if (dstBmp && dibBits) {
         HGDIOBJ oldDst = SelectObject(dstDC, dstBmp);
-        SetStretchBltMode(dstDC, HALFTONE);
-        SetBrushOrgEx(dstDC, 0, 0, nullptr);
-        StretchBlt(dstDC, 0, 0, dst_width, dst_height, srcDC, srcCropX, srcCropY, srcCropW, srcCropH, SRCCOPY);
+        // Copy 1:1 with BitBlt (never StretchBlt HALFTONE, which softens 1px ClearType font strokes even at 1:1!)
+        BitBlt(dstDC, 0, 0, srcCropW, srcCropH, srcDC, srcCropX, srcCropY, SRCCOPY);
         GdiFlush();
 
-        const int srcRowBytes = dst_width * 4;
-        const int targetStride = out_stride >= srcRowBytes ? out_stride : srcRowBytes;
-        const uint8_t *srcBytes = static_cast<const uint8_t *>(dibBits);
-        for (int y = 0; y < dst_height; ++y) {
-            uint8_t *dstRow = out_bgra + static_cast<size_t>(y) * targetStride;
-            const uint8_t *sRow = srcBytes + static_cast<size_t>(y) * srcRowBytes;
-            std::memcpy(dstRow, sRow, srcRowBytes);
-            // Force opaque alpha=255 in case GDI operations left alpha=0
-            for (int x = 0; x < dst_width; ++x) {
-                dstRow[x * 4 + 3] = 255;
-            }
-        }
+        const int targetStride = out_stride >= dst_width * 4 ? out_stride : (dst_width * 4);
+        resample_bgra_area_bilinear(
+            static_cast<const uint8_t *>(dibBits),
+            srcCropW * 4,
+            srcCropW,
+            srcCropH,
+            out_bgra,
+            targetStride,
+            dst_width,
+            dst_height
+        );
         if (out_frame_hash) {
             *out_frame_hash = compute_bgra_fast_hash(out_bgra, dst_width, dst_height, targetStride);
         }
@@ -1324,8 +1568,7 @@ OPENUU_MEDIA_API int32_t openuu_capture_hwnd_bgra(
 
 OPENUU_MEDIA_API OpenUUDxgiCapturer *openuu_dxgi_capturer_create(int32_t *out_screen_w, int32_t *out_screen_h) {
     auto *cap = new OpenUUDxgiCapturer();
-    cap->screenW = GetSystemMetrics(SM_CXSCREEN);
-    cap->screenH = GetSystemMetrics(SM_CYSCREEN);
+    query_physical_screen_size(&cap->screenW, &cap->screenH);
 
     D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
     D3D_FEATURE_LEVEL actualLevel = D3D_FEATURE_LEVEL_11_0;
@@ -1423,29 +1666,16 @@ OPENUU_MEDIA_API int32_t openuu_dxgi_capturer_grab_bgra(
                         D3D11_MAPPED_SUBRESOURCE mapped = {};
                         if (SUCCEEDED(cap->context->Map(cap->stagingTex.Get(), 0, D3D11_MAP_READ, 0, &mapped)) && mapped.pData) {
                             const uint8_t *srcBase = static_cast<const uint8_t *>(mapped.pData);
-                            if (dst_width == cap->screenW && dst_height == cap->screenH) {
-                                for (int y = 0; y < dst_height; ++y) {
-                                    std::memcpy(
-                                        out_bgra + static_cast<size_t>(y) * targetStride,
-                                        srcBase + static_cast<size_t>(y) * mapped.RowPitch,
-                                        static_cast<size_t>(dst_width) * 4
-                                    );
-                                }
-                            } else {
-                                for (int y = 0; y < dst_height; ++y) {
-                                    int sy = (y * cap->screenH) / dst_height;
-                                    const uint32_t *sRow = reinterpret_cast<const uint32_t *>(
-                                        srcBase + static_cast<size_t>(sy) * mapped.RowPitch
-                                    );
-                                    uint32_t *dRow = reinterpret_cast<uint32_t *>(
-                                        out_bgra + static_cast<size_t>(y) * targetStride
-                                    );
-                                    for (int x = 0; x < dst_width; ++x) {
-                                        int sx = (x * cap->screenW) / dst_width;
-                                        dRow[x] = sRow[sx] | 0xFF000000u;
-                                    }
-                                }
-                            }
+                            resample_bgra_area_bilinear(
+                                srcBase,
+                                static_cast<int32_t>(mapped.RowPitch),
+                                cap->screenW,
+                                cap->screenH,
+                                out_bgra,
+                                targetStride,
+                                dst_width,
+                                dst_height
+                            );
                             cap->context->Unmap(cap->stagingTex.Get(), 0);
                             copied = true;
                         }
@@ -1468,21 +1698,16 @@ OPENUU_MEDIA_API int32_t openuu_dxgi_capturer_grab_bgra(
         }
     }
 
-    // Reliable GDI fallback: BitBlt supports CAPTUREBLT (layered windows), then StretchBlt scales with SRCCOPY
+    // Reliable GDI fallback: capture 1:1 into top-down DIBSection, then area-average resample only when scaled
     HDC screenDC = GetDC(nullptr);
     if (!screenDC) return -2;
-    int scrW = GetSystemMetrics(SM_CXSCREEN);
-    int scrH = GetSystemMetrics(SM_CYSCREEN);
-
-    HDC fullDC = CreateCompatibleDC(screenDC);
-    HBITMAP fullBmp = CreateCompatibleBitmap(screenDC, scrW, scrH);
-    HGDIOBJ oldFull = SelectObject(fullDC, fullBmp);
-    BitBlt(fullDC, 0, 0, scrW, scrH, screenDC, 0, 0, SRCCOPY | CAPTUREBLT);
+    int32_t scrW = 0, scrH = 0;
+    query_physical_screen_size(&scrW, &scrH);
 
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = dst_width;
-    bmi.bmiHeader.biHeight = -dst_height;
+    bmi.bmiHeader.biWidth = scrW;
+    bmi.bmiHeader.biHeight = -scrH;
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -1493,18 +1718,19 @@ OPENUU_MEDIA_API int32_t openuu_dxgi_capturer_grab_bgra(
     int32_t rc = -3;
     if (dib && dibBits) {
         HGDIOBJ old = SelectObject(memDC, dib);
-        SetStretchBltMode(memDC, HALFTONE);
-        SetBrushOrgEx(memDC, 0, 0, nullptr);
-        StretchBlt(memDC, 0, 0, dst_width, dst_height, fullDC, 0, 0, scrW, scrH, SRCCOPY);
+        BitBlt(memDC, 0, 0, scrW, scrH, screenDC, 0, 0, SRCCOPY | CAPTUREBLT);
         GdiFlush();
 
-        const int rowBytes = dst_width * 4;
-        const uint8_t *sBase = static_cast<const uint8_t *>(dibBits);
-        for (int y = 0; y < dst_height; ++y) {
-            uint8_t *dRow = out_bgra + static_cast<size_t>(y) * targetStride;
-            std::memcpy(dRow, sBase + static_cast<size_t>(y) * rowBytes, rowBytes);
-            for (int x = 0; x < dst_width; ++x) dRow[x * 4 + 3] = 255;
-        }
+        resample_bgra_area_bilinear(
+            static_cast<const uint8_t *>(dibBits),
+            scrW * 4,
+            scrW,
+            scrH,
+            out_bgra,
+            targetStride,
+            dst_width,
+            dst_height
+        );
         if (out_frame_hash) {
             *out_frame_hash = compute_bgra_fast_hash(out_bgra, dst_width, dst_height, targetStride);
         }
@@ -1513,9 +1739,6 @@ OPENUU_MEDIA_API int32_t openuu_dxgi_capturer_grab_bgra(
     }
     if (dib) DeleteObject(dib);
     if (memDC) DeleteDC(memDC);
-    SelectObject(fullDC, oldFull);
-    if (fullBmp) DeleteObject(fullBmp);
-    if (fullDC) DeleteDC(fullDC);
     ReleaseDC(nullptr, screenDC);
     return rc;
 }

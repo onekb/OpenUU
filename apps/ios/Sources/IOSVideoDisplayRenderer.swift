@@ -62,6 +62,9 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
     init() {
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = UIColor.clear.cgColor
+        displayLayer.minificationFilter = .trilinear
+        displayLayer.magnificationFilter = .linear
+        displayLayer.contentsScale = UIScreen.main.scale
         displayLayer.actions = [
             "contents": NSNull(),
             "bounds": NSNull(),
@@ -483,7 +486,8 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
                 }
             }
         }
-        return status == noErr ? desc : nil
+        guard status == noErr, let desc else { return nil }
+        return ensureColorSpaceExtensions(desc, codecType: kCMVideoCodecType_HEVC)
     }
 
     private func makeH264FormatDescription(sps: Data, pps: Data) -> CMVideoFormatDescription? {
@@ -506,6 +510,43 @@ final class IOSVideoDisplayRenderer: @unchecked Sendable {
                 )
             }
         }
-        return status == noErr ? desc : nil
+        guard status == noErr, let desc else { return nil }
+        return ensureColorSpaceExtensions(desc, codecType: kCMVideoCodecType_H264)
+    }
+
+    private func ensureColorSpaceExtensions(
+        _ baseDesc: CMVideoFormatDescription,
+        codecType: CMVideoCodecType
+    ) -> CMVideoFormatDescription {
+        let rawExts = (CMFormatDescriptionGetExtensions(baseDesc) as? [CFString: Any]) ?? [:]
+        let hadExplicitVUI = rawExts[kCMFormatDescriptionExtension_ColorPrimaries] != nil &&
+            rawExts[kCMFormatDescriptionExtension_TransferFunction] != nil &&
+            rawExts[kCMFormatDescriptionExtension_YCbCrMatrix] != nil
+        if hadExplicitVUI {
+            return baseDesc
+        }
+
+        var merged = rawExts
+        if merged[kCMFormatDescriptionExtension_ColorPrimaries] == nil {
+            merged[kCMFormatDescriptionExtension_ColorPrimaries] = kCMFormatDescriptionColorPrimaries_ITU_R_709_2
+        }
+        if merged[kCMFormatDescriptionExtension_TransferFunction] == nil {
+            merged[kCMFormatDescriptionExtension_TransferFunction] = kCMFormatDescriptionTransferFunction_sRGB
+        }
+        if merged[kCMFormatDescriptionExtension_YCbCrMatrix] == nil {
+            merged[kCMFormatDescriptionExtension_YCbCrMatrix] = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2
+        }
+
+        let dims = CMVideoFormatDescriptionGetDimensions(baseDesc)
+        var enriched: CMVideoFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: codecType,
+            width: dims.width,
+            height: dims.height,
+            extensions: merged as CFDictionary,
+            formatDescriptionOut: &enriched
+        )
+        return (status == noErr && enriched != nil) ? enriched! : baseDesc
     }
 }

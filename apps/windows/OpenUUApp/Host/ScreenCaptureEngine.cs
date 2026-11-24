@@ -34,6 +34,8 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
 
     private float _logicalWidth;
     private float _logicalHeight;
+    private int _physicalWidth;
+    private int _physicalHeight;
     private volatile int _baseFps = 45;
     private volatile bool _dynamicResolutionEnabled = true;
     private StreamNetworkTier _networkTier = StreamNetworkTier.Lan;
@@ -78,14 +80,22 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
 
     public void RequestKeyframe() => _forceKeyframe = true;
 
-    public void UpdateWindowLogicalSize(float logicalW, float logicalH)
+    public void UpdateWindowLogicalSize(float logicalW, float logicalH, int physicalW = 0, int physicalH = 0)
     {
         lock (_sync)
         {
-            if (MathF.Abs(logicalW - _logicalWidth) > 2f || MathF.Abs(logicalH - _logicalHeight) > 2f)
+            bool logChanged = MathF.Abs(logicalW - _logicalWidth) > 2f || MathF.Abs(logicalH - _logicalHeight) > 2f;
+            bool physChanged = physicalW >= 48 && physicalH >= 32 &&
+                               (Math.Abs(physicalW - _physicalWidth) > 2 || Math.Abs(physicalH - _physicalHeight) > 2);
+            if (logChanged || physChanged)
             {
                 _logicalWidth = MathF.Max(48f, logicalW);
                 _logicalHeight = MathF.Max(32f, logicalH);
+                if (physicalW >= 48 && physicalH >= 32)
+                {
+                    _physicalWidth = physicalW;
+                    _physicalHeight = physicalH;
+                }
                 _reconfigRequested = true;
             }
         }
@@ -102,6 +112,8 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
             _isFloatingPopover = item.IsPopup;
             _logicalWidth = MathF.Max(48f, item.LogicalWidth);
             _logicalHeight = MathF.Max(32f, item.LogicalHeight);
+            _physicalWidth = Math.Max(64, item.PhysicalBounds.Width);
+            _physicalHeight = Math.Max(48, item.PhysicalBounds.Height);
             _baseFps = Math.Clamp(fps, 24, 60);
             _forceKeyframe = true;
             _reconfigRequested = false;
@@ -131,6 +143,8 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
             _targetWindowId = windowId;
             _isFullDesktop = true;
             _isFloatingPopover = false;
+            _physicalWidth = screenW;
+            _physicalHeight = screenH;
             _logicalWidth = (float)(screenW / dpiScale);
             _logicalHeight = (float)(screenH / dpiScale);
             _baseFps = Math.Clamp(fps, 24, 60);
@@ -172,33 +186,60 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
 
     public void Dispose() => Stop();
 
-    private (int EncW, int EncH, ushort ReportedW, ushort ReportedH) ComputeDimensions(float logW, float logH, StreamNetworkTier tier, bool dynRes)
+    private (int EncW, int EncH, ushort ReportedW, ushort ReportedH) ComputeDimensions(
+        float logW,
+        float logH,
+        int physW,
+        int physH,
+        StreamNetworkTier tier,
+        bool dynRes
+    )
     {
         int reportedW = Math.Max(2, ((int)MathF.Round(logW * 2.0f)) & ~1);
         int reportedH = Math.Max(2, ((int)MathF.Round(logH * 2.0f)) & ~1);
 
-        const float baseScale = 2.0f;
-        float effScale;
-        if (!_isFloatingPopover && (dynRes || tier == StreamNetworkTier.WanRelay))
+        int nativeW = Math.Max(64, (physW > 0 ? physW : (int)MathF.Round(logW)) & ~1);
+        int nativeH = Math.Max(64, (physH > 0 ? physH : (int)MathF.Round(logH)) & ~1);
+
+        int encW = nativeW;
+        int encH = nativeH;
+
+        if (_isFloatingPopover)
         {
-            float maxEdge = MathF.Max(1f, MathF.Max(logW, logH));
-            float targetMaxPx = tier switch
+            if (encW < 128 || encH < 128)
             {
-                StreamNetworkTier.Lan => 1600f,
-                StreamNetworkTier.WanDirect => 1500f,
-                StreamNetworkTier.WanRelay => 1360f,
-                _ => 1600f
-            };
-            float minScale = tier == StreamNetworkTier.WanRelay ? 1.05f : 1.15f;
-            effScale = MathF.Min(baseScale, MathF.Min(1.35f, MathF.Max(minScale, targetMaxPx / maxEdge)));
+                float popScale = MathF.Max(128f / encW, 128f / encH);
+                encW = Math.Max(128, ((int)MathF.Ceiling(encW * popScale)) & ~1);
+                encH = Math.Max(128, ((int)MathF.Ceiling(encH * popScale)) & ~1);
+            }
         }
         else
         {
-            effScale = baseScale;
+            // Preserve 1:1 native physical pixels (zero resampling blur / zero dropped scanlines) for 1080p & 2.5K
+            // screens, and only area-downsample ultra-high-res 4K/5K surfaces according to network tier budget.
+            float targetMaxPx = dynRes
+                ? tier switch
+                {
+                    StreamNetworkTier.Lan => 3200f,
+                    StreamNetworkTier.WanDirect => 2560f,
+                    StreamNetworkTier.WanRelay => 1920f,
+                    _ => 2560f
+                }
+                : tier switch
+                {
+                    StreamNetworkTier.WanRelay => 2560f,
+                    _ => 3840f
+                };
+
+            float maxPhysEdge = MathF.Max(1f, Math.Max(nativeW, nativeH));
+            if (maxPhysEdge > targetMaxPx)
+            {
+                float scale = targetMaxPx / maxPhysEdge;
+                encW = Math.Max(64, ((int)MathF.Round(nativeW * scale)) & ~1);
+                encH = Math.Max(64, ((int)MathF.Round(nativeH * scale)) & ~1);
+            }
         }
 
-        int encW = Math.Max(64, ((int)MathF.Round(logW * effScale) + 7) & ~15);
-        int encH = Math.Max(64, ((int)MathF.Round(logH * effScale) + 7) & ~15);
         return (encW, encH, (ushort)Math.Min(65534, reportedW), (ushort)Math.Min(65534, reportedH));
     }
 
@@ -216,10 +257,10 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
         double fpsFactor = 0.25 + 0.75 * (Math.Clamp(fps, 24, 60) / 60.0);
         return tier switch
         {
-            StreamNetworkTier.Lan => Math.Max(2_800_000, (int)(Math.Min(10_000_000L, Math.Max(4_500_000L, pixels * 3)) * fpsFactor)),
-            StreamNetworkTier.WanDirect => Math.Max(1_400_000, (int)(Math.Min(4_000_000L, Math.Max(1_800_000L, (long)(pixels * 1.45))) * fpsFactor)),
-            StreamNetworkTier.WanRelay => (int)Math.Clamp((long)(pixels * 0.95), 950_000L, 2_000_000L),
-            _ => 4_500_000
+            StreamNetworkTier.Lan => Math.Max(4_000_000, (int)(Math.Min(16_000_000L, Math.Max(6_000_000L, (long)(pixels * 4.2))) * fpsFactor)),
+            StreamNetworkTier.WanDirect => Math.Max(2_200_000, (int)(Math.Min(6_500_000L, Math.Max(2_800_000L, (long)(pixels * 2.1))) * fpsFactor)),
+            StreamNetworkTier.WanRelay => (int)Math.Clamp((long)(pixels * 1.35), 1_400_000L, 3_000_000L),
+            _ => 6_000_000
         };
     }
 
@@ -237,11 +278,12 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
         ushort reportedH = 0;
 
         byte[] bgraBuf = Array.Empty<byte>();
-        byte[] annexBBuf = new byte[4 * 1024 * 1024]; // 4 MiB max single compressed frame
+        byte[] annexBBuf = new byte[8 * 1024 * 1024]; // 8 MiB max single compressed frame
         ulong lastHash = 0;
         long sentFramesAfterStart = 0;
         var sw = Stopwatch.StartNew();
         long lastSentTickMs = 0;
+        bool needsIdleRefine = false;
 
         try
         {
@@ -254,6 +296,8 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
                     if (dpi <= 0.1) dpi = 1.0;
                     lock (_sync)
                     {
+                        _physicalWidth = scrW;
+                        _physicalHeight = scrH;
                         _logicalWidth = (float)(scrW / dpi);
                         _logicalHeight = (float)(scrH / dpi);
                     }
@@ -275,14 +319,19 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
                         double scale = Win32Interop.GetDpiScale(_targetHwnd);
                         float curLogW = (float)(vis.Width / scale);
                         float curLogH = (float)(vis.Height / scale);
-                        if (curLogW >= 44f && curLogH >= 28f)
+                        if (curLogW >= 44f && curLogH >= 28f && vis.Width >= 48 && vis.Height >= 32)
                         {
                             lock (_sync)
                             {
-                                if (MathF.Abs(curLogW - _logicalWidth) > 2f || MathF.Abs(curLogH - _logicalHeight) > 2f)
+                                if (MathF.Abs(curLogW - _logicalWidth) > 2f ||
+                                    MathF.Abs(curLogH - _logicalHeight) > 2f ||
+                                    Math.Abs(vis.Width - _physicalWidth) > 2 ||
+                                    Math.Abs(vis.Height - _physicalHeight) > 2)
                                 {
                                     _logicalWidth = curLogW;
                                     _logicalHeight = curLogH;
+                                    _physicalWidth = vis.Width;
+                                    _physicalHeight = vis.Height;
                                     _reconfigRequested = true;
                                 }
                             }
@@ -291,14 +340,17 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
                 }
 
                 float snapLogW, snapLogH;
+                int snapPhysW, snapPhysH;
                 lock (_sync)
                 {
                     snapLogW = _logicalWidth;
                     snapLogH = _logicalHeight;
+                    snapPhysW = _physicalWidth;
+                    snapPhysH = _physicalHeight;
                 }
                 var tier = _networkTier;
                 int effFps = EffectiveFps(_baseFps, tier);
-                var dims = ComputeDimensions(snapLogW, snapLogH, tier, _dynamicResolutionEnabled);
+                var dims = ComputeDimensions(snapLogW, snapLogH, snapPhysW, snapPhysH, tier, _dynamicResolutionEnabled);
 
                 if (encoder == IntPtr.Zero || _reconfigRequested || dims.EncW != activeEncW || dims.EncH != activeEncH || effFps != activeFps)
                 {
@@ -374,12 +426,15 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
                 }
 
                 // Always emit an initial burst of 14 frames on stream start / keyframe request so any H.264/HEVC
-                // decoder DPB flushes immediately even on static windows, followed by lightweight 250ms P-frame keep-fresh (~30B).
+                // decoder DPB flushes immediately even on static windows, followed by a fast 140ms post-scroll
+                // quality refinement P-frame and lightweight 250ms keep-fresh (~30B).
+                bool isSameContent = (capRc == 0 || (capRc == 1 && curHash != 0 && curHash == lastHash));
                 bool isInitialWarmup = sentFramesAfterStart < 14;
+                int idleHoldMs = needsIdleRefine ? 140 : 250;
                 bool isUnchanged = !wantForceIdr &&
                                    !isInitialWarmup &&
-                                   (capRc == 0 || (capRc == 1 && curHash != 0 && curHash == lastHash)) &&
-                                   (frameStartMs - lastSentTickMs < 250);
+                                   isSameContent &&
+                                   (frameStartMs - lastSentTickMs < idleHoldMs);
 
                 // Note: If DXGI AcquireNextFrame returned 0 (desktop unchanged) during initial warmup or keep-fresh,
                 // bgraBuf already holds the latest valid desktop frame from Frame #0, so allow encoding that tiny skip P-frame!
@@ -411,8 +466,16 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
 
                     if (encodedBytes > 0)
                     {
-                        if (capRc == 1)
-                            lastHash = curHash;
+                        if (isSameContent)
+                        {
+                            needsIdleRefine = false;
+                        }
+                        else
+                        {
+                            needsIdleRefine = true;
+                            if (capRc == 1)
+                                lastHash = curHash;
+                        }
                         sentFramesAfterStart++;
                         if (sentFramesAfterStart == 1)
                         {

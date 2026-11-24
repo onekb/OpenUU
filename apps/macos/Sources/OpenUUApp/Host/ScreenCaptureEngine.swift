@@ -54,6 +54,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var resizeDropBudget: Int = 0
     private var expectedCaptureWidth: Int = 0
     private var expectedCaptureHeight: Int = 0
+    private var idleRefineWorkItem: DispatchWorkItem?
 
     var onEncodedFrame: ((_ codec: UInt8, _ flags: UInt8, _ windowID: UInt32, _ ptsUS: UInt64, _ width: UInt16, _ height: UInt16, _ data: Data) -> Void)?
     var onContentInsetDetected: ((_ windowID: UInt32, _ insetOrigin: CGPoint, _ croppedLogicalSize: CGSize) -> Void)?
@@ -71,23 +72,41 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     /// Computes steady, non-oscillating pixel dimensions for capture & H.264/HEVC encoding.
+    /// Preserves native 2x Retina / 1x physical backing resolution up to clean tier budgets without non-integer clamping.
     private func effectiveEncodeDimensions(for logicalSize: CGSize) -> (w: Int, h: Int) {
         let baseScale = max(1.0, captureScaleFactor)
-        let effScale: CGFloat
-        if !isFloatingPopover && (dynamicResolutionEnabled || networkTier == .wanRelay) {
-            let maxEdge = max(1.0, max(logicalSize.width, logicalSize.height))
-            let targetMaxPx: CGFloat = switch networkTier {
-            case .lan: 1600.0
-            case .wanDirect: 1500.0
-            case .wanRelay: 1360.0
-            }
-            let minScale: CGFloat = networkTier == .wanRelay ? 1.05 : 1.15
-            effScale = min(baseScale, min(1.35, max(minScale, targetMaxPx / maxEdge)))
+        let nativeW = max(2.0, logicalSize.width * baseScale)
+        let nativeH = max(2.0, logicalSize.height * baseScale)
+
+        let rawW: Int
+        let rawH: Int
+        if isFloatingPopover {
+            rawW = max(2, Int(nativeW.rounded()) & ~1)
+            rawH = max(2, Int(nativeH.rounded()) & ~1)
         } else {
-            effScale = baseScale
+            let targetMaxPx: CGFloat
+            if dynamicResolutionEnabled {
+                targetMaxPx = switch networkTier {
+                case .lan: 3200.0
+                case .wanDirect: 2560.0
+                case .wanRelay: 1920.0
+                }
+            } else {
+                targetMaxPx = switch networkTier {
+                case .wanRelay: 2560.0
+                case .lan, .wanDirect: 3840.0
+                }
+            }
+            let maxNativeEdge = max(1.0, max(nativeW, nativeH))
+            if maxNativeEdge > targetMaxPx {
+                let scale = targetMaxPx / maxNativeEdge
+                rawW = max(2, Int((nativeW * scale).rounded()) & ~1)
+                rawH = max(2, Int((nativeH * scale).rounded()) & ~1)
+            } else {
+                rawW = max(2, Int(nativeW.rounded()) & ~1)
+                rawH = max(2, Int(nativeH.rounded()) & ~1)
+            }
         }
-        let rawW = max(2, Int(logicalSize.width * effScale) & ~1)
-        let rawH = max(2, Int(logicalSize.height * effScale) & ~1)
         return Self.ensureMinimumEncodeDimensions(width: rawW, height: rawH, isPopover: isFloatingPopover)
     }
 
@@ -151,7 +170,9 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         config.queueDepth = 6
         config.scalesToFit = true
         if #available(macOS 14.0, *) {
-            config.captureResolution = isFloatingPopover ? .best : .automatic
+            // Always force `.best` so ScreenCaptureKit samples from the crisp 2x Retina backing store instead of
+            // dropping to 1x nominal resolution!
+            config.captureResolution = .best
             config.ignoreShadowsDisplay = true
             config.ignoreShadowsSingleWindow = true
             config.ignoreGlobalClipDisplay = true
@@ -178,6 +199,9 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// Captures an entire macOS display (Full Remote Desktop mode) using `SCContentFilter(display:excludingWindows:)`.
     func startDesktopCapture(display: SCDisplay, windowID: UInt32, fps: Int = 45, scaleFactor: CGFloat = 2.0) async throws {
         await stopCapture()
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let filterScale = CGFloat(max(1.0, filter.pointPixelScale))
+
         self.targetWindowID = windowID
         self.currentFPS = fps
         self.isFloatingPopover = false
@@ -189,7 +213,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         self.lastEncodedPTS = .invalid
         self.encodedFrameCount = 0
         self.resizeDropBudget = 0
-        self.captureScaleFactor = scaleFactor
+        self.captureScaleFactor = min(scaleFactor, filterScale)
         let logicalSize = CGSize(width: CGFloat(display.width), height: CGFloat(display.height))
         self.lastTrackedSize = logicalSize
 
@@ -200,6 +224,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         self.forceNextKeyframe = true
 
         let (encW, encH) = effectiveEncodeDimensions(for: logicalSize)
+        self.expectedCaptureWidth = encW
+        self.expectedCaptureHeight = encH
         try activateEncoder(width: Int32(encW), height: Int32(encH), fps: fps)
 
         let config = SCStreamConfiguration()
@@ -212,12 +238,11 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         config.queueDepth = 6
         config.scalesToFit = true
         if #available(macOS 14.0, *) {
-            config.captureResolution = .automatic
+            config.captureResolution = .best
             config.shouldBeOpaque = true
             config.presenterOverlayPrivacyAlertSetting = .never
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
         self.currentConfig = config
 
         let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
@@ -340,16 +365,16 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         let fpsFactor = 0.25 + 0.75 * (Double(max(24, min(60, fps))) / 60.0)
         switch networkTier {
         case .lan:
-            let base60 = min(10_000_000, max(4_500_000, pixels * 3))
-            return max(2_800_000, Int(Double(base60) * fpsFactor))
+            let base60 = min(16_000_000, max(6_000_000, Int(Double(pixels) * 4.2)))
+            return max(4_000_000, Int(Double(base60) * fpsFactor))
         case .wanDirect:
-            // HEVC over public IPv6 / STUN P2P: ~40% higher compression efficiency, gentle on home broadband upload
-            let base45 = min(4_000_000, max(1_800_000, Int(Double(pixels) * 1.45)))
-            return max(1_400_000, Int(Double(base45) * fpsFactor))
+            // HEVC over public IPv6 / STUN P2P: ~40% higher compression efficiency with sharp Retina text budget
+            let base45 = min(6_500_000, max(2_800_000, Int(Double(pixels) * 2.1)))
+            return max(2_200_000, Int(Double(base45) * fpsFactor))
         case .wanRelay:
-            // HEVC over HK / public WSS 443 Relay: tightly capped at 1.0~2.0 Mbps so lightweight cloud relays never queue
-            let base30 = min(2_100_000, max(1_100_000, Int(Double(pixels) * 0.95)))
-            return max(950_000, min(2_000_000, base30))
+            // HEVC over HK / public WSS 443 Relay: clean 1080p text while skipping all unchanged idle frames
+            let base30 = min(3_000_000, max(1_400_000, Int(Double(pixels) * 1.35)))
+            return max(1_400_000, min(3_000_000, base30))
         }
     }
 
@@ -398,6 +423,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             self.stream = nil
         }
         captureQueue.sync {
+            self.idleRefineWorkItem?.cancel()
+            self.idleRefineWorkItem = nil
             self.lastEncodedPixelBuffer = nil
             self.croppedPixelBuffer = nil
         }
@@ -462,9 +489,6 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
-        if networkTier == .wanRelay && !isFloatingPopover {
-            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
-        }
         // Explicitly signal canonical sRGB / ITU-R BT.709 colorimetry in H.264/HEVC SPS VUI so client decoders
         // never guess Rec.709 1.96-gamma or BT.601 on desktop UI content.
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ColorPrimaries, value: kCVImageBufferColorPrimaries_ITU_R_709_2)
@@ -580,6 +604,33 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                 guard let self, self.encodedFrameCount == 1 else { return }
                 self.requestKeyframe()
             }
+        }
+
+        // Schedule a single post-motion low-QP refinement P-frame 180ms after screen motion stops so text
+        // snaps back to full Retina sharpness once fast scrolling/animation settles.
+        if !isFloatingPopover {
+            idleRefineWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self,
+                      let session = self.compressionSession,
+                      let buf = self.lastEncodedPixelBuffer else { return }
+                let baseSec = (self.lastEncodedPTS.isValid && self.lastEncodedPTS.timescale > 0)
+                    ? self.lastEncodedPTS.seconds
+                    : CFAbsoluteTimeGetCurrent()
+                let nextPTS = CMTime(seconds: baseSec + 0.016, preferredTimescale: 1_000_000)
+                self.lastEncodedPTS = nextPTS
+                VTCompressionSessionEncodeFrame(
+                    session,
+                    imageBuffer: buf,
+                    presentationTimeStamp: nextPTS,
+                    duration: .invalid,
+                    frameProperties: nil,
+                    sourceFrameRefcon: nil,
+                    infoFlagsOut: nil
+                )
+            }
+            idleRefineWorkItem = item
+            captureQueue.asyncAfter(deadline: .now() + .milliseconds(180), execute: item)
         }
     }
 

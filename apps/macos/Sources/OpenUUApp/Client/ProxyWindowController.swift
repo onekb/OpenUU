@@ -465,6 +465,9 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        if let scale = window?.backingScaleFactor, scale > 0 {
+            renderer.displayLayer.contentsScale = scale
+        }
         renderer.displayLayer.frame = bounds
         CATransaction.commit()
 

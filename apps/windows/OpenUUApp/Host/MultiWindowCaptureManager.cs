@@ -389,7 +389,12 @@ public sealed class MultiWindowCaptureManager : IDisposable
         {
             if (_engines.TryGetValue(w.WindowId, out var existingEng))
             {
-                existingEng.UpdateWindowLogicalSize(w.LogicalWidth, w.LogicalHeight);
+                existingEng.UpdateWindowLogicalSize(
+                    w.LogicalWidth,
+                    w.LogicalHeight,
+                    w.PhysicalBounds.Width,
+                    w.PhysicalBounds.Height
+                );
                 continue;
             }
 
