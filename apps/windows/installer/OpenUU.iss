@@ -64,3 +64,28 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent shellexec
+
+[Code]
+const
+  EVENT_MODIFY_STATE = $0002;
+
+function OpenEventW(dwDesiredAccess: Cardinal; bInheritHandle: BOOL; lpName: string): THandle;
+  external 'OpenEventW@kernel32.dll stdcall';
+function SetEvent(hEvent: THandle): BOOL;
+  external 'SetEvent@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  EvHandle: THandle;
+begin
+  Result := '';
+  EvHandle := OpenEventW(EVENT_MODIFY_STATE, False, 'Local\OpenUU.TakeoverExit.v1');
+  if EvHandle <> 0 then
+  begin
+    SetEvent(EvHandle);
+    CloseHandle(EvHandle);
+    Sleep(900);
+  end;
+end;

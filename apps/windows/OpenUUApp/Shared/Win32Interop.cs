@@ -551,7 +551,8 @@ public static class Win32Interop
     {
         try
         {
-            IntPtr hMon = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+            uint monitorFlag = hwnd == IntPtr.Zero ? 1u /* MONITOR_DEFAULTTOPRIMARY */ : 2u /* MONITOR_DEFAULTTONEAREST */;
+            IntPtr hMon = MonitorFromWindow(hwnd, monitorFlag);
             if (hMon != IntPtr.Zero && GetDpiForMonitor(hMon, 0 /* MDT_EFFECTIVE_DPI */, out uint dpiX, out _) == 0 && dpiX >= 72)
             {
                 return dpiX / 96.0;

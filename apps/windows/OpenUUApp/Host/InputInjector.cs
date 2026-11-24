@@ -231,7 +231,7 @@ public sealed class InputInjector : IDisposable
 
     private void ProcessFullDesktopEvent(ControlEventMessage msg)
     {
-        double dpi = Win32Interop.GetDpiScale(Win32Interop.GetForegroundWindow());
+        double dpi = Win32Interop.GetDpiScale(IntPtr.Zero);
         if (dpi <= 0.1) dpi = 1.0;
 
         switch (msg.Type)

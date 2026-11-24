@@ -28,7 +28,21 @@ public partial class OpenUUApplication : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        try
+        {
+            System.Windows.Forms.Application.SetHighDpiMode(System.Windows.Forms.HighDpiMode.PerMonitorV2);
+        }
+        catch
+        {
+        }
+
         base.OnStartup(e);
+
+        SessionEnding += (_, _) =>
+        {
+            if (_mainWindow != null)
+                _mainWindow.AllowTrueClose = true;
+        };
 
         string[] args = e.Args;
         string? configDir = ParseFlag(args, "--config-dir");

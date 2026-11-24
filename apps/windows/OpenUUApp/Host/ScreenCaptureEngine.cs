@@ -134,7 +134,7 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
         Stop();
         int screenW = Math.Max(640, Win32Interop.GetSystemMetrics(Win32Interop.SM_CXSCREEN));
         int screenH = Math.Max(480, Win32Interop.GetSystemMetrics(Win32Interop.SM_CYSCREEN));
-        double dpiScale = Win32Interop.GetDpiScale(Win32Interop.GetForegroundWindow());
+        double dpiScale = Win32Interop.GetDpiScale(IntPtr.Zero);
         if (dpiScale <= 0.1) dpiScale = 1.0;
 
         lock (_sync)
@@ -292,7 +292,7 @@ public sealed unsafe class ScreenCaptureEngine : IDisposable
                 dxgiCap = OpenUUNativeMethods.openuu_dxgi_capturer_create(out int scrW, out int scrH);
                 if (scrW > 0 && scrH > 0)
                 {
-                    double dpi = Win32Interop.GetDpiScale(Win32Interop.GetForegroundWindow());
+                    double dpi = Win32Interop.GetDpiScale(IntPtr.Zero);
                     if (dpi <= 0.1) dpi = 1.0;
                     lock (_sync)
                     {
