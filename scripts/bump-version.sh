@@ -61,16 +61,23 @@ replace_in("Cargo.toml", [
     (r'(^\[workspace\.package\][\s\S]*?^version\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
 
-# 2. macOS script fallback
+# 2. macOS script & AppUpdater fallback
 replace_in("scripts/build-macos.sh", [
+    (r'^APP_VERSION="\$\(tr -d \x27\[:space:\]\x27 < "\$ROOT_DIR/VERSION" 2>/dev/null \|\| echo "[^"]*"\)"', f'APP_VERSION="$(tr -d \'[:space:]\' < "$ROOT_DIR/VERSION" 2>/dev/null || echo "{ver}")"'),
     (r'(<key>CFBundleShortVersionString</key>\s*<string>)[^<]+(</string>)', rf'\g<1>${{APP_VERSION}}\2'),
     (r'(<key>CFBundleVersion</key>\s*<string>)[^<]+(</string>)', rf'\g<1>${{APP_BUILD}}\2'),
     (r'^APP_BUILD="[^"]*"', f'APP_BUILD="{build}"'),
 ])
+replace_in("apps/macos/Sources/OpenUUApp/Shared/AppUpdater.swift", [
+    (r'(static let fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
+])
 
-# 3. Windows csproj, manifest, Inno Setup, and scripts
+# 3. Windows csproj, manifest, Inno Setup, AppUpdater, and scripts
 replace_in("apps/windows/OpenUUApp/OpenUUApp.csproj", [
     (r'(<Version>)[0-9]+\.[0-9]+\.[0-9]+(</Version>)', rf'\g<1>{ver}\2'),
+])
+replace_in("apps/windows/OpenUUApp/Shared/AppUpdater.cs", [
+    (r'(public const string Fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
 replace_in("apps/windows/OpenUUApp/app.manifest", [
     (r'(assemblyIdentity\s+version=")[0-9]+\.[0-9]+\.[0-9]+\.0(")', rf'\g<1>{ver}.0\2'),
@@ -86,16 +93,22 @@ replace_in("scripts/verify-windows-e2e.ps1", [
     (r'OpenUU-Windows-v[0-9]+\.[0-9]+\.[0-9]+', f'OpenUU-Windows-v{ver}'),
 ])
 
-# 4. Android Gradle
+# 4. Android Gradle & AppUpdater fallback
 replace_in("apps/android/app/build.gradle.kts", [
     (r'(versionCode\s*=\s*)[0-9]+', rf'\g<1>{build}'),
     (r'(versionName\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
+replace_in("apps/android/app/src/main/java/ren/onekb/openuu/AppUpdater.kt", [
+    (r'(BuildConfig\.VERSION_NAME\.ifBlank\s*\{\s*")[0-9]+\.[0-9]+\.[0-9]+("\s*\})', rf'\g<1>{ver}\2'),
+])
 
-# 5. iOS Info.plist & generate_xcodeproj.py
+# 5. iOS Info.plist, MobileAppUpdater & generate_xcodeproj.py
 replace_in("apps/ios/Info.plist", [
     (r'(<key>CFBundleShortVersionString</key>\s*<string>)[0-9]+\.[0-9]+\.[0-9]+(</string>)', rf'\g<1>{ver}\2'),
     (r'(<key>CFBundleVersion</key>\s*<string>)[0-9]+(</string>)', rf'\g<1>{build}\2'),
+])
+replace_in("apps/ios/Sources/MobileAppUpdater.swift", [
+    (r'(static let fallback\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")', rf'\g<1>{ver}\2'),
 ])
 replace_in("apps/ios/generate_xcodeproj.py", [
     (r'(CURRENT_PROJECT_VERSION\s*=\s*)[0-9]+(;)', rf'\g<1>{build}\2'),

@@ -12,7 +12,7 @@ namespace OpenUU.Shared;
 
 public static class AppVersion
 {
-    public const string Fallback = "0.7.0";
+    public const string Fallback = "0.7.1";
 
     public static string Current
     {
