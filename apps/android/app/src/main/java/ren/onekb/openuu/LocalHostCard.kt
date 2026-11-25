@@ -80,6 +80,7 @@ fun LocalAndroidHostCard(
     val hostState by viewModel.localHostState.collectAsState()
     val savedPin by viewModel.savedHostPin.collectAsState()
     val preferredMode by viewModel.preferredHostMode.collectAsState()
+    val windowScale by viewModel.virtualWindowScale.collectAsState()
     val enhancedState by viewModel.enhancedEngineState.collectAsState()
     val isAccessibilityOn by viewModel.isAccessibilityEnabled.collectAsState()
     val suppressSafetyPrompt by viewModel.suppressHostAntiFraud.collectAsState()
@@ -445,7 +446,48 @@ fun LocalAndroidHostCard(
                     }
                 }
 
-                // Row 3: Active Host Telemetry / Mode Hint / Error
+                // Row 3: Virtual Window Content Scale (Enhanced Mode) + Active Host Telemetry / Hint
+                if (effectiveMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "虚拟窗口显示比例",
+                            fontSize = 11.sp,
+                            color = SecondaryText
+                        )
+                        Surface(
+                            color = ElevatedBg,
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(0.5.dp, BorderCol)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                VirtualWindowScalePreset.entries.forEach { preset ->
+                                    val selected = windowScale == preset
+                                    Surface(
+                                        onClick = { viewModel.setVirtualWindowScale(preset) },
+                                        color = if (selected) PillSelectedBg else Color.Transparent,
+                                        shape = RoundedCornerShape(5.dp)
+                                    ) {
+                                        Text(
+                                            text = preset.label,
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (selected) PrimaryText else SecondaryText,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (hostState.isRunning) {
                     if (hostState.connectedClientName.isNotBlank()) {
                         Surface(

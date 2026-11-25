@@ -263,6 +263,13 @@ class PrivDaemonClient(
         }
     )
 
+    fun setVirtualWindowBaseDpi(baseDpi: Int): Boolean = sendCmd(
+        JSONObject().apply {
+            put("cmd", "set_virtual_dpi")
+            put("base_dpi", baseDpi)
+        }
+    )
+
     fun resizeWindow(windowId: Int, width: Int, height: Int, dpi: Int): Boolean = sendCmd(
         JSONObject().apply {
             put("cmd", "resize_window")

@@ -44,14 +44,23 @@ class ScreenCaptureEncoder(
         const val FLAG_KEYFRAME = 0x01
         private val ANNEX_B_START = byteArrayOf(0, 0, 0, 1)
 
-        fun computeAlignedEncodeSize(physW: Int, physH: Int, maxLongEdge: Int = 1600): Pair<Int, Int> {
+        fun computeAlignedEncodeSize(physW: Int, physH: Int, maxLongEdge: Int = 1920): Pair<Int, Int> {
+            val (w, h, _) = computeAlignedEncodeSizeWithScale(physW, physH, maxLongEdge)
+            return w to h
+        }
+
+        fun computeAlignedEncodeSizeWithScale(
+            physW: Int,
+            physH: Int,
+            maxLongEdge: Int = 1920
+        ): Triple<Int, Int, Float> {
             val safeW = physW.coerceAtLeast(320)
             val safeH = physH.coerceAtLeast(320)
             val longEdge = maxOf(safeW, safeH)
             val scale = if (longEdge > maxLongEdge) maxLongEdge.toFloat() / longEdge.toFloat() else 1f
             val alignedW = (((safeW * scale).toInt() + 8) / 16 * 16).coerceIn(256, 2560)
             val alignedH = (((safeH * scale).toInt() + 8) / 16 * 16).coerceIn(256, 2560)
-            return alignedW to alignedH
+            return Triple(alignedW, alignedH, scale)
         }
     }
 

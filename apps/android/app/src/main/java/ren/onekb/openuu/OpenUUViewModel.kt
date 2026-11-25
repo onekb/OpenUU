@@ -226,6 +226,11 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
     )
     val preferredHostMode: StateFlow<AndroidHostMode> = _preferredHostMode.asStateFlow()
 
+    private val _virtualWindowScale = MutableStateFlow(
+        WirelessAdbActivator.loadVirtualWindowScale(appContext)
+    )
+    val virtualWindowScale: StateFlow<VirtualWindowScalePreset> = _virtualWindowScale.asStateFlow()
+
     private val _isAccessibilityEnabled = MutableStateFlow(
         OpenUURemoteInputService.isEnabledInSettings(appContext)
     )
@@ -314,7 +319,8 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             OpenUURemoteInputService.instance != null ||
                 OpenUURemoteInputService.isEnabledInSettings(appContext)
         _preferredHostMode.value = WirelessAdbActivator.loadPreferredMode(appContext)
-        WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = false)
+        _virtualWindowScale.value = WirelessAdbActivator.loadVirtualWindowScale(appContext)
+        WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = true)
     }
 
     fun setPreferredHostMode(mode: AndroidHostMode) {
@@ -322,6 +328,23 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         _preferredHostMode.value = mode
         if (mode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
             WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = true)
+        }
+    }
+
+    fun setVirtualWindowScale(preset: VirtualWindowScalePreset) {
+        WirelessAdbActivator.saveVirtualWindowScale(appContext, preset)
+        _virtualWindowScale.value = preset
+        if (localHostState.value.isRunning &&
+            localHostState.value.hostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW
+        ) {
+            runCatching {
+                appContext.startService(
+                    android.content.Intent(appContext, AndroidHostService::class.java).apply {
+                        action = AndroidHostService.ACTION_UPDATE_VIRTUAL_DPI
+                        putExtra(AndroidHostService.EXTRA_VIRTUAL_BASE_DPI, preset.baseDpi)
+                    }
+                )
+            }
         }
     }
 

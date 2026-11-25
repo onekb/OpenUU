@@ -61,7 +61,15 @@ import kotlin.system.exitProcess
 object OpenUUPrivServer {
 
     const val PROTOCOL_MAGIC: Int = 0x4F555550 // "OUUP"
-    const val SERVER_VERSION: Int = 705
+    const val SERVER_VERSION: Int = 706
+
+    // Desktop-calibrated Retina VirtualDisplay defaults:
+    // 832x1536 px -> 416x768 pt desktop window (1:1 Retina, fits 13"/14" laptops & 1080p@125% displays unscaled).
+    // At 268 dpi (`1.675 px/dp`), Android sees 496x917 dp (`< sw600dp` mobile layout) and 15sp/16sp text renders
+    // at ~12.6-13.4 pt on desktop monitors instead of 2x magnified elderly-mode text.
+    const val DEFAULT_APP_WINDOW_WIDTH: Int = 832
+    const val DEFAULT_APP_WINDOW_HEIGHT: Int = 1536
+    const val DEFAULT_APP_BASE_DPI: Int = 268
 
     const val TYPE_CMD_JSON: Int = 0x01
     const val TYPE_EVENT_JSON: Int = 0x11
@@ -104,6 +112,8 @@ object OpenUUPrivServer {
         val isFullDesktopMirror: Boolean,
         var title: String,
         val iconPngB64: String,
+        var desiredPhysWidth: Int,
+        var baseDpi: Int,
         var width: Int,
         var height: Int,
         var dpi: Int,
@@ -134,6 +144,8 @@ object OpenUUPrivServer {
     private val iconB64Cache = ConcurrentHashMap<String, String>()
     @Volatile
     private var activeBitrateBps: Int = 4_500_000
+    @Volatile
+    private var activeBaseDpi: Int = DEFAULT_APP_BASE_DPI
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -336,12 +348,17 @@ object OpenUUPrivServer {
             }
             "open_window" -> {
                 val bundleId = obj.optString("bundle_id", "")
-                val reqWidth = obj.optInt("width", 720)
-                val reqHeight = obj.optInt("height", 1600)
-                val reqDpi = obj.optInt("dpi", 360)
+                val reqWidth = obj.optInt("width", DEFAULT_APP_WINDOW_WIDTH)
+                val reqHeight = obj.optInt("height", DEFAULT_APP_WINDOW_HEIGHT)
+                val reqDpi = obj.optInt("dpi", activeBaseDpi)
                 val fps = obj.optInt("fps", 45)
                 val bitrate = obj.optInt("bitrate", activeBitrateBps)
                 openOrFocusWindow(bundleId, reqWidth, reqHeight, reqDpi, fps, bitrate)
+            }
+            "set_virtual_dpi" -> {
+                val nextBaseDpi = obj.optInt("base_dpi", DEFAULT_APP_BASE_DPI).coerceIn(180, 400)
+                activeBaseDpi = nextBaseDpi
+                applyBaseDpiToOpenWindows(nextBaseDpi)
             }
             "close_window" -> {
                 val winId = obj.optLong("window_id", 0L).toInt()
@@ -474,9 +491,6 @@ object OpenUUPrivServer {
             stableWindowIdForBundle(canonicalBundle)
         }
 
-        val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(reqWidth, reqHeight)
-        val safeDpi = reqDpi.coerceIn(160, 640)
-
         val existing = synchronized(windowsLock) { windowsById[windowId] }
         if (existing != null) {
             if (!isFullDesktop) {
@@ -502,18 +516,62 @@ object OpenUUPrivServer {
         }
         val iconB64 = meta?.iconPngB64.orEmpty()
 
-        val encoder = ScreenCaptureEncoder(
-            width = encW,
-            height = encH,
-            fps = fps.coerceIn(24, 60),
-            bitrateBps = bitrateBps.coerceIn(800_000, 12_000_000),
-            useSyntheticFrames = false,
-            onEncodedPacket = { codec, flags, ptsUs, w, h, bytes ->
-                sendVideoFramePacket(windowId, codec, flags, w, h, ptsUs, bytes)
+        val desiredW = if (isFullDesktop) {
+            reqWidth.coerceAtLeast(320)
+        } else {
+            reqWidth.takeIf { it in 360..2560 } ?: DEFAULT_APP_WINDOW_WIDTH
+        }
+        val desiredH = if (isFullDesktop) {
+            reqHeight.coerceAtLeast(320)
+        } else {
+            reqHeight.takeIf { it in 360..2560 } ?: DEFAULT_APP_WINDOW_HEIGHT
+        }
+        val baseDpi = if (isFullDesktop) {
+            reqDpi.coerceIn(160, 640)
+        } else {
+            val chosen = reqDpi.takeIf { it in 180..400 } ?: activeBaseDpi
+            activeBaseDpi = chosen
+            chosen
+        }
+
+        val maxEdges = if (isFullDesktop) listOf(1920, 1600) else listOf(2240, 1920, 1600)
+        var startedEncoder: ScreenCaptureEncoder? = null
+        var startedSurface: android.view.Surface? = null
+        var encW = desiredW
+        var encH = desiredH
+        var effectiveDpi = baseDpi
+
+        for (maxEdge in maxEdges) {
+            val (candW, candH, scale) = ScreenCaptureEncoder.computeAlignedEncodeSizeWithScale(
+                desiredW,
+                desiredH,
+                maxEdge
+            )
+            val candDpi = kotlin.math.round(baseDpi * scale).toInt().coerceIn(120, 480)
+            val candEnc = ScreenCaptureEncoder(
+                width = candW,
+                height = candH,
+                fps = fps.coerceIn(24, 60),
+                bitrateBps = bitrateBps.coerceIn(800_000, 12_000_000),
+                useSyntheticFrames = false,
+                onEncodedPacket = { codec, flags, ptsUs, w, h, bytes ->
+                    sendVideoFramePacket(windowId, codec, flags, w, h, ptsUs, bytes)
+                }
+            )
+            val surf = candEnc.start()
+            if (surf != null) {
+                startedEncoder = candEnc
+                startedSurface = surf
+                encW = candW
+                encH = candH
+                effectiveDpi = candDpi
+                break
             }
-        )
-        val surface = encoder.start()
-        if (surface == null) {
+        }
+
+        val encoder = startedEncoder
+        val surface = startedSurface
+        if (encoder == null || surface == null) {
             sendEventJson(JSONObject().apply {
                 put("event", "error")
                 put("message", "无法为 $title 创建 H.264 硬件编码器（可能超出芯片并发上限）")
@@ -525,7 +583,7 @@ object OpenUUPrivServer {
             name = if (isFullDesktop) "OpenUU-Mirror" else "OpenUU-$windowId",
             width = encW,
             height = encH,
-            dpi = safeDpi,
+            dpi = effectiveDpi,
             surface = surface,
             mirrorDefaultDisplay = isFullDesktop
         )
@@ -546,9 +604,11 @@ object OpenUUPrivServer {
             isFullDesktopMirror = isFullDesktop,
             title = title,
             iconPngB64 = iconB64,
+            desiredPhysWidth = desiredW,
+            baseDpi = baseDpi,
             width = encW,
             height = encH,
-            dpi = safeDpi,
+            dpi = effectiveDpi,
             virtualDisplay = vd,
             encoder = encoder
         )
@@ -559,7 +619,11 @@ object OpenUUPrivServer {
         }
 
         val targetDisplayId = managed.displayId
-        logLine("Opened windowId=$windowId bundle=$canonicalBundle displayId=$targetDisplayId ${encW}x${encH}@${safeDpi}dpi (active=$openCount)")
+        val approxSwDp = (minOf(encW, encH) * 160) / effectiveDpi.coerceAtLeast(1)
+        logLine(
+            "Opened windowId=$windowId bundle=$canonicalBundle displayId=$targetDisplayId " +
+                "${encW}x${encH}@${effectiveDpi}dpi (~${approxSwDp}dp, baseDpi=$baseDpi, active=$openCount)"
+        )
 
         if (!isFullDesktop && targetDisplayId != Display.DEFAULT_DISPLAY) {
             launchAppOnDisplay(pkg, userId, targetDisplayId)
@@ -639,42 +703,98 @@ object OpenUUPrivServer {
         return created
     }
 
-    private fun resizeExistingWindow(windowId: Int, reqLogicalOrPhysW: Int, reqLogicalOrPhysH: Int, reqDpi: Int) {
-        val existing = synchronized(windowsLock) { windowsById[windowId] } ?: return
-        // Client ResizeWindow sends logical points (half of encode px); scale up to crisp 2x physical bounds
-        val targetPhysW = if (reqLogicalOrPhysW <= 960) reqLogicalOrPhysW * 2 else reqLogicalOrPhysW
-        val targetPhysH = if (reqLogicalOrPhysH <= 960) reqLogicalOrPhysH * 2 else reqLogicalOrPhysH
-        val (newW, newH) = ScreenCaptureEncoder.computeAlignedEncodeSize(targetPhysW, targetPhysH)
-        if (newW == existing.width && newH == existing.height) return
-
-        val newDpi = if (reqDpi > 0) reqDpi.coerceIn(160, 640) else existing.dpi
-        val newEncoder = ScreenCaptureEncoder(
-            width = newW,
-            height = newH,
-            fps = 45,
-            bitrateBps = activeBitrateBps,
-            useSyntheticFrames = false,
-            onEncodedPacket = { codec, flags, ptsUs, w, h, bytes ->
-                sendVideoFramePacket(windowId, codec, flags, w, h, ptsUs, bytes)
+    private fun applyBaseDpiToOpenWindows(newBaseDpi: Int) {
+        val snapshot = synchronized(windowsLock) {
+            windowsById.values.filter { !it.isFullDesktopMirror }
+        }
+        if (snapshot.isEmpty()) return
+        mainHandler.post {
+            for (win in snapshot) {
+                val scale = (win.width.toFloat() / win.desiredPhysWidth.coerceAtLeast(1).toFloat())
+                    .coerceIn(0.35f, 1.25f)
+                val newDpi = kotlin.math.round(newBaseDpi * scale).toInt().coerceIn(120, 440)
+                win.baseDpi = newBaseDpi
+                if (newDpi != win.dpi) {
+                    runCatching {
+                        win.virtualDisplay.resize(win.width, win.height, newDpi)
+                        win.dpi = newDpi
+                    }
+                    logLine("Updated windowId=${win.windowId} density -> ${newDpi}dpi (base=$newBaseDpi)")
+                    win.encoder.requestKeyframe()
+                    scheduleWarmupKeyframes(win.encoder)
+                }
             }
-        )
-        val newSurf = newEncoder.start() ?: return
+        }
+    }
+
+    private fun resizeExistingWindow(windowId: Int, reqLogicalW: Int, reqLogicalH: Int, reqBaseDpi: Int) {
+        val existing = synchronized(windowsLock) { windowsById[windowId] } ?: return
+        if (existing.isFullDesktopMirror) return
+
+        // All OpenUU clients (macOS, Windows, iOS, Android) send logical points (`encPx / 2.0`) in ResizeWindow.
+        // Multiply both axes uniformly by 2 to preserve exact aspect ratio and 2x Retina sharpness.
+        val desiredPhysW = reqLogicalW.coerceIn(200, 1920) * 2
+        val desiredPhysH = reqLogicalH.coerceIn(200, 1920) * 2
+        val baseDpi = reqBaseDpi.takeIf { it in 180..400 } ?: existing.baseDpi
+
+        var newEncoder: ScreenCaptureEncoder? = null
+        var newSurf: android.view.Surface? = null
+        var newW = existing.width
+        var newH = existing.height
+        var newDpi = existing.dpi
+
+        for (maxEdge in listOf(2240, 1920, 1600)) {
+            val (candW, candH, scale) = ScreenCaptureEncoder.computeAlignedEncodeSizeWithScale(
+                desiredPhysW,
+                desiredPhysH,
+                maxEdge
+            )
+            val candDpi = kotlin.math.round(baseDpi * scale).toInt().coerceIn(120, 440)
+            if (candW == existing.width && candH == existing.height && candDpi == existing.dpi) {
+                return
+            }
+            val candEnc = ScreenCaptureEncoder(
+                width = candW,
+                height = candH,
+                fps = 45,
+                bitrateBps = activeBitrateBps,
+                useSyntheticFrames = false,
+                onEncodedPacket = { codec, flags, ptsUs, w, h, bytes ->
+                    sendVideoFramePacket(windowId, codec, flags, w, h, ptsUs, bytes)
+                }
+            )
+            val surf = candEnc.start()
+            if (surf != null) {
+                newEncoder = candEnc
+                newSurf = surf
+                newW = candW
+                newH = candH
+                newDpi = candDpi
+                break
+            }
+        }
+
+        val startedEnc = newEncoder ?: return
+        val startedSurf = newSurf ?: return
         val oldEncoder = existing.encoder
 
         mainHandler.post {
             runCatching {
                 existing.virtualDisplay.resize(newW, newH, newDpi)
-                existing.virtualDisplay.surface = newSurf
+                existing.virtualDisplay.surface = startedSurf
+                existing.desiredPhysWidth = desiredPhysW
+                existing.baseDpi = baseDpi
                 existing.width = newW
                 existing.height = newH
                 existing.dpi = newDpi
-                existing.encoder = newEncoder
+                existing.encoder = startedEnc
             }
+            logLine("Resized windowId=$windowId -> ${newW}x${newH}@${newDpi}dpi (logical=${reqLogicalW}x${reqLogicalH})")
             Thread({
                 oldEncoder.stop()
             }, "StopOldEnc").start()
             publishTopologyEvent()
-            scheduleWarmupKeyframes(newEncoder)
+            scheduleWarmupKeyframes(startedEnc)
         }
     }
 

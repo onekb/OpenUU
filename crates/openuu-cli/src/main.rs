@@ -1014,7 +1014,21 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             ] {
                 session.send_control(&pb::ControlEnvelope { seq, payload: Some(payload) }).await?;
             }
-            tokio::time::sleep(Duration::from_millis(800)).await;
+            if multi_window {
+                session
+                    .send_control(&pb::ControlEnvelope {
+                        seq: 15,
+                        payload: Some(pb::control_envelope::Payload::ResizeWindow(
+                            pb::ResizeWindowRequest {
+                                window_id: target_win_id,
+                                width: 500.0,
+                                height: 980.0,
+                            },
+                        )),
+                    })
+                    .await?;
+            }
+            tokio::time::sleep(Duration::from_millis(900)).await;
             println!("VERIFY_HOST_ALL_PASSED frames={rx_video_frames} keyframes={rx_keyframes}");
             session.close();
             if let Some(ep) = _iroh_guard.take() {

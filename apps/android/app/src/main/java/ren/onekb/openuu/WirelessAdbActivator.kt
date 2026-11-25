@@ -37,6 +37,17 @@ enum class AndroidHostMode(val prefValue: String, val label: String) {
     }
 }
 
+enum class VirtualWindowScalePreset(val prefValue: String, val label: String, val baseDpi: Int) {
+    COMPACT("compact", "紧凑", 228),
+    STANDARD("standard", "标准", 268),
+    COMFORTABLE("large", "偏大", 312);
+
+    companion object {
+        fun fromPref(raw: String?): VirtualWindowScalePreset =
+            entries.firstOrNull { it.prefValue == raw } ?: STANDARD
+    }
+}
+
 data class EnhancedEngineState(
     val isActive: Boolean = false,
     val uid: Int = -1,
@@ -71,6 +82,7 @@ object WirelessAdbActivator {
     private const val KEY_PRIV_TOKEN = "priv_daemon_token"
     private const val KEY_LAST_CONNECT_PORT = "last_adb_connect_port"
     private const val KEY_HOST_MODE = "android_host_mode"
+    private const val KEY_VIRTUAL_WINDOW_SCALE = "virtual_window_scale"
 
     private const val PAIRING_CHANNEL_ID = "openuu_wireless_adb_pairing"
     private const val PAIRING_NOTIF_ID = 39488
@@ -98,6 +110,18 @@ object WirelessAdbActivator {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_HOST_MODE, mode.prefValue)
+            .apply()
+    }
+
+    fun loadVirtualWindowScale(context: Context): VirtualWindowScalePreset {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return VirtualWindowScalePreset.fromPref(prefs.getString(KEY_VIRTUAL_WINDOW_SCALE, null))
+    }
+
+    fun saveVirtualWindowScale(context: Context, preset: VirtualWindowScalePreset) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_VIRTUAL_WINDOW_SCALE, preset.prefValue)
             .apply()
     }
 
@@ -154,11 +178,43 @@ object WirelessAdbActivator {
             }
 
             if (trySilentReconnect) {
+                ensureNativeDirsInitialized(appCtx)
                 val candidatePort = _state.value.connectPort.takeIf { it > 0 }
                     ?: appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         .getInt(KEY_LAST_CONNECT_PORT, 0)
-                if (candidatePort > 0) {
+                val reconnected = if (candidatePort > 0) {
                     spawnPrivViaAdbConnectPort(appCtx, candidatePort, silent = true)
+                } else {
+                    false
+                }
+                if (!reconnected && !_state.value.isListeningMdns) {
+                    // Briefly probe mDNS `_adb-tls-connect._tcp` in case Wireless Debugging reassigned its port
+                    val mgr = appCtx.getSystemService(Context.NSD_SERVICE) as? NsdManager
+                    if (mgr != null) {
+                        var tempListener: NsdManager.DiscoveryListener? = null
+                        tempListener = createMdnsListener(
+                            serviceLabel = "silent-connect",
+                            onPortFound = { foundPort ->
+                                appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                                    .edit()
+                                    .putInt(KEY_LAST_CONNECT_PORT, foundPort)
+                                    .apply()
+                                _state.update { it.copy(connectPort = foundPort) }
+                                tempListener?.let { l -> runCatching { mgr.stopServiceDiscovery(l) } }
+                                tempListener = null
+                                if (!_state.value.isActive && !_state.value.isBusy) {
+                                    scope.launch {
+                                        spawnPrivViaAdbConnectPort(appCtx, foundPort, silent = true)
+                                    }
+                                }
+                            }
+                        )
+                        runCatching {
+                            mgr.discoverServices(SERVICE_ADB_TLS_CONNECT, NsdManager.PROTOCOL_DNS_SD, tempListener)
+                        }
+                        delay(2600L)
+                        tempListener?.let { l -> runCatching { mgr.stopServiceDiscovery(l) } }
+                    }
                 }
             }
         }

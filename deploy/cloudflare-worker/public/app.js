@@ -555,7 +555,7 @@
         }
       });
     } catch {
-      // Fallback to v0.7.5 built-in URLs
+      // Fallback to v0.7.6 built-in URLs
     }
   }
 

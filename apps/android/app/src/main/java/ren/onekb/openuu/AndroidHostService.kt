@@ -77,6 +77,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         const val ACTION_STOP_HOST = "ren.onekb.openuu.action.STOP_HOST"
         const val ACTION_DISCONNECT_CLIENT = "ren.onekb.openuu.action.DISCONNECT_CLIENT"
         const val ACTION_REFRESH_PIN = "ren.onekb.openuu.action.REFRESH_PIN"
+        const val ACTION_UPDATE_VIRTUAL_DPI = "ren.onekb.openuu.action.UPDATE_VIRTUAL_DPI"
 
         const val EXTRA_HOST_MODE = "extra_host_mode"
         const val EXTRA_RESULT_CODE = "extra_mp_result_code"
@@ -84,6 +85,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         const val EXTRA_PREFERRED_PIN = "extra_preferred_pin"
         const val EXTRA_BIND_PORT = "extra_bind_port"
         const val EXTRA_SYNTHETIC_MODE = "extra_synthetic_mode"
+        const val EXTRA_VIRTUAL_BASE_DPI = "extra_virtual_base_dpi"
 
         private val _hostState = MutableStateFlow(LocalHostUiState())
         val hostState: StateFlow<LocalHostUiState> = _hostState.asStateFlow()
@@ -159,11 +161,12 @@ class AndroidHostService : Service(), NativeCallbackListener {
     private val recheckOrientationRunnable = Runnable {
         if (activeHostMode != AndroidHostMode.BASIC_FULLSCREEN || activeWindowId == 0) return@Runnable
         val (physW, physH, dpi) = queryDisplayMetrics()
-        val (newEncW, newEncH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
+        val (newEncW, newEncH, scale) = ScreenCaptureEncoder.computeAlignedEncodeSizeWithScale(physW, physH, 1920)
+        val scaledDpi = kotlin.math.round(dpi * scale).toInt().coerceIn(140, 480)
         if (newEncW != currentEncWidth || newEncH != currentEncHeight) {
             emitHostLog("检测到屏幕旋转，切换编码分辨率 ${newEncW}x${newEncH}")
             serviceScope.launch {
-                restartBasicVideoStreamForSize(newEncW, newEncH, dpi)
+                restartBasicVideoStreamForSize(newEncW, newEncH, scaledDpi)
             }
         }
     }
@@ -251,6 +254,16 @@ class AndroidHostService : Service(), NativeCallbackListener {
                 handleStartHostIntent(intent)
                 return START_STICKY
             }
+            ACTION_UPDATE_VIRTUAL_DPI -> {
+                val baseDpi = intent.getIntExtra(
+                    EXTRA_VIRTUAL_BASE_DPI,
+                    WirelessAdbActivator.loadVirtualWindowScale(applicationContext).baseDpi
+                )
+                serviceScope.launch(Dispatchers.IO) {
+                    privClient?.setVirtualWindowBaseDpi(baseDpi)
+                }
+                return START_STICKY
+            }
             else -> {
                 if (!_hostState.value.isRunning) {
                     stopSelf()
@@ -335,7 +348,8 @@ class AndroidHostService : Service(), NativeCallbackListener {
         syntheticMode = !isEnhanced && wantSynthetic && !hasValidProjection
 
         val (physW, physH, dpi) = queryDisplayMetrics()
-        val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
+        val (encW, encH, encScale) = ScreenCaptureEncoder.computeAlignedEncodeSizeWithScale(physW, physH, 1920)
+        val scaledMirrorDpi = kotlin.math.round(dpi * encScale).toInt().coerceIn(140, 480)
         currentEncWidth = encW
         currentEncHeight = encH
 
@@ -354,6 +368,8 @@ class AndroidHostService : Service(), NativeCallbackListener {
                     mainHandler.post { stopHostCompletely() }
                     return@launch
                 }
+                val presetDpi = WirelessAdbActivator.loadVirtualWindowScale(applicationContext).baseDpi
+                client.setVirtualWindowBaseDpi(presetDpi)
                 privClient = client
                 WirelessAdbActivator.refreshStatusAsync(applicationContext)
                 mainHandler.post {
@@ -375,7 +391,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
                     "OpenUUAndroidHost",
                     encW,
                     encH,
-                    dpi,
+                    scaledMirrorDpi,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     null,
                     null,
@@ -649,12 +665,12 @@ class AndroidHostService : Service(), NativeCallbackListener {
             }
             is ControlEvent.ResizeWindow -> {
                 if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
-                    val (_, _, dpi) = queryDisplayMetrics()
+                    val baseDpi = WirelessAdbActivator.loadVirtualWindowScale(applicationContext).baseDpi
                     privClient?.resizeWindow(
                         windowId = evt.windowId,
-                        width = evt.width.toInt(),
-                        height = evt.height.toInt(),
-                        dpi = dpi
+                        width = kotlin.math.round(evt.width).toInt(),
+                        height = kotlin.math.round(evt.height).toInt(),
+                        dpi = baseDpi
                     )
                 }
             }
@@ -798,15 +814,28 @@ class AndroidHostService : Service(), NativeCallbackListener {
                 emitHostLog("ERROR: 多窗口增强引擎不可用")
                 return
             }
-            val (physW, physH, dpi) = queryDisplayMetrics()
-            client.openWindow(
-                bundleId = bundleId,
-                width = physW,
-                height = physH,
-                dpi = dpi,
-                fps = 45,
-                bitrateBps = 4_500_000
-            )
+            val isFullMirror = bundleId.isBlank() || bundleId == OpenUUConstants.FULL_DESKTOP_BUNDLE_ID
+            if (isFullMirror) {
+                val (physW, physH, dpi) = queryDisplayMetrics()
+                client.openWindow(
+                    bundleId = bundleId,
+                    width = physW,
+                    height = physH,
+                    dpi = dpi,
+                    fps = 45,
+                    bitrateBps = 4_500_000
+                )
+            } else {
+                val baseDpi = WirelessAdbActivator.loadVirtualWindowScale(applicationContext).baseDpi
+                client.openWindow(
+                    bundleId = bundleId,
+                    width = ren.onekb.openuu.priv.OpenUUPrivServer.DEFAULT_APP_WINDOW_WIDTH,
+                    height = ren.onekb.openuu.priv.OpenUUPrivServer.DEFAULT_APP_WINDOW_HEIGHT,
+                    dpi = baseDpi,
+                    fps = 45,
+                    bitrateBps = 4_500_000
+                )
+            }
             return
         }
 
@@ -817,8 +846,9 @@ class AndroidHostService : Service(), NativeCallbackListener {
         activeWindowIconB64 = ""
 
         val (physW, physH, dpi) = queryDisplayMetrics()
-        val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
-        restartBasicVideoStreamForSize(encW, encH, dpi)
+        val (encW, encH, scale) = ScreenCaptureEncoder.computeAlignedEncodeSizeWithScale(physW, physH, 1920)
+        val scaledMirrorDpi = kotlin.math.round(dpi * scale).toInt().coerceIn(140, 480)
+        restartBasicVideoStreamForSize(encW, encH, scaledMirrorDpi)
         reconcileAudioCapture()
 
         _hostState.update {
