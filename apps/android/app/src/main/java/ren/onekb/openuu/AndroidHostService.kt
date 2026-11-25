@@ -60,7 +60,7 @@ import java.util.concurrent.atomic.AtomicLong
  *    - Zero ADB/Root setup: uses `MediaProjection` (locked to Entire Screen on Android 14/15) +
  *      `AccessibilityService` touch/IME injection, exposing only `__openuu_full_desktop__`.
  * 2. **Enhanced Multi-Window Mode ([AndroidHostMode.ENHANCED_MULTI_WINDOW])**:
- *    - Built-in Shizuku-free `OpenUUPrivServer` (`UID 2000` Wireless Debugging or `UID 0` Root):
+ *    - Built-in `OpenUUPrivServer` (`UID 2000` Wireless Debugging or `UID 0` Root):
  *    - No `MediaProjection` popup and no `AccessibilityService` required;
  *    - Creates independent `VirtualDisplay` + H.264 encoder per opened app so remote clients can run
  *      multiple Android apps concurrently in separate windows, including Dual-App WeChat (`@0` & `@999`)

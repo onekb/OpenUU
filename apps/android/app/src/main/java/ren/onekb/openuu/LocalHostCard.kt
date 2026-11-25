@@ -542,7 +542,7 @@ fun LocalAndroidHostCard(
                 } else {
                     Text(
                         text = if (effectiveMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
-                            "内置免 Shizuku 多窗口引擎：支持多应用独立虚拟屏幕并发显示、微信主号与分身独立直开、免录屏弹窗"
+                            "内置多窗口引擎：支持多应用独立虚拟屏幕并发显示、微信主号与分身独立直开、免录屏弹窗"
                         } else {
                             "零配置基础整屏：自动锁定整屏共享，适合快速查看与操作整台手机屏幕"
                         },
@@ -677,7 +677,7 @@ private fun EnhancedModeActivationDialog(
         textContentColor = SecondaryText,
         title = {
             Text(
-                text = "激活多窗口增强模式（自研免 Shizuku）",
+                text = "激活多窗口增强模式",
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.5.sp
             )

@@ -52,7 +52,7 @@ import kotlin.system.exitProcess
  *
  * Launched directly by OpenUU via built-in Android 11+ Wireless Debugging (`libadb` in `openuu-core`)
  * or Root (`su`), running under `/system/bin/app_process` (`UID 2000 shell` or `UID 0 root`) with
- * zero dependency on Shizuku or external helper apps:
+ * zero dependency on external helper apps:
  * - Creates independent `VirtualDisplay` + hardware H.264 `ScreenCaptureEncoder` per opened Android app
  * - Enumerates & launches apps across all Android user profiles (`User 0` + `User 999`/Clone/Work Dual-App WeChat)
  *   directly onto each target `displayId` without triggering "开哪个" chooser sheets or `MediaProjection` popups

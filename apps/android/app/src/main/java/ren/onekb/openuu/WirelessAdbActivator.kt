@@ -58,7 +58,7 @@ data class EnhancedEngineState(
 }
 
 /**
- * Built-in rootless / Shizuku-free privileged engine activator:
+ * Built-in privileged multi-window engine activator:
  * 1. Android 11+ Wireless Debugging (`_adb-tls-pairing._tcp` + `_adb-tls-connect._tcp` via `libadb` in `openuu-core`)
  *    with notification-shade inline `RemoteInput` so the user enters the 6-digit pairing code directly on top of Settings
  * 2. Local TCP ADB (`127.0.0.1:5555` or custom port)
