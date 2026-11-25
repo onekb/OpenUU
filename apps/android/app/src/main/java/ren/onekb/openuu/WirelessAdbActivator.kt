@@ -123,7 +123,7 @@ object WirelessAdbActivator {
         scope.launch {
             val (privPort, privToken) = ensurePrivCredentials(appCtx)
             val probe = PrivDaemonClient.probeRunning(privPort, privToken)
-            if (probe.alive) {
+            if (probe.isCurrentVersion) {
                 _state.update {
                     it.copy(
                         isActive = true,
@@ -136,6 +136,11 @@ object WirelessAdbActivator {
                     )
                 }
                 return@launch
+            }
+            if (probe.alive) {
+                Log.i(TAG, "Shutting down outdated OpenUUPrivServer version=${probe.version}")
+                PrivDaemonClient.shutdownDaemon(privPort, privToken)
+                delay(180L)
             }
 
             _state.update {
@@ -400,7 +405,7 @@ object WirelessAdbActivator {
         val (privPort, privToken) = ensurePrivCredentials(appCtx)
 
         val already = PrivDaemonClient.probeRunning(privPort, privToken)
-        if (already.alive) {
+        if (already.isCurrentVersion) {
             _state.update {
                 it.copy(
                     isActive = true,
@@ -412,6 +417,11 @@ object WirelessAdbActivator {
                 )
             }
             return true
+        }
+        if (already.alive) {
+            Log.i(TAG, "Shutting down outdated OpenUUPrivServer version=${already.version} before respawn")
+            PrivDaemonClient.shutdownDaemon(privPort, privToken)
+            delay(180L)
         }
 
         if (!silent) {
@@ -479,7 +489,7 @@ object WirelessAdbActivator {
     ): PrivDaemonClient.Companion.ProbeInfo {
         repeat(28) {
             val info = PrivDaemonClient.probeRunning(privPort, privToken, timeoutMs = 350)
-            if (info.alive) return info
+            if (info.isCurrentVersion) return info
             delay(180L)
         }
         return PrivDaemonClient.Companion.ProbeInfo(false)

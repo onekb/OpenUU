@@ -61,7 +61,7 @@ import kotlin.system.exitProcess
 object OpenUUPrivServer {
 
     const val PROTOCOL_MAGIC: Int = 0x4F555550 // "OUUP"
-    const val SERVER_VERSION: Int = 704
+    const val SERVER_VERSION: Int = 705
 
     const val TYPE_CMD_JSON: Int = 0x01
     const val TYPE_EVENT_JSON: Int = 0x11
@@ -113,6 +113,19 @@ object OpenUUPrivServer {
         val displayId: Int
             get() = runCatching { virtualDisplay.display?.displayId ?: Display.DEFAULT_DISPLAY }
                 .getOrDefault(Display.DEFAULT_DISPLAY)
+
+        fun liveDisplayBounds(): Pair<Int, Int> {
+            return runCatching {
+                val pt = android.graphics.Point()
+                @Suppress("DEPRECATION")
+                virtualDisplay.display?.getRealSize(pt)
+                if (pt.x > 32 && pt.y > 32) {
+                    pt.x to pt.y
+                } else {
+                    width to height
+                }
+            }.getOrDefault(width to height)
+        }
     }
 
     private val windowsLock = Any()
@@ -155,7 +168,12 @@ object OpenUUPrivServer {
                 sysCtx
             }
             displayManager = callerContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            inputInjector = PerDisplayInputInjector(mainHandler)
+            inputInjector = PerDisplayInputInjector(
+                context = callerContext,
+                handler = mainHandler,
+                onLog = ::logLine,
+                onEmitFallbackEvent = ::sendEventJson
+            )
             logLine("Initialized OpenUUPrivServer uid=${Process.myUid()} pid=${Process.myPid()} port=$port")
         } catch (t: Throwable) {
             System.err.println("OpenUUPrivServer bootstrap failed: ${t.message}")
@@ -363,10 +381,11 @@ object OpenUUPrivServer {
                 val eventType = obj.optInt("event_type", 0)
                 val button = obj.optInt("button", 0)
                 val target = resolveWindowForInput(winId) ?: return
+                val (liveW, liveH) = target.liveDisplayBounds()
                 inputInjector?.injectMouse(
                     displayId = target.displayId,
-                    displayW = target.width,
-                    displayH = target.height,
+                    displayW = liveW,
+                    displayH = liveH,
                     normX = normX,
                     normY = normY,
                     eventType = eventType,
@@ -379,15 +398,18 @@ object OpenUUPrivServer {
                 val normY = obj.optDouble("norm_y", 0.5).toFloat()
                 val dx = obj.optDouble("dx", 0.0).toFloat()
                 val dy = obj.optDouble("dy", 0.0).toFloat()
+                val isContinuous = obj.optBoolean("continuous", true)
                 val target = resolveWindowForInput(winId) ?: return
+                val (liveW, liveH) = target.liveDisplayBounds()
                 inputInjector?.injectScroll(
                     displayId = target.displayId,
-                    displayW = target.width,
-                    displayH = target.height,
+                    displayW = liveW,
+                    displayH = liveH,
                     normX = normX,
                     normY = normY,
                     deltaX = dx,
-                    deltaY = dy
+                    deltaY = dy,
+                    isContinuous = isContinuous
                 )
             }
             "key" -> {
@@ -1135,7 +1157,12 @@ object OpenUUPrivServer {
  * Per-`displayId` privileged `InputManager` dispatcher (`UID 2000 shell` / `UID 0 root`).
  * Routes touch, wheel scroll, Back/Home, shortcuts, and paste events to each VirtualDisplay independently.
  */
-private class PerDisplayInputInjector(private val handler: Handler) {
+private class PerDisplayInputInjector(
+    context: Context,
+    private val handler: Handler,
+    private val onLog: (String) -> Unit,
+    private val onEmitFallbackEvent: (JSONObject) -> Unit
+) {
 
     private data class TouchState(
         var down: Boolean = false,
@@ -1145,29 +1172,117 @@ private class PerDisplayInputInjector(private val handler: Handler) {
     )
 
     private val touchStates = ConcurrentHashMap<Int, TouchState>()
+    @Volatile
+    private var reportedPermissionBlock = false
+    private var loggedFirstOk = false
 
-    private val inputManager: Any? = runCatching {
-        InputManager::class.java.getDeclaredMethod("getInstance").invoke(null)
-    }.getOrNull()
+    private val inputTarget: Any?
+    private val injectMethod: java.lang.reflect.Method?
 
-    private val injectMethod = runCatching {
-        InputManager::class.java.getMethod(
-            "injectInputEvent",
-            InputEvent::class.java,
-            Int::class.javaPrimitiveType
+    init {
+        val resolved = resolveInputManagerAndMethod(context)
+        inputTarget = resolved.first
+        injectMethod = resolved.second
+        onLog(
+            "InputInjector ready target=${inputTarget?.javaClass?.name ?: "null"} " +
+                "method=${injectMethod?.name ?: "null"}"
         )
-    }.getOrNull()
+    }
+
+    private fun resolveInputManagerAndMethod(context: Context): Pair<Any?, java.lang.reflect.Method?> {
+        val candidates = ArrayList<Any?>()
+        // 1. Android 14 / 15+ (`API 34+`): `android.hardware.input.InputManagerGlobal.getInstance()`
+        runCatching {
+            val globalCls = Class.forName("android.hardware.input.InputManagerGlobal")
+            val inst = globalCls.getDeclaredMethod("getInstance").apply { isAccessible = true }.invoke(null)
+            if (inst != null) candidates.add(inst)
+        }
+        // 2. Context system service (`android.hardware.input.InputManager`, API 26-35)
+        runCatching {
+            val svc = context.getSystemService(Context.INPUT_SERVICE)
+            if (svc != null) candidates.add(svc)
+        }
+        // 3. Legacy Android 8-13 (`InputManager.getInstance()`)
+        runCatching {
+            val legacy = InputManager::class.java.getDeclaredMethod("getInstance").apply { isAccessible = true }.invoke(null)
+            if (legacy != null) candidates.add(legacy)
+        }
+        // 4. Direct Binder `IInputManager` via `ServiceManager.getService("input")`
+        runCatching {
+            val smCls = Class.forName("android.os.ServiceManager")
+            val binder = smCls.getMethod("getService", String::class.java).invoke(null, "input")
+            if (binder != null) {
+                val stubCls = Class.forName("android.hardware.input.IInputManager\$Stub")
+                val iim = stubCls.getMethod("asInterface", Class.forName("android.os.IBinder")).invoke(null, binder)
+                if (iim != null) candidates.add(iim)
+            }
+        }
+
+        for (target in candidates) {
+            if (target == null) continue
+            val m = runCatching {
+                target.javaClass.getMethod(
+                    "injectInputEvent",
+                    InputEvent::class.java,
+                    Int::class.javaPrimitiveType
+                ).apply { isAccessible = true }
+            }.getOrNull() ?: runCatching {
+                target.javaClass.getDeclaredMethod(
+                    "injectInputEvent",
+                    InputEvent::class.java,
+                    Int::class.javaPrimitiveType
+                ).apply { isAccessible = true }
+            }.getOrNull()
+            if (m != null) {
+                return target to m
+            }
+        }
+        return null to null
+    }
 
     private val setDisplayIdMethod = runCatching {
-        InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+        InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType).apply {
+            isAccessible = true
+        }
+    }.getOrNull() ?: runCatching {
+        InputEvent::class.java.getDeclaredMethod("setDisplayId", Int::class.javaPrimitiveType).apply {
+            isAccessible = true
+        }
     }.getOrNull()
 
-    private fun injectEventOnDisplay(event: InputEvent, displayId: Int) {
-        runCatching {
+    private fun injectEventOnDisplay(event: InputEvent, displayId: Int): Boolean {
+        val target = inputTarget
+        val method = injectMethod
+        if (target == null || method == null) {
+            reportPermissionHintOnce("InputManager unavailable")
+            return false
+        }
+        return try {
             setDisplayIdMethod?.invoke(event, displayId)
             // mode 0 = INJECT_INPUT_EVENT_MODE_ASYNC
-            injectMethod?.invoke(inputManager, event, 0)
+            val res = method.invoke(target, event, 0)
+            val ok = (res as? Boolean) ?: true
+            if (!ok) {
+                reportPermissionHintOnce("injectInputEvent returned false on display=$displayId")
+            }
+            ok
+        } catch (t: Throwable) {
+            val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            reportPermissionHintOnce("${cause.javaClass.simpleName}: ${cause.message}")
+            false
         }
+    }
+
+    private fun reportPermissionHintOnce(reason: String) {
+        if (reportedPermissionBlock) return
+        reportedPermissionBlock = true
+        onLog("INJECT_BLOCKED reason=$reason")
+        onEmitFallbackEvent(
+            JSONObject().apply {
+                put("event", "input_permission_hint")
+                put("reason", reason)
+            }
+        )
     }
 
     fun injectMouse(
@@ -1181,11 +1296,19 @@ private class PerDisplayInputInjector(private val handler: Handler) {
     ) {
         handler.post {
             if (button == 1) {
-                if (eventType == 1) injectKeyTap(displayId, KeyEvent.KEYCODE_BACK, 0)
+                if (eventType == 1) {
+                    if (!injectKeyTap(displayId, KeyEvent.KEYCODE_BACK, 0)) {
+                        emitFallbackTouch(displayId, displayW, displayH, normX, normY, eventType, button)
+                    }
+                }
                 return@post
             }
             if (button == 2) {
-                if (eventType == 1) injectKeyTap(displayId, KeyEvent.KEYCODE_HOME, 0)
+                if (eventType == 1) {
+                    if (!injectKeyTap(displayId, KeyEvent.KEYCODE_HOME, 0)) {
+                        emitFallbackTouch(displayId, displayW, displayH, normX, normY, eventType, button)
+                    }
+                }
                 return@post
             }
 
@@ -1248,12 +1371,43 @@ private class PerDisplayInputInjector(private val handler: Handler) {
                 InputDevice.SOURCE_TOUCHSCREEN,
                 0
             )
-            try {
+            val ok = try {
                 injectEventOnDisplay(ev, displayId)
             } finally {
                 ev.recycle()
             }
+            if (ok) {
+                if (!loggedFirstOk && (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP)) {
+                    if (action == MotionEvent.ACTION_UP) loggedFirstOk = true
+                    onLog("INJECT_MOUSE_OK display=$displayId action=$action x=${sx.toInt()} y=${sy.toInt()}")
+                }
+            } else {
+                emitFallbackTouch(displayId, displayW, displayH, normX, normY, eventType, button)
+            }
         }
+    }
+
+    private fun emitFallbackTouch(
+        displayId: Int,
+        displayW: Int,
+        displayH: Int,
+        normX: Float,
+        normY: Float,
+        eventType: Int,
+        button: Int
+    ) {
+        onEmitFallbackEvent(
+            JSONObject().apply {
+                put("event", "fallback_touch")
+                put("display_id", displayId)
+                put("display_w", displayW)
+                put("display_h", displayH)
+                put("norm_x", normX.toDouble())
+                put("norm_y", normY.toDouble())
+                put("event_type", eventType)
+                put("button", button)
+            }
+        )
     }
 
     fun injectScroll(
@@ -1263,13 +1417,15 @@ private class PerDisplayInputInjector(private val handler: Handler) {
         normX: Float,
         normY: Float,
         deltaX: Float,
-        deltaY: Float
+        deltaY: Float,
+        isContinuous: Boolean
     ) {
         handler.post {
             val sx = (normX.coerceIn(0f, 1f) * displayW.coerceAtLeast(2)).coerceIn(4f, (displayW - 4).coerceAtLeast(4).toFloat())
             val sy = (normY.coerceIn(0f, 1f) * displayH.coerceAtLeast(2)).coerceIn(4f, (displayH - 4).coerceAtLeast(4).toFloat())
-            val vScroll = (deltaY / 36f).coerceIn(-8f, 8f)
-            val hScroll = (deltaX / 36f).coerceIn(-8f, 8f)
+            val div = if (isContinuous) 28f else 2.4f
+            val vScroll = (deltaY / div).coerceIn(-8f, 8f)
+            val hScroll = (deltaX / div).coerceIn(-8f, 8f)
             if (kotlin.math.abs(vScroll) < 0.02f && kotlin.math.abs(hScroll) < 0.02f) return@post
 
             val now = SystemClock.uptimeMillis()
@@ -1303,10 +1459,25 @@ private class PerDisplayInputInjector(private val handler: Handler) {
                 InputDevice.SOURCE_MOUSE,
                 0
             )
-            try {
+            val ok = try {
                 injectEventOnDisplay(ev, displayId)
             } finally {
                 ev.recycle()
+            }
+            if (!ok) {
+                onEmitFallbackEvent(
+                    JSONObject().apply {
+                        put("event", "fallback_scroll")
+                        put("display_id", displayId)
+                        put("display_w", displayW)
+                        put("display_h", displayH)
+                        put("norm_x", normX.toDouble())
+                        put("norm_y", normY.toDouble())
+                        put("dx", deltaX.toDouble())
+                        put("dy", deltaY.toDouble())
+                        put("continuous", isContinuous)
+                    }
+                )
             }
         }
     }
@@ -1349,7 +1520,7 @@ private class PerDisplayInputInjector(private val handler: Handler) {
         }
     }
 
-    private fun injectKeyTap(displayId: Int, keyCode: Int, metaState: Int) {
+    private fun injectKeyTap(displayId: Int, keyCode: Int, metaState: Int): Boolean {
         val now = SystemClock.uptimeMillis()
         val down = KeyEvent(
             now,
@@ -1375,8 +1546,9 @@ private class PerDisplayInputInjector(private val handler: Handler) {
             0,
             InputDevice.SOURCE_KEYBOARD
         )
-        injectEventOnDisplay(down, displayId)
-        injectEventOnDisplay(up, displayId)
+        val okDown = injectEventOnDisplay(down, displayId)
+        val okUp = injectEventOnDisplay(up, displayId)
+        return okDown && okUp
     }
 
     private fun mapMacKeyToAndroidKeyCode(mac: Int): Int? = when (mac) {

@@ -537,6 +537,7 @@ adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_ENH" 2>/dev/null || true
 
 check_cond "Built-in libadb spawned OpenUUPrivServer (UID 2000)" grep -q "PRIV_ENGINE_ACTIVE uid=2000" "$LOGCAT_ENH"
 check_cond "Enhanced Multi-Window streamed >=2 concurrent Android app VirtualDisplays" grep -q "VERIFY_MULTI_WINDOW_PASSED" "$VERIFY_ENH_LOG"
+check_cond "Enhanced Host injected real per-VirtualDisplay click via InputManagerGlobal" bash -c "adb -s '$EMU_SERIAL' shell cat /data/local/tmp/openuu_priv.log | grep -q 'INJECT_MOUSE_OK'"
 check_cond "Enhanced Host received per-window IME text_commit" grep -q "HOST_TEXT_COMMIT.*你好，安卓被控端！" "$LOGCAT_ENH"
 check_cond "Zero FATAL EXCEPTION during Enhanced Multi-Window session" bash -c "! grep -q 'FATAL EXCEPTION' '$LOGCAT_ENH'"
 

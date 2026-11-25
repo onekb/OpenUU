@@ -479,6 +479,47 @@ class AndroidHostService : Service(), NativeCallbackListener {
                 }
             },
             onLog = { msg -> emitHostLog(msg) },
+            onPermissionHint = { reason ->
+                val a11ySvc = OpenUURemoteInputService.instance
+                if (a11ySvc != null) {
+                    emitHostLog("系统限制了调试通道模拟输入($reason)，已自动切换无障碍多屏触控兜底")
+                } else {
+                    val mfr = Build.MANUFACTURER.lowercase()
+                    val tip = when {
+                        mfr.contains("xiaomi") || mfr.contains("redmi") || mfr.contains("poco") ->
+                            "小米/红米拦截了模拟点击：请在开发者选项开启「USB 调试（安全设置）」，或开启「OpenUU 无障碍触控」"
+                        mfr.contains("oppo") || mfr.contains("realme") || mfr.contains("oneplus") ->
+                            "系统拦截了模拟点击：请在开发者选项底部开启「禁止权限监控」，或开启「OpenUU 无障碍触控」"
+                        else ->
+                            "当前系统限制了无线调试模拟点击，请点此开启「OpenUU 无障碍触控服务」以启用远程点击"
+                    }
+                    emitHostLog("$tip ($reason)")
+                    _hostState.update { it.copy(lastError = tip) }
+                }
+            },
+            onFallbackTouch = { displayId, displayW, displayH, normX, normY, eventType, button ->
+                OpenUURemoteInputService.instance?.dispatchMouseOnDisplay(
+                    displayId = displayId,
+                    displayW = displayW,
+                    displayH = displayH,
+                    normX = normX,
+                    normY = normY,
+                    eventType = eventType,
+                    button = button
+                )
+            },
+            onFallbackScroll = { displayId, displayW, displayH, normX, normY, dx, dy, isContinuous ->
+                OpenUURemoteInputService.instance?.dispatchScrollOnDisplay(
+                    displayId = displayId,
+                    displayW = displayW,
+                    displayH = displayH,
+                    normX = normX,
+                    normY = normY,
+                    deltaX = dx,
+                    deltaY = dy,
+                    isContinuous = isContinuous
+                )
+            },
             onDisconnected = {
                 if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW && _hostState.value.isRunning) {
                     emitHostLog("高阶多窗口引擎连接断开")
@@ -677,7 +718,8 @@ class AndroidHostService : Service(), NativeCallbackListener {
                         normX = normX,
                         normY = normY,
                         dx = evt.deltaX,
-                        dy = evt.deltaY
+                        dy = evt.deltaY,
+                        isContinuous = evt.isContinuous
                     )
                 } else {
                     val (normX, normY) = toNormalizedCoordsBasic(evt.x, evt.y)

@@ -508,6 +508,31 @@ fun LocalAndroidHostCard(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    if (hostState.lastError.isNotBlank()) {
+                        Surface(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            },
+                            color = CardBg,
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(0.5.dp, AmberWarn.copy(alpha = 0.55f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = hostState.lastError,
+                                fontSize = 11.sp,
+                                lineHeight = 15.5.sp,
+                                color = AmberWarn,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
                 } else if (hostState.lastError.isNotBlank()) {
                     Text(
                         text = hostState.lastError,
@@ -731,7 +756,8 @@ private fun EnhancedModeActivationDialog(
                         Text(
                             text = "1. 点击下方按钮进入「开发者选项 -> 无线调试」并开启\n" +
                                 "2. 点击「使用配对码配对设备」（保持弹窗不关闭）\n" +
-                                "3. 直接下拉顶部通知栏，在 OpenUU 通知中填入 6 位配对码即可完成激活",
+                                "3. 直接下拉顶部通知栏，在 OpenUU 通知中填入 6 位配对码即可完成激活\n" +
+                                "提示：小米/红米请同时开启开发者选项中的「USB 调试（安全设置）」，OPPO/一加请开启底部「禁止权限监控」以允许远程点击",
                             fontSize = 11.5.sp,
                             lineHeight = 16.5.sp,
                             color = SecondaryText

@@ -4,20 +4,32 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.PointF
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Display
 import kotlin.math.hypot
 
 /**
  * Translates normalized [0..1] pointer & scroll coordinates from an authorized OpenUU client
- * into Android [GestureDescription] strokes on the main looper.
+ * into Android [GestureDescription] strokes on the main looper (supporting both default display
+ * and API 30+ virtual `displayId`s).
  */
 class RemoteTouchDispatcher(
     private val service: AccessibilityService,
+    private val targetDisplayId: Int = Display.DEFAULT_DISPLAY,
     private val displayBoundsProvider: () -> Pair<Int, Int>
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun buildGestureWithStroke(stroke: GestureDescription.StrokeDescription): GestureDescription {
+        val builder = GestureDescription.Builder().addStroke(stroke)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && targetDisplayId != Display.DEFAULT_DISPLAY) {
+            runCatching { builder.setDisplayId(targetDisplayId) }
+        }
+        return builder.build()
+    }
 
     private var pointerDown = false
     private var downX = 0f
@@ -151,7 +163,7 @@ class RemoteTouchDispatcher(
                 if (moved) lineTo(sx, sy)
             }
             val stroke = GestureDescription.StrokeDescription(path, 0L, if (moved) 65L else 38L, false)
-            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            val gesture = buildGestureWithStroke(stroke)
             runCatching { service.dispatchGesture(gesture, null, mainHandler) }
             return
         }
@@ -170,7 +182,7 @@ class RemoteTouchDispatcher(
         val stroke = runCatching {
             GestureDescription.StrokeDescription(path, 0L, durationMs, true)
         }.getOrNull() ?: return
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val gesture = buildGestureWithStroke(stroke)
 
         strokeAnchorX = x1
         strokeAnchorY = y1
@@ -202,7 +214,7 @@ class RemoteTouchDispatcher(
             }.getOrNull()
             resetStrokeState()
             if (fin != null) {
-                val g = GestureDescription.Builder().addStroke(fin).build()
+                val g = buildGestureWithStroke(fin)
                 runCatching { service.dispatchGesture(g, null, mainHandler) }
             }
             return
@@ -229,7 +241,7 @@ class RemoteTouchDispatcher(
         activeStroke = next
         strokeInFlight = true
         val ok = runCatching {
-            val g = GestureDescription.Builder().addStroke(next).build()
+            val g = buildGestureWithStroke(next)
             service.dispatchGesture(g, strokeCallback, mainHandler)
         }.getOrDefault(false)
         if (!ok) {
@@ -275,7 +287,7 @@ class RemoteTouchDispatcher(
             lineTo(endX, endY)
         }
         val stroke = GestureDescription.StrokeDescription(path, 0L, 85L, false)
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val gesture = buildGestureWithStroke(stroke)
         scrollInFlight = true
         val ok = runCatching {
             service.dispatchGesture(

@@ -32,6 +32,26 @@ class PrivDaemonClient(
         data: ByteArray
     ) -> Unit,
     private val onLog: (String) -> Unit,
+    private val onPermissionHint: (String) -> Unit = {},
+    private val onFallbackTouch: (
+        displayId: Int,
+        displayW: Int,
+        displayH: Int,
+        normX: Float,
+        normY: Float,
+        eventType: Int,
+        button: Int
+    ) -> Unit = { _, _, _, _, _, _, _ -> },
+    private val onFallbackScroll: (
+        displayId: Int,
+        displayW: Int,
+        displayH: Int,
+        normX: Float,
+        normY: Float,
+        dx: Float,
+        dy: Float,
+        isContinuous: Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
     private val onDisconnected: () -> Unit
 ) {
     companion object {
@@ -43,7 +63,35 @@ class PrivDaemonClient(
             val uid: Int = -1,
             val pid: Int = -1,
             val version: Int = 0
-        )
+        ) {
+            val isCurrentVersion: Boolean
+                get() = alive && version >= OpenUUPrivServer.SERVER_VERSION
+        }
+
+        fun shutdownDaemon(port: Int, authToken: String, timeoutMs: Int = 500) {
+            if (authToken.length < 16 || port <= 0) return
+            val sock = Socket()
+            try {
+                sock.tcpNoDelay = true
+                sock.soTimeout = timeoutMs
+                sock.connect(InetSocketAddress("127.0.0.1", port), timeoutMs)
+                val out = DataOutputStream(BufferedOutputStream(sock.getOutputStream(), 1024))
+                val inp = DataInputStream(BufferedInputStream(sock.getInputStream(), 4096))
+                val tokenBytes = authToken.toByteArray(Charsets.UTF_8)
+                out.writeInt(OpenUUPrivServer.PROTOCOL_MAGIC)
+                out.writeShort(tokenBytes.size)
+                out.write(tokenBytes)
+                val cmdBytes = """{"cmd":"shutdown"}""".toByteArray(Charsets.UTF_8)
+                out.writeByte(OpenUUPrivServer.TYPE_CMD_JSON)
+                out.writeInt(cmdBytes.size)
+                out.write(cmdBytes)
+                out.flush()
+                runCatching { inp.readUnsignedByte() }
+            } catch (_: Throwable) {
+            } finally {
+                runCatching { sock.close() }
+            }
+        }
 
         fun probeRunning(port: Int, authToken: String, timeoutMs: Int = 450): ProbeInfo {
             if (authToken.length < 16 || port <= 0) return ProbeInfo(false)
@@ -247,7 +295,8 @@ class PrivDaemonClient(
         normX: Float,
         normY: Float,
         dx: Float,
-        dy: Float
+        dy: Float,
+        isContinuous: Boolean = true
     ): Boolean = sendCmd(
         JSONObject().apply {
             put("cmd", "scroll")
@@ -256,6 +305,7 @@ class PrivDaemonClient(
             put("norm_y", normY.toDouble())
             put("dx", dx.toDouble())
             put("dy", dy.toDouble())
+            put("continuous", isContinuous)
         }
     )
 
@@ -375,6 +425,33 @@ class PrivDaemonClient(
             "error" -> {
                 val msg = obj.optString("message", "未知高阶引擎错误")
                 onLog("高阶引擎提示: $msg")
+            }
+            "input_permission_hint" -> {
+                val reason = obj.optString("reason", "")
+                onPermissionHint(reason)
+            }
+            "fallback_touch" -> {
+                onFallbackTouch(
+                    obj.optInt("display_id", 0),
+                    obj.optInt("display_w", 720),
+                    obj.optInt("display_h", 1600),
+                    obj.optDouble("norm_x", 0.5).toFloat(),
+                    obj.optDouble("norm_y", 0.5).toFloat(),
+                    obj.optInt("event_type", 0),
+                    obj.optInt("button", 0)
+                )
+            }
+            "fallback_scroll" -> {
+                onFallbackScroll(
+                    obj.optInt("display_id", 0),
+                    obj.optInt("display_w", 720),
+                    obj.optInt("display_h", 1600),
+                    obj.optDouble("norm_x", 0.5).toFloat(),
+                    obj.optDouble("norm_y", 0.5).toFloat(),
+                    obj.optDouble("dx", 0.0).toFloat(),
+                    obj.optDouble("dy", 0.0).toFloat(),
+                    obj.optBoolean("continuous", true)
+                )
             }
         }
     }

@@ -2,6 +2,18 @@
 
 本文件记录 OpenUU 各版本的核心更新内容，并与 GitHub Releases 发布说明保持同步。
 
+## [v0.7.5] - 2026-11-24
+
+### 🐛 关键问题修复：Android「多窗口增强模式」触控点击与滚轮修复
+- **修复 Android 14 / 15 多窗口增强模式下画面正常但无法远程点击的问题**：
+  - 适配 Android 14 / 15 (`API 34+`) 系统底层输入管理器迁移至 `InputManagerGlobal.getInstance()` 的框架变更（兼容 `Context.INPUT_SERVICE`、旧版 `InputManager` 与 `IInputManager` Binder 四重通道），恢复独立虚拟屏幕（`VirtualDisplay`）按 `displayId` 精准注入左键点击、拖拽、右键返回、中键主页、滚轮滑动与键盘快捷键。
+  - 优化 Windows 鼠标滚轮离散刻度与 macOS 触控板连续滚动在独立虚拟屏幕上的滚动幅度，并实时对齐虚拟屏幕横竖屏实际尺寸。
+- **国产机型权限拦截自动无障碍多屏兜底与热升级**：
+  - 针对小米 HyperOS / MIUI 未开启「USB 调试（安全设置）」或 ColorOS 未开启「禁止权限监控」拦截模拟输入的场景，支持自动无缝回退至 Android 11+ 多屏无障碍手势（`GestureDescription.Builder.setDisplayId`），并在卡片内给出对应机型一键指引。
+  - 新增 `OpenUUPrivServer` 版本号校验与旧版内存守护进程自动热替换，覆盖安装新版本后无需重启手机即可自动升级后台多窗口引擎。
+
+---
+
 ## [v0.7.4] - 2026-11-24
 
 ### ✨ 重磅升级：Android 被控端支持「双模式」与自研免 Shizuku 多窗口并发引擎
