@@ -740,9 +740,14 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             let pin = args
                 .get(3)
                 .ok_or("usage: openuu-cli verify-host <ip:port | 9-digit-code | openuu://ticket> <pin>")?;
-            let tmp_dir = std::path::Path::new("/tmp/openuu-verify-host-client");
-            let _ = std::fs::remove_dir_all(tmp_dir);
-            let identity = DeviceIdentity::load_or_create(Some(tmp_dir), Some("OpenUU-E2E-Client".into()))?;
+            let base_tmp = if std::path::Path::new("/data/local/tmp").exists() {
+                std::path::PathBuf::from("/data/local/tmp")
+            } else {
+                std::env::temp_dir()
+            };
+            let tmp_dir = base_tmp.join("openuu-verify-host-client");
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            let identity = DeviceIdentity::load_or_create(Some(&tmp_dir), Some("OpenUU-E2E-Client".into()))?;
 
             let mut _iroh_guard = None;
             let (session, mut channels, ack) = if target.starts_with(TICKET_PREFIX)
@@ -780,6 +785,7 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 connect_to_host(&identity, addr, pin).await?
             };
             println!("VERIFY_CONNECTED host={} os={}", ack.device_name, ack.os);
+            let multi_window = args.iter().any(|a| a == "--multi-window");
 
             // Request app list explicitly as well
             session
@@ -792,39 +798,103 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 .await?;
 
             let mut got_apps = false;
-            let mut got_topo = false;
+            let mut app_count = 0usize;
+            let mut max_topo_windows = 0usize;
+            let mut opened_window_ids: Vec<u32> = Vec::new();
             let mut started_session = false;
             let mut rx_video_frames = 0usize;
             let mut rx_keyframes = 0usize;
-            let deadline = Instant::now() + Duration::from_secs(18);
+            let mut frames_per_window = std::collections::HashMap::<u32, usize>::new();
+            let mut keyframes_per_window = std::collections::HashMap::<u32, usize>::new();
+            let deadline = Instant::now() + Duration::from_secs(24);
 
             while Instant::now() < deadline {
                 tokio::select! {
                     Some(env) = channels.control_rx.recv() => {
                         match env.payload {
                             Some(pb::control_envelope::Payload::ListAppsResp(resp)) => {
-                                println!("VERIFY_APPS count={}", resp.apps.len());
+                                app_count = resp.apps.len();
+                                println!("VERIFY_APPS count={}", app_count);
                                 got_apps = !resp.apps.is_empty();
                                 if !started_session {
                                     started_session = true;
-                                    session.send_control(&pb::ControlEnvelope {
-                                        seq: 3,
-                                        payload: Some(pb::control_envelope::Payload::StartSession(
-                                            pb::StartSessionRequest {
-                                                bundle_id: FULL_DESKTOP_BUNDLE_ID.to_string(),
-                                                window_id: 0,
-                                                max_fps: 45,
-                                                codec: 1,
-                                            },
-                                        )),
-                                    }).await?;
+                                    if multi_window {
+                                        let mut candidates: Vec<String> = resp
+                                            .apps
+                                            .iter()
+                                            .filter(|a| a.bundle_id != FULL_DESKTOP_BUNDLE_ID)
+                                            .map(|a| a.bundle_id.clone())
+                                            .collect();
+                                        // Prefer Settings + another system app if present
+                                        candidates.sort_by_key(|b| {
+                                            if b.starts_with("com.android.settings@") {
+                                                0
+                                            } else if b.starts_with("com.google.android.deskclock@")
+                                                || b.starts_with("com.android.contacts@")
+                                                || b.starts_with("com.google.android.apps.messaging@")
+                                            {
+                                                1
+                                            } else {
+                                                2
+                                            }
+                                        });
+                                        if candidates.len() < 2 {
+                                            return Err(format!(
+                                                "enhanced multi-window expected >=2 launchable apps, got {}: {:?}",
+                                                candidates.len(),
+                                                candidates
+                                            ).into());
+                                        }
+                                        println!(
+                                            "VERIFY_OPENING_MULTI app1={} app2={}",
+                                            candidates[0], candidates[1]
+                                        );
+                                        session.send_control(&pb::ControlEnvelope {
+                                            seq: 3,
+                                            payload: Some(pb::control_envelope::Payload::StartSession(
+                                                pb::StartSessionRequest {
+                                                    bundle_id: candidates[0].clone(),
+                                                    window_id: 0,
+                                                    max_fps: 45,
+                                                    codec: 1,
+                                                },
+                                            )),
+                                        }).await?;
+                                        tokio::time::sleep(Duration::from_millis(350)).await;
+                                        session.send_control(&pb::ControlEnvelope {
+                                            seq: 4,
+                                            payload: Some(pb::control_envelope::Payload::StartSession(
+                                                pb::StartSessionRequest {
+                                                    bundle_id: candidates[1].clone(),
+                                                    window_id: 0,
+                                                    max_fps: 45,
+                                                    codec: 1,
+                                                },
+                                            )),
+                                        }).await?;
+                                    } else {
+                                        session.send_control(&pb::ControlEnvelope {
+                                            seq: 3,
+                                            payload: Some(pb::control_envelope::Payload::StartSession(
+                                                pb::StartSessionRequest {
+                                                    bundle_id: FULL_DESKTOP_BUNDLE_ID.to_string(),
+                                                    window_id: 0,
+                                                    max_fps: 45,
+                                                    codec: 1,
+                                                },
+                                            )),
+                                        }).await?;
+                                    }
                                 }
                             }
                             Some(pb::control_envelope::Payload::WindowTopology(wt)) => {
                                 println!("VERIFY_TOPO count={}", wt.windows.len());
-                                if let Some(first) = wt.windows.first() {
-                                    println!("VERIFY_WINDOW id={} w={} h={} title={}", first.window_id, first.width, first.height, first.title);
-                                    got_topo = true;
+                                if wt.windows.len() > max_topo_windows {
+                                    max_topo_windows = wt.windows.len();
+                                }
+                                opened_window_ids = wt.windows.iter().map(|w| w.window_id).collect();
+                                for w in &wt.windows {
+                                    println!("VERIFY_WINDOW id={} w={} h={} title={}", w.window_id, w.width, w.height, w.title);
                                 }
                             }
                             _ => {}
@@ -832,10 +902,12 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                     }
                     Some(vf) = channels.video_rx.recv() => {
                         rx_video_frames += 1;
+                        *frames_per_window.entry(vf.window_id).or_insert(0) += 1;
                         if vf.is_keyframe() {
                             rx_keyframes += 1;
+                            *keyframes_per_window.entry(vf.window_id).or_insert(0) += 1;
                         }
-                        if rx_video_frames == 1 || rx_video_frames == 5 {
+                        if rx_video_frames <= 6 || rx_video_frames % 15 == 0 {
                             println!(
                                 "VERIFY_VIDEO count={} keyframes={} win={} {}x{} bytes={}",
                                 rx_video_frames,
@@ -850,23 +922,45 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                     _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                 }
 
-                if got_apps && got_topo && rx_video_frames >= 5 && rx_keyframes >= 1 {
+                if multi_window {
+                    let active_video_wins = frames_per_window.values().filter(|&&c| c >= 2).count();
+                    let active_kf_wins = keyframes_per_window.values().filter(|&&c| c >= 1).count();
+                    if got_apps && max_topo_windows >= 2 && active_video_wins >= 2 && active_kf_wins >= 2 {
+                        break;
+                    }
+                } else if got_apps && max_topo_windows >= 1 && rx_video_frames >= 5 && rx_keyframes >= 1 {
                     break;
                 }
             }
 
-            if !got_apps || !got_topo || rx_video_frames < 5 || rx_keyframes < 1 {
+            if multi_window {
+                let active_video_wins = frames_per_window.values().filter(|&&c| c >= 2).count();
+                if !got_apps || max_topo_windows < 2 || active_video_wins < 2 {
+                    return Err(format!(
+                        "verify-host multi-window incomplete: apps={app_count} max_topo={max_topo_windows} frames_per_win={frames_per_window:?} kf_per_win={keyframes_per_window:?}"
+                    ).into());
+                }
+                println!(
+                    "VERIFY_MULTI_WINDOW_PASSED apps={} windows={} frames_per_win={:?}",
+                    app_count, max_topo_windows, frames_per_window
+                );
+            } else if !got_apps || max_topo_windows < 1 || rx_video_frames < 5 || rx_keyframes < 1 {
                 return Err(format!(
-                    "verify-host incomplete: apps={got_apps} topo={got_topo} frames={rx_video_frames} keyframes={rx_keyframes}"
+                    "verify-host incomplete: apps={got_apps} topo={max_topo_windows} frames={rx_video_frames} keyframes={rx_keyframes}"
                 ).into());
             }
+
+            let target_win_id = opened_window_ids
+                .first()
+                .copied()
+                .unwrap_or(FULL_DESKTOP_WINDOW_ID);
 
             // Send mouse tap, scroll, IME text commit, and clipboard sync to Android Host
             for (seq, payload) in [
                 (
                     10u64,
                     pb::control_envelope::Payload::MouseEvent(pb::MouseEvent {
-                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        window_id: target_win_id,
                         x: 180.0,
                         y: 360.0,
                         r#type: 1,
@@ -878,7 +972,7 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 (
                     11u64,
                     pb::control_envelope::Payload::MouseEvent(pb::MouseEvent {
-                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        window_id: target_win_id,
                         x: 180.0,
                         y: 360.0,
                         r#type: 2,
@@ -890,7 +984,7 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 (
                     12u64,
                     pb::control_envelope::Payload::ScrollEvent(pb::ScrollEvent {
-                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        window_id: target_win_id,
                         x: 180.0,
                         y: 420.0,
                         delta_x: 0.0,
@@ -902,7 +996,7 @@ async fn async_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 (
                     13u64,
                     pb::control_envelope::Payload::TextCommit(pb::TextCommitEvent {
-                        window_id: FULL_DESKTOP_WINDOW_ID,
+                        window_id: target_win_id,
                         text: "你好，安卓被控端！".to_string(),
                     }),
                 ),

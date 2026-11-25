@@ -149,6 +149,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStartLocalHost() {
+        if (viewModel.preferredHostMode.value == AndroidHostMode.ENHANCED_MULTI_WINDOW &&
+            viewModel.enhancedEngineState.value.isActive
+        ) {
+            viewModel.startLocalHostEnhanced()
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val audioGranted = ContextCompat.checkSelfPermission(
                 this,
@@ -165,7 +171,14 @@ class MainActivity : ComponentActivity() {
     private fun launchScreenCaptureConsent() {
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
             ?: return
-        mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+        val captureIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mpm.createScreenCaptureIntent(
+                android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay()
+            )
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        mediaProjectionLauncher.launch(captureIntent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -266,6 +279,29 @@ class MainActivity : ComponentActivity() {
 
     private fun handleE2ELaunchIntent(intent: Intent?) {
         if (intent == null) return
+
+        val enhancedRaw = intent.extras?.get("e2e_start_enhanced_host")
+        val shouldStartEnhanced = when (enhancedRaw) {
+            is Boolean -> enhancedRaw
+            is String -> enhancedRaw.trim().lowercase().let { it == "true" || it == "1" }
+            else -> false
+        }
+        if (shouldStartEnhanced) {
+            val adbPort = intent.getIntExtra("e2e_adb_port", 0)
+            val hostPort = intent.getIntExtra("e2e_host_port", OpenUUConstants.DEFAULT_PORT)
+            val hostPin = intent.getStringExtra("e2e_host_pin")?.trim().orEmpty()
+            intent.removeExtra("e2e_start_enhanced_host")
+            viewModel.startLocalHostEnhancedE2E(adbConnectPort = adbPort, hostPort = hostPort, pin = hostPin)
+            return
+        }
+
+        val openAppExtra = intent.getStringExtra("e2e_open_app")?.trim().orEmpty()
+        if (openAppExtra.isNotEmpty()) {
+            intent.removeExtra("e2e_open_app")
+            viewModel.openRemoteApp(openAppExtra, openAppExtra)
+            return
+        }
+
         val hostStartRaw = intent.extras?.get("e2e_start_host")
         val shouldStartHost = when (hostStartRaw) {
             is Boolean -> hostStartRaw

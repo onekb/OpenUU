@@ -19,8 +19,8 @@ android {
         applicationId = "ren.onekb.openuu"
         minSdk = 26
         targetSdk = 35
-        versionCode = 703
-        versionName = "0.7.3"
+        versionCode = 704
+        versionName = "0.7.4"
 
         ndk {
             abiFilters += openuuAbis

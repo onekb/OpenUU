@@ -219,6 +219,12 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
 
     private val hostPrefs = appContext.getSharedPreferences("openuu_host_prefs", Context.MODE_PRIVATE)
     val localHostState: StateFlow<LocalHostUiState> = AndroidHostService.hostState
+    val enhancedEngineState: StateFlow<EnhancedEngineState> = WirelessAdbActivator.state
+
+    private val _preferredHostMode = MutableStateFlow(
+        WirelessAdbActivator.loadPreferredMode(appContext)
+    )
+    val preferredHostMode: StateFlow<AndroidHostMode> = _preferredHostMode.asStateFlow()
 
     private val _isAccessibilityEnabled = MutableStateFlow(
         OpenUURemoteInputService.isEnabledInSettings(appContext)
@@ -271,6 +277,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         startNsdDiscovery()
         startDiscoveryPollingLoop()
         observeHostLogsAndAccessibility()
+        WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = true)
     }
 
     private fun observeHostLogsAndAccessibility() {
@@ -306,6 +313,16 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         _isAccessibilityEnabled.value =
             OpenUURemoteInputService.instance != null ||
                 OpenUURemoteInputService.isEnabledInSettings(appContext)
+        _preferredHostMode.value = WirelessAdbActivator.loadPreferredMode(appContext)
+        WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = false)
+    }
+
+    fun setPreferredHostMode(mode: AndroidHostMode) {
+        WirelessAdbActivator.savePreferredMode(appContext, mode)
+        _preferredHostMode.value = mode
+        if (mode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+            WirelessAdbActivator.refreshStatusAsync(appContext, trySilentReconnect = true)
+        }
     }
 
     fun ensureInitialHostPin(): String {
@@ -326,6 +343,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         val pin = ensureInitialHostPin()
         val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
             action = AndroidHostService.ACTION_START_HOST
+            putExtra(AndroidHostService.EXTRA_HOST_MODE, AndroidHostMode.BASIC_FULLSCREEN.prefValue)
             putExtra(AndroidHostService.EXTRA_RESULT_CODE, resultCode)
             putExtra(AndroidHostService.EXTRA_RESULT_DATA, resultData)
             putExtra(AndroidHostService.EXTRA_PREFERRED_PIN, pin)
@@ -338,12 +356,58 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    fun startLocalHostEnhanced(
+        port: Int = OpenUUConstants.DEFAULT_PORT,
+        pin: String = ""
+    ) {
+        val cleanPin = pin.ifBlank { ensureInitialHostPin() }
+        hostPrefs.edit().putString("host_pin", cleanPin).apply()
+        _savedHostPin.value = cleanPin
+        WirelessAdbActivator.savePreferredMode(appContext, AndroidHostMode.ENHANCED_MULTI_WINDOW)
+        _preferredHostMode.value = AndroidHostMode.ENHANCED_MULTI_WINDOW
+        val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
+            action = AndroidHostService.ACTION_START_HOST
+            putExtra(AndroidHostService.EXTRA_HOST_MODE, AndroidHostMode.ENHANCED_MULTI_WINDOW.prefValue)
+            putExtra(AndroidHostService.EXTRA_BIND_PORT, port)
+            putExtra(AndroidHostService.EXTRA_PREFERRED_PIN, cleanPin)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appContext.startForegroundService(svcIntent)
+        } else {
+            appContext.startService(svcIntent)
+        }
+    }
+
+    fun startLocalHostEnhancedE2E(adbConnectPort: Int, hostPort: Int, pin: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val activated = if (adbConnectPort > 0) {
+                WirelessAdbActivator.spawnPrivViaAdbConnectPort(
+                    context = appContext,
+                    connectPort = adbConnectPort,
+                    silent = false
+                )
+            } else {
+                val (p, t) = WirelessAdbActivator.ensurePrivCredentials(appContext)
+                PrivDaemonClient.probeRunning(p, t).alive
+            }
+            if (!activated) {
+                Log.e(E2E_TAG, "ENHANCED_PRIV_ACTIVATE_FAILED adbPort=$adbConnectPort")
+                return@launch
+            }
+            Log.i(E2E_TAG, "ENHANCED_PRIV_ACTIVE starting hostPort=$hostPort")
+            startLocalHostEnhanced(port = hostPort, pin = pin)
+        }
+    }
+
     fun startLocalHostSyntheticE2E(port: Int, pin: String) {
         val cleanPin = pin.ifBlank { ensureInitialHostPin() }
         hostPrefs.edit().putString("host_pin", cleanPin).apply()
         _savedHostPin.value = cleanPin
+        WirelessAdbActivator.savePreferredMode(appContext, AndroidHostMode.BASIC_FULLSCREEN)
+        _preferredHostMode.value = AndroidHostMode.BASIC_FULLSCREEN
         val svcIntent = android.content.Intent(appContext, AndroidHostService::class.java).apply {
             action = AndroidHostService.ACTION_START_HOST
+            putExtra(AndroidHostService.EXTRA_HOST_MODE, AndroidHostMode.BASIC_FULLSCREEN.prefValue)
             putExtra(AndroidHostService.EXTRA_SYNTHETIC_MODE, true)
             putExtra(AndroidHostService.EXTRA_BIND_PORT, port)
             putExtra(AndroidHostService.EXTRA_PREFERRED_PIN, cleanPin)

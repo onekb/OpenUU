@@ -389,7 +389,7 @@ else
   echo "    [WARN] MOCK_TICKET empty; skipping ticket check"
 fi
 
-echo "==> 8/8 Testing Android Controlled Host mode (QUIC Host + MediaCodec H.264 encode + Accessibility Input)..."
+echo "==> 8/9 Testing Android Controlled Host Mode 1 (Basic Full-Screen Mode)..."
 HOST_E2E_PORT=39485
 HOST_E2E_PIN="654321"
 LOGCAT_HOST="/tmp/openuu_android_host_e2e.log"
@@ -416,7 +416,7 @@ for i in $(seq 1 40); do
     grep -E -A 30 "FATAL EXCEPTION|Fatal signal|SIGABRT" "$LOGCAT_HOST" >&2
     exit 1
   fi
-  if grep -q "HOST_READY port=${HOST_E2E_PORT}" "$LOGCAT_HOST" \
+  if grep -q "HOST_READY mode=basic port=${HOST_E2E_PORT}" "$LOGCAT_HOST" \
      && grep -q "HOST_TICKET_READY ticket=" "$LOGCAT_HOST"; then
     HOST_READY_OK=1
     HOST_TICKET="$(grep "HOST_TICKET_READY ticket=" "$LOGCAT_HOST" | tail -n 1 | sed -n 's/.*ticket=\([^[:space:]]*\).*/\1/p')"
@@ -430,14 +430,32 @@ if [ "$HOST_READY_OK" -ne 1 ] || [ -z "$HOST_TICKET" ]; then
   grep -E "OpenUU|AndroidRuntime" "$LOGCAT_HOST" | tail -n 80 >&2
   exit 1
 fi
-echo "    [PASS] Android Host listening on UDP $HOST_E2E_PORT (ticket=${HOST_TICKET:0:44}...)"
+echo "    [PASS] Basic Full-Screen Host listening on UDP $HOST_E2E_PORT (ticket=${HOST_TICKET:0:44}...)"
 
 sleep 0.8
 adb -s "$EMU_SERIAL" exec-out screencap -p > "$ARTIFACT_DIR/android_04_host_active.png"
 echo "    Saved screenshot: $ARTIFACT_DIR/android_04_host_active.png ($(wc -c < "$ARTIFACT_DIR/android_04_host_active.png") bytes)"
 
-if ! "$MOCK_BIN" verify-host "$HOST_TICKET" "$HOST_E2E_PIN" --force-relay >"$VERIFY_HOST_LOG" 2>&1; then
-  echo "    [FAIL] openuu-cli verify-host failed against Android Host!" >&2
+ANDROID_VERIFY_BIN="$ROOT_DIR/target/aarch64-linux-android/release/openuu-cli"
+if [ -f "$ANDROID_VERIFY_BIN" ]; then
+  adb -s "$EMU_SERIAL" push "$ANDROID_VERIFY_BIN" /data/local/tmp/openuu-cli >/dev/null
+  adb -s "$EMU_SERIAL" shell chmod 755 /data/local/tmp/openuu-cli
+fi
+
+run_verify_host_cmd() {
+  local port="$1"
+  local pin="$2"
+  local ticket="$3"
+  local extra_flag="${4:-}"
+  if [ -f "$ANDROID_VERIFY_BIN" ]; then
+    adb -s "$EMU_SERIAL" shell "/data/local/tmp/openuu-cli verify-host 127.0.0.1:${port} ${pin} ${extra_flag}"
+  else
+    "$MOCK_BIN" verify-host "$ticket" "$pin" --force-relay $extra_flag
+  fi
+}
+
+if ! run_verify_host_cmd "$HOST_E2E_PORT" "$HOST_E2E_PIN" "$HOST_TICKET" >"$VERIFY_HOST_LOG" 2>&1; then
+  echo "    [FAIL] openuu-cli verify-host failed against Basic Android Host!" >&2
   cat "$VERIFY_HOST_LOG" >&2
   adb -s "$EMU_SERIAL" logcat -d | grep -E "OpenUU|MediaCodec|AndroidRuntime" | tail -n 100 >&2
   exit 1
@@ -447,22 +465,94 @@ cat "$VERIFY_HOST_LOG"
 sleep 0.8
 adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_HOST" 2>/dev/null || true
 
-check_cond "verify-host received H.264 frames & keyframes" grep -q "VERIFY_HOST_ALL_PASSED" "$VERIFY_HOST_LOG"
+check_cond "Basic Mode exposes ONLY full-screen desktop (count=1)" grep -q "VERIFY_APPS count=1" "$VERIFY_HOST_LOG"
+check_cond "verify-host received Basic Mode H.264 frames & keyframes" grep -q "VERIFY_HOST_ALL_PASSED" "$VERIFY_HOST_LOG"
 check_cond "Android Host received IME text_commit" grep -q "HOST_TEXT_COMMIT.*你好，安卓被控端！" "$LOGCAT_HOST"
 check_cond "Android Host received clipboard_sync" grep -q "HOST_CLIPBOARD_SYNC.*Hello Android Host E2E" "$LOGCAT_HOST"
-check_cond "Zero FATAL EXCEPTION during Android Host session" bash -c "! grep -q 'FATAL EXCEPTION' '$LOGCAT_HOST'"
+check_cond "Zero FATAL EXCEPTION during Basic Host session" bash -c "! grep -q 'FATAL EXCEPTION' '$LOGCAT_HOST'"
+
+echo "==> 9/9 Testing Android Controlled Host Mode 2 (Enhanced Multi-Window Mode via built-in libadb + OpenUUPrivServer UID 2000)..."
+ENH_PORT=39486
+ENH_PIN="889900"
+ADB_LOCAL_PORT=5555
+LOGCAT_ENH="/tmp/openuu_android_host_enhanced_e2e.log"
+VERIFY_ENH_LOG="/tmp/openuu_verify_host_enhanced.log"
+rm -f "$LOGCAT_ENH" "$VERIFY_ENH_LOG"
+
+adb -s "$EMU_SERIAL" shell am force-stop "$PKG"
+# Enable adbd TCP listener inside the emulator so OpenUU's built-in Rust libadb connects to 127.0.0.1:5555 as UID 2000 (shell)
+adb -s "$EMU_SERIAL" tcpip "$ADB_LOCAL_PORT" >/dev/null 2>&1 || true
+adb -s "$EMU_SERIAL" wait-for-device
+sleep 1.5
+adb -s "$EMU_SERIAL" emu redir add "udp:${ENH_PORT}:${ENH_PORT}" >/dev/null 2>&1 || true
+
+adb -s "$EMU_SERIAL" logcat -c
+adb -s "$EMU_SERIAL" shell am start -W -n "$ACTIVITY" \
+  --ez e2e_start_enhanced_host true \
+  --ei e2e_adb_port "$ADB_LOCAL_PORT" \
+  --ei e2e_host_port "$ENH_PORT" \
+  --es e2e_host_pin "$ENH_PIN"
+
+ENH_READY_OK=0
+ENH_TICKET=""
+for i in $(seq 1 50); do
+  adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_ENH" 2>/dev/null || true
+  if grep -Eq "FATAL EXCEPTION|Fatal signal|SIGABRT" "$LOGCAT_ENH"; then
+    echo "    [FAIL] Crash while starting Enhanced Multi-Window Host!" >&2
+    grep -E -A 30 "FATAL EXCEPTION|Fatal signal|SIGABRT" "$LOGCAT_ENH" >&2
+    exit 1
+  fi
+  if grep -q "HOST_READY mode=enhanced port=${ENH_PORT}" "$LOGCAT_ENH" \
+     && grep -q "HOST_TICKET_READY ticket=" "$LOGCAT_ENH"; then
+    ENH_READY_OK=1
+    ENH_TICKET="$(grep "HOST_TICKET_READY ticket=" "$LOGCAT_ENH" | tail -n 1 | sed -n 's/.*ticket=\([^[:space:]]*\).*/\1/p')"
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$ENH_READY_OK" -ne 1 ] || [ -z "$ENH_TICKET" ]; then
+  echo "    [FAIL] Enhanced Host did not report HOST_READY mode=enhanced + HOST_TICKET_READY!" >&2
+  grep -E "OpenUU|AndroidRuntime" "$LOGCAT_ENH" | tail -n 100 >&2
+  adb -s "$EMU_SERIAL" shell cat /data/local/tmp/openuu_priv.log 2>/dev/null || true
+  exit 1
+fi
+echo "    [PASS] Enhanced Multi-Window Host (UID 2000, zero MediaProjection) listening on UDP $ENH_PORT"
+
+sleep 0.8
+adb -s "$EMU_SERIAL" exec-out screencap -p > "$ARTIFACT_DIR/android_05_enhanced_multi_window.png"
+echo "    Saved screenshot: $ARTIFACT_DIR/android_05_enhanced_multi_window.png ($(wc -c < "$ARTIFACT_DIR/android_05_enhanced_multi_window.png") bytes)"
+
+if ! run_verify_host_cmd "$ENH_PORT" "$ENH_PIN" "$ENH_TICKET" "--multi-window" >"$VERIFY_ENH_LOG" 2>&1; then
+  echo "    [FAIL] openuu-cli verify-host --multi-window failed against Enhanced Host!" >&2
+  cat "$VERIFY_ENH_LOG" >&2
+  adb -s "$EMU_SERIAL" logcat -d | grep -E "OpenUU|MediaCodec|AndroidRuntime" | tail -n 100 >&2
+  adb -s "$EMU_SERIAL" shell cat /data/local/tmp/openuu_priv.log 2>/dev/null || true
+  exit 1
+fi
+cat "$VERIFY_ENH_LOG"
+
+sleep 0.8
+adb -s "$EMU_SERIAL" logcat -d > "$LOGCAT_ENH" 2>/dev/null || true
+
+check_cond "Built-in libadb spawned OpenUUPrivServer (UID 2000)" grep -q "PRIV_ENGINE_ACTIVE uid=2000" "$LOGCAT_ENH"
+check_cond "Enhanced Multi-Window streamed >=2 concurrent Android app VirtualDisplays" grep -q "VERIFY_MULTI_WINDOW_PASSED" "$VERIFY_ENH_LOG"
+check_cond "Enhanced Host received per-window IME text_commit" grep -q "HOST_TEXT_COMMIT.*你好，安卓被控端！" "$LOGCAT_ENH"
+check_cond "Zero FATAL EXCEPTION during Enhanced Multi-Window session" bash -c "! grep -q 'FATAL EXCEPTION' '$LOGCAT_ENH'"
 
 if [ "$FAIL" -ne 0 ]; then
-  grep -E "OpenUU|AndroidRuntime" "$LOGCAT_HOST" | tail -n 80 >&2
+  grep -E "OpenUU|AndroidRuntime" "$LOGCAT_ENH" | tail -n 80 >&2
+  adb -s "$EMU_SERIAL" shell cat /data/local/tmp/openuu_priv.log 2>/dev/null || true
   exit 1
 fi
 
 echo ""
 echo "============================================================"
-echo " ALL ANDROID E2E ACCEPTANCE CHECKS (CLIENT + HOST) PASSED!"
+echo " ALL ANDROID E2E ACCEPTANCE CHECKS (CLIENT + DUAL-MODE HOST) PASSED!"
 echo " Screenshots:"
 echo "   - $ARTIFACT_DIR/android_01_connect.png"
 echo "   - $ARTIFACT_DIR/android_02_remote_stream.png"
 echo "   - $ARTIFACT_DIR/android_03_landscape_fullscreen.png"
 echo "   - $ARTIFACT_DIR/android_04_host_active.png"
+echo "   - $ARTIFACT_DIR/android_05_enhanced_multi_window.png"
 echo "============================================================"

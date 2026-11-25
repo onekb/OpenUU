@@ -43,6 +43,11 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection|dataSync" />
 
+        <receiver
+            android:name=".WirelessAdbPairingReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <service
             android:name=".OpenUURemoteInputService"
             android:enabled="true"

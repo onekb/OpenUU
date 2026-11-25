@@ -49,7 +49,7 @@
                                    FontWeight="Bold"
                                    Foreground="{StaticResource TextPrimary}" />
                         <TextBlock x:Name="SidebarVersionText"
-                                   Text="v0.7.3"
+                                   Text="v0.7.4"
                                    FontSize="10"
                                    FontFamily="Consolas"
                                    Foreground="{StaticResource TextSecondary}"
@@ -876,7 +876,7 @@
                                 <Grid Margin="0,0,0,12">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <TextBlock x:Name="SettingsCurrentVerText"
-                                                   Text="当前客户端版本：v0.7.3"
+                                                   Text="当前客户端版本：v0.7.4"
                                                    FontSize="12.5"
                                                    FontWeight="SemiBold"
                                                    Foreground="{StaticResource TextPrimary}" />

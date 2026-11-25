@@ -663,6 +663,7 @@ sealed class ControlEvent {
 
 data class LocalHostUiState(
     val isRunning: Boolean = false,
+    val hostMode: AndroidHostMode = AndroidHostMode.BASIC_FULLSCREEN,
     val boundPort: Int = OpenUUConstants.DEFAULT_PORT,
     val pin: String = "",
     val hostTicket: String = "",
@@ -670,6 +671,7 @@ data class LocalHostUiState(
     val connectedClientName: String = "",
     val linkBadge: String = "",
     val isStreamingScreen: Boolean = false,
+    val openWindowCount: Int = 0,
     val encodedFrames: Long = 0L,
     val audioCaptureActive: Boolean = false,
     val lastError: String = ""

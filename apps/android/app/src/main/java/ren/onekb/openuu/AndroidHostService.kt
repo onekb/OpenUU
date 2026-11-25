@@ -54,11 +54,17 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Foreground service hosting the Android controlled-device (`Host`) pipeline:
- * - Dedicated `OpenUURuntime` listener (LAN QUIC + mDNS + 9-digit Coord + Iroh P2P/Relay)
- * - Single persistent `MediaProjection` + `VirtualDisplay` (Android 14/15 compliant)
- * - Hardware H.264 Annex-B `ScreenCaptureEncoder` + Android 10+ `SystemAudioEncoder`
- * - Dispatches remote pointer, scroll, shortcut, and IME text events to [OpenUURemoteInputService]
+ * Foreground service hosting OpenUU's Dual-Mode Android Controlled Host (`Host`) pipeline:
+ *
+ * 1. **Basic Full-Screen Mode ([AndroidHostMode.BASIC_FULLSCREEN])**:
+ *    - Zero ADB/Root setup: uses `MediaProjection` (locked to Entire Screen on Android 14/15) +
+ *      `AccessibilityService` touch/IME injection, exposing only `__openuu_full_desktop__`.
+ * 2. **Enhanced Multi-Window Mode ([AndroidHostMode.ENHANCED_MULTI_WINDOW])**:
+ *    - Built-in Shizuku-free `OpenUUPrivServer` (`UID 2000` Wireless Debugging or `UID 0` Root):
+ *    - No `MediaProjection` popup and no `AccessibilityService` required;
+ *    - Creates independent `VirtualDisplay` + H.264 encoder per opened app so remote clients can run
+ *      multiple Android apps concurrently in separate windows, including Dual-App WeChat (`@0` & `@999`)
+ *      without triggering OEM "开哪个" chooser sheets.
  */
 class AndroidHostService : Service(), NativeCallbackListener {
 
@@ -72,6 +78,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         const val ACTION_DISCONNECT_CLIENT = "ren.onekb.openuu.action.DISCONNECT_CLIENT"
         const val ACTION_REFRESH_PIN = "ren.onekb.openuu.action.REFRESH_PIN"
 
+        const val EXTRA_HOST_MODE = "extra_host_mode"
         const val EXTRA_RESULT_CODE = "extra_mp_result_code"
         const val EXTRA_RESULT_DATA = "extra_mp_result_data"
         const val EXTRA_PREFERRED_PIN = "extra_preferred_pin"
@@ -96,6 +103,9 @@ class AndroidHostService : Service(), NativeCallbackListener {
     @Volatile
     private var hostRuntimeHandle: Long = 0L
 
+    @Volatile
+    private var activeHostMode: AndroidHostMode = AndroidHostMode.BASIC_FULLSCREEN
+
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var syntheticMode: Boolean = false
@@ -103,6 +113,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
     private val streamLock = Any()
     private var videoEncoder: ScreenCaptureEncoder? = null
     private var audioEncoder: SystemAudioEncoder? = null
+    private var privClient: PrivDaemonClient? = null
 
     @Volatile
     private var activeWindowId: Int = 0
@@ -137,6 +148,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayRemoved(displayId: Int) = Unit
         override fun onDisplayChanged(displayId: Int) {
+            if (activeHostMode != AndroidHostMode.BASIC_FULLSCREEN) return
             if (displayId != Display.DEFAULT_DISPLAY) return
             if (activeWindowId == 0) return
             mainHandler.removeCallbacks(recheckOrientationRunnable)
@@ -145,21 +157,23 @@ class AndroidHostService : Service(), NativeCallbackListener {
     }
 
     private val recheckOrientationRunnable = Runnable {
-        if (activeWindowId == 0) return@Runnable
+        if (activeHostMode != AndroidHostMode.BASIC_FULLSCREEN || activeWindowId == 0) return@Runnable
         val (physW, physH, dpi) = queryDisplayMetrics()
         val (newEncW, newEncH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
         if (newEncW != currentEncWidth || newEncH != currentEncHeight) {
             emitHostLog("检测到屏幕旋转，切换编码分辨率 ${newEncW}x${newEncH}")
             serviceScope.launch {
-                restartVideoStreamForSize(newEncW, newEncH, dpi)
+                restartBasicVideoStreamForSize(newEncW, newEncH, dpi)
             }
         }
     }
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
-            emitHostLog("系统屏幕共享授权已结束，自动停止本机被控")
-            stopHostCompletely()
+            if (activeHostMode == AndroidHostMode.BASIC_FULLSCREEN) {
+                emitHostLog("系统屏幕共享授权已结束，自动停止本机被控")
+                stopHostCompletely()
+            }
         }
     }
 
@@ -197,6 +211,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
                         connectedClientName = "",
                         linkBadge = "",
                         isStreamingScreen = false,
+                        openWindowCount = 0,
                         audioCaptureActive = false
                     )
                 }
@@ -221,7 +236,8 @@ class AndroidHostService : Service(), NativeCallbackListener {
                                 boundPort = parsed.first,
                                 pin = parsed.second,
                                 connectedClientName = "",
-                                isStreamingScreen = false
+                                isStreamingScreen = false,
+                                openWindowCount = 0
                             )
                         }
                         emitHostLog("已刷新本机访问密码")
@@ -258,6 +274,10 @@ class AndroidHostService : Service(), NativeCallbackListener {
     }
 
     private fun handleStartHostIntent(intent: Intent) {
+        val requestedMode = AndroidHostMode.fromPref(
+            intent.getStringExtra(EXTRA_HOST_MODE)
+                ?: WirelessAdbActivator.loadPreferredMode(applicationContext).prefValue
+        )
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -270,9 +290,11 @@ class AndroidHostService : Service(), NativeCallbackListener {
             .ifEmpty { loadSavedHostPinPref() }
         val bindPort = intent.getIntExtra(EXTRA_BIND_PORT, OpenUUConstants.DEFAULT_PORT)
 
+        val isEnhanced = requestedMode == AndroidHostMode.ENHANCED_MULTI_WINDOW
         val hasValidProjection = (resultCode == Activity.RESULT_OK && resultData != null)
-        if (!hasValidProjection && !wantSynthetic) {
-            _hostState.update { it.copy(lastError = "未获得屏幕录制授权") }
+
+        if (!isEnhanced && !hasValidProjection && !wantSynthetic) {
+            _hostState.update { it.copy(lastError = "未获得整屏录制授权") }
             stopSelf()
             return
         }
@@ -281,7 +303,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         val initialNotif = buildOngoingNotification("正在启动本机被控服务...")
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val fgType = if (hasValidProjection) {
+                val fgType = if (!isEnhanced && hasValidProjection) {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
@@ -303,12 +325,43 @@ class AndroidHostService : Service(), NativeCallbackListener {
             return
         }
 
-        // Clean up any previous projection / runtime if restarting
+        // Clean up any previous projection / priv session before re-initializing
         stopActiveMediaStreams()
+        privClient?.disconnect()
+        privClient = null
         releaseProjectionAndVirtualDisplay()
-        syntheticMode = wantSynthetic && !hasValidProjection
 
-        if (hasValidProjection) {
+        activeHostMode = requestedMode
+        syntheticMode = !isEnhanced && wantSynthetic && !hasValidProjection
+
+        val (physW, physH, dpi) = queryDisplayMetrics()
+        val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
+        currentEncWidth = encW
+        currentEncHeight = encH
+
+        if (isEnhanced) {
+            serviceScope.launch(Dispatchers.IO) {
+                val (privPort, privToken) = WirelessAdbActivator.ensurePrivCredentials(applicationContext)
+                val client = buildPrivDaemonClient(privPort, privToken)
+                if (!client.connect()) {
+                    _hostState.update {
+                        it.copy(
+                            hostMode = AndroidHostMode.ENHANCED_MULTI_WINDOW,
+                            lastError = "多窗口增强引擎尚未运行，请先点「一键激活增强模式」或切换至基础整屏模式"
+                        )
+                    }
+                    WirelessAdbActivator.refreshStatusAsync(applicationContext)
+                    mainHandler.post { stopHostCompletely() }
+                    return@launch
+                }
+                privClient = client
+                WirelessAdbActivator.refreshStatusAsync(applicationContext)
+                mainHandler.post {
+                    finishBindingHostRuntime(bindPort, preferredPin)
+                }
+            }
+            return
+        } else if (hasValidProjection) {
             try {
                 val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val mp = mpm.getMediaProjection(resultCode, resultData!!)
@@ -318,11 +371,6 @@ class AndroidHostService : Service(), NativeCallbackListener {
                     return
                 }
                 mp.registerCallback(projectionCallback, mainHandler)
-                val (physW, physH, dpi) = queryDisplayMetrics()
-                val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
-                currentEncWidth = encW
-                currentEncHeight = encH
-                // Create the single reusable VirtualDisplay (surface = null while idle)
                 val vd = mp.createVirtualDisplay(
                     "OpenUUAndroidHost",
                     encW,
@@ -341,13 +389,12 @@ class AndroidHostService : Service(), NativeCallbackListener {
                 stopHostCompletely()
                 return
             }
-        } else {
-            val (physW, physH, _) = queryDisplayMetrics()
-            val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
-            currentEncWidth = encW
-            currentEncHeight = encH
         }
 
+        finishBindingHostRuntime(bindPort, preferredPin)
+    }
+
+    private fun finishBindingHostRuntime(bindPort: Int, preferredPin: String) {
         if (hostRuntimeHandle == 0L) {
             OpenUUNativeBridge.nativeInitAndroidContext(applicationContext)
             OpenUUNativeBridge.nativeSetAppDirs(filesDir.absolutePath, cacheDir.absolutePath)
@@ -366,7 +413,6 @@ class AndroidHostService : Service(), NativeCallbackListener {
         val started = OpenUUNativeBridge.nativeStartHost(handle, bindPort, preferredPin)
         val parsed = parsePortAndPin(started)
         if (parsed == null) {
-            // Retry on ephemeral UDP port if 39481 is already bound
             val fallbackStarted = OpenUUNativeBridge.nativeStartHost(handle, 0, preferredPin)
             val fallbackParsed = parsePortAndPin(fallbackStarted)
             if (fallbackParsed == null) {
@@ -380,24 +426,88 @@ class AndroidHostService : Service(), NativeCallbackListener {
         }
     }
 
+    private fun buildPrivDaemonClient(privPort: Int, privToken: String): PrivDaemonClient {
+        return PrivDaemonClient(
+            port = privPort,
+            authToken = privToken,
+            onAppsListJson = { appsJson ->
+                val curHandle = hostRuntimeHandle
+                if (curHandle != 0L) {
+                    val rc = OpenUUNativeBridge.nativeSendAppListJson(curHandle, appsJson)
+                    val count = runCatching { JSONArray(appsJson).length() }.getOrDefault(0)
+                    emitHostLog("HOST_APPS_SENT mode=enhanced count=$count bytes=${appsJson.length} rc=$rc")
+                }
+            },
+            onWindowTopologyJson = { topoJson ->
+                val curHandle = hostRuntimeHandle
+                if (curHandle != 0L) {
+                    OpenUUNativeBridge.nativeSendWindowTopologyJson(curHandle, topoJson)
+                    val winCount = runCatching { JSONArray(topoJson).length() }.getOrDefault(0)
+                    emitHostLog("HOST_TOPO_SENT mode=enhanced windows=$winCount")
+                    _hostState.update {
+                        it.copy(
+                            openWindowCount = winCount,
+                            isStreamingScreen = winCount > 0
+                        )
+                    }
+                    updateOngoingNotification()
+                }
+            },
+            onVideoFrame = { windowId, codec, flags, ptsUs, w, h, bytes ->
+                val curHandle = hostRuntimeHandle
+                if (curHandle != 0L) {
+                    val rc = OpenUUNativeBridge.nativeSendVideoFrame(
+                        curHandle,
+                        codec,
+                        flags,
+                        windowId,
+                        ptsUs,
+                        w,
+                        h,
+                        bytes,
+                        bytes.size
+                    )
+                    if (rc == 0) {
+                        val total = encodedFrameCounter.incrementAndGet()
+                        if (total == 1L || total == 5L || total % 60L == 0L) {
+                            if (total <= 5L) {
+                                emitHostLog("HOST_VIDEO_SENT mode=enhanced win=$windowId frames=$total ${w}x${h} bytes=${bytes.size}")
+                            }
+                            _hostState.update { it.copy(encodedFrames = total) }
+                        }
+                    }
+                }
+            },
+            onLog = { msg -> emitHostLog(msg) },
+            onDisconnected = {
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW && _hostState.value.isRunning) {
+                    emitHostLog("高阶多窗口引擎连接断开")
+                    WirelessAdbActivator.refreshStatusAsync(applicationContext)
+                }
+            }
+        )
+    }
+
     private fun onHostBoundSuccess(boundPort: Int, activePin: String) {
         saveHostPinPref(activePin)
         encodedFrameCounter.set(0L)
         _hostState.update {
             it.copy(
                 isRunning = true,
+                hostMode = activeHostMode,
                 boundPort = boundPort,
                 pin = activePin,
                 coordStatus = "正在注册跨网寻址...",
                 connectedClientName = "",
                 linkBadge = "",
                 isStreamingScreen = false,
+                openWindowCount = 0,
                 encodedFrames = 0L,
                 audioCaptureActive = false,
                 lastError = ""
             )
         }
-        emitHostLog("HOST_READY port=$boundPort pin=$activePin synthetic=$syntheticMode")
+        emitHostLog("HOST_READY mode=${activeHostMode.prefValue} port=$boundPort pin=$activePin synthetic=$syntheticMode")
         updateOngoingNotification()
         refreshHostIdentityTicketDelayed()
     }
@@ -456,6 +566,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
                         connectedClientName = "",
                         linkBadge = "",
                         isStreamingScreen = false,
+                        openWindowCount = 0,
                         audioCaptureActive = false
                     )
                 }
@@ -468,29 +579,50 @@ class AndroidHostService : Service(), NativeCallbackListener {
         val evt = ControlEvent.parse(json)
         when (evt) {
             ControlEvent.ListAppsReq -> {
-                serviceScope.launch { pushInstalledAppsToClient(force = false) }
+                serviceScope.launch { pushInstalledAppsToClient(force = true) }
             }
             is ControlEvent.StartSession -> {
-                emitHostLog("收到远端启动画面请求 bundle=${evt.bundleId}")
+                emitHostLog("收到远端打开请求 mode=${activeHostMode.prefValue} bundle=${evt.bundleId}")
                 serviceScope.launch { startStreamingSession(evt.bundleId) }
             }
             is ControlEvent.StopSession -> {
-                if (evt.windowId == 0 || evt.windowId == activeWindowId) {
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    privClient?.closeWindow(evt.windowId)
+                } else if (evt.windowId == 0 || evt.windowId == activeWindowId) {
                     stopActiveMediaStreams()
                     sendEmptyWindowTopology()
-                    _hostState.update { it.copy(isStreamingScreen = false, audioCaptureActive = false) }
+                    _hostState.update {
+                        it.copy(isStreamingScreen = false, openWindowCount = 0, audioCaptureActive = false)
+                    }
                     updateOngoingNotification()
                 }
             }
             is ControlEvent.RequestKeyframe -> {
-                synchronized(streamLock) {
-                    videoEncoder?.requestKeyframe()
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    privClient?.requestKeyframe(evt.windowId)
+                } else {
+                    synchronized(streamLock) {
+                        videoEncoder?.requestKeyframe()
+                    }
+                }
+            }
+            is ControlEvent.ResizeWindow -> {
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    val (_, _, dpi) = queryDisplayMetrics()
+                    privClient?.resizeWindow(
+                        windowId = evt.windowId,
+                        width = evt.width.toInt(),
+                        height = evt.height.toInt(),
+                        dpi = dpi
+                    )
                 }
             }
             is ControlEvent.AudioControl -> {
                 clientWantsAudio = evt.audioEnabled
                 clientWantsMuteHost = evt.muteHost
-                reconcileAudioCapture()
+                if (activeHostMode == AndroidHostMode.BASIC_FULLSCREEN) {
+                    reconcileAudioCapture()
+                }
             }
             is ControlEvent.LinkQuality -> {
                 val modeLabel = when (evt.linkMode) {
@@ -505,45 +637,82 @@ class AndroidHostService : Service(), NativeCallbackListener {
                     "p2p", "ipv6", "wan_direct" -> 4_000_000
                     else -> 2_200_000
                 }
-                synchronized(streamLock) {
-                    videoEncoder?.updateBitrate(targetBps)
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    privClient?.updateBitrate(targetBps)
+                } else {
+                    synchronized(streamLock) {
+                        videoEncoder?.updateBitrate(targetBps)
+                    }
                 }
                 _hostState.update { it.copy(linkBadge = badge) }
             }
             is ControlEvent.Mouse -> {
-                val (normX, normY) = toNormalizedCoords(evt.x, evt.y)
-                OpenUURemoteInputService.instance?.dispatchMouse(
-                    normX = normX,
-                    normY = normY,
-                    eventType = evt.eventType,
-                    button = evt.button
-                )
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    val (normX, normY) = toNormalizedCoordsForWindow(evt.windowId, evt.x, evt.y)
+                    privClient?.sendMouse(
+                        windowId = evt.windowId,
+                        normX = normX,
+                        normY = normY,
+                        eventType = evt.eventType,
+                        button = evt.button
+                    )
+                } else {
+                    val (normX, normY) = toNormalizedCoordsBasic(evt.x, evt.y)
+                    OpenUURemoteInputService.instance?.dispatchMouse(
+                        normX = normX,
+                        normY = normY,
+                        eventType = evt.eventType,
+                        button = evt.button
+                    )
+                }
                 if (evt.eventType == 1 || evt.eventType == 2) {
-                    Log.d(TAG, "HOST_INPUT mouse type=${evt.eventType} btn=${evt.button} norm=($normX,$normY)")
+                    Log.d(TAG, "HOST_INPUT mouse win=${evt.windowId} type=${evt.eventType} btn=${evt.button}")
                 }
             }
             is ControlEvent.Scroll -> {
-                val (normX, normY) = toNormalizedCoords(evt.x, evt.y)
-                OpenUURemoteInputService.instance?.dispatchScroll(
-                    normX = normX,
-                    normY = normY,
-                    deltaX = evt.deltaX,
-                    deltaY = evt.deltaY,
-                    isContinuous = evt.isContinuous
-                )
-                Log.d(TAG, "HOST_INPUT scroll dx=${evt.deltaX} dy=${evt.deltaY}")
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    val (normX, normY) = toNormalizedCoordsForWindow(evt.windowId, evt.x, evt.y)
+                    privClient?.sendScroll(
+                        windowId = evt.windowId,
+                        normX = normX,
+                        normY = normY,
+                        dx = evt.deltaX,
+                        dy = evt.deltaY
+                    )
+                } else {
+                    val (normX, normY) = toNormalizedCoordsBasic(evt.x, evt.y)
+                    OpenUURemoteInputService.instance?.dispatchScroll(
+                        normX = normX,
+                        normY = normY,
+                        deltaX = evt.deltaX,
+                        deltaY = evt.deltaY,
+                        isContinuous = evt.isContinuous
+                    )
+                }
             }
             is ControlEvent.Key -> {
-                OpenUURemoteInputService.instance?.dispatchKey(
-                    keyCode = evt.keyCode,
-                    isDown = evt.isDown,
-                    modifiers = evt.modifiers
-                )
-                Log.d(TAG, "HOST_INPUT key code=${evt.keyCode} down=${evt.isDown} mods=${evt.modifiers}")
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    privClient?.sendKey(
+                        windowId = evt.windowId,
+                        keyCode = evt.keyCode,
+                        isDown = evt.isDown,
+                        modifiers = evt.modifiers
+                    )
+                } else {
+                    OpenUURemoteInputService.instance?.dispatchKey(
+                        keyCode = evt.keyCode,
+                        isDown = evt.isDown,
+                        modifiers = evt.modifiers
+                    )
+                }
             }
             is ControlEvent.TextCommit -> {
-                OpenUURemoteInputService.instance?.dispatchTextCommit(evt.text)
-                emitHostLog("HOST_TEXT_COMMIT len=${evt.text.length} text=${evt.text}")
+                if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+                    commitTextViaClipboardPaste(evt.windowId, evt.text)
+                } else {
+                    OpenUURemoteInputService.instance?.dispatchTextCommit(evt.text)
+                }
+                emitHostLog("HOST_TEXT_COMMIT win=${evt.windowId} len=${evt.text.length} text=${evt.text}")
             }
             is ControlEvent.ClipboardSync -> {
                 applyIncomingClipboard(evt)
@@ -582,35 +751,58 @@ class AndroidHostService : Service(), NativeCallbackListener {
         val handle = hostRuntimeHandle
         if (handle == 0L) return
 
-        val deviceLabel = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android" }
-        val isFullScreen = bundleId.isBlank() || bundleId == OpenUUConstants.FULL_DESKTOP_BUNDLE_ID
-
-        if (isFullScreen) {
-            activeWindowId = OpenUUConstants.FULL_DESKTOP_WINDOW_ID
-            activeWindowTitle = "手机屏幕 ($deviceLabel)"
-            activeWindowIconB64 = ""
-        } else {
-            launchTargetPackageIfPresent(bundleId)
-            activeWindowId = stableWindowIdForPackage(bundleId)
-            activeWindowTitle = resolveAppLabel(bundleId).ifBlank { bundleId }
-            activeWindowIconB64 = iconCacheB64[bundleId].orEmpty()
+        if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+            val client = ensureConnectedPrivClient() ?: run {
+                emitHostLog("ERROR: 多窗口增强引擎不可用")
+                return
+            }
+            val (physW, physH, dpi) = queryDisplayMetrics()
+            client.openWindow(
+                bundleId = bundleId,
+                width = physW,
+                height = physH,
+                dpi = dpi,
+                fps = 45,
+                bitrateBps = 4_500_000
+            )
+            return
         }
+
+        // Basic Full-Screen Mode: always stream the entire default display cleanly
+        val deviceLabel = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android" }
+        activeWindowId = OpenUUConstants.FULL_DESKTOP_WINDOW_ID
+        activeWindowTitle = "整台手机屏幕 ($deviceLabel)"
+        activeWindowIconB64 = ""
 
         val (physW, physH, dpi) = queryDisplayMetrics()
         val (encW, encH) = ScreenCaptureEncoder.computeAlignedEncodeSize(physW, physH)
-        restartVideoStreamForSize(encW, encH, dpi)
+        restartBasicVideoStreamForSize(encW, encH, dpi)
         reconcileAudioCapture()
 
         _hostState.update {
             it.copy(
                 isStreamingScreen = true,
+                openWindowCount = 1,
                 audioCaptureActive = audioEncoder?.isActive == true
             )
         }
         updateOngoingNotification()
     }
 
-    private fun restartVideoStreamForSize(encW: Int, encH: Int, dpi: Int) {
+    private fun ensureConnectedPrivClient(): PrivDaemonClient? {
+        val cur = privClient
+        if (cur != null && cur.isConnected) return cur
+        val (privPort, privToken) = WirelessAdbActivator.ensurePrivCredentials(applicationContext)
+        val recreated = buildPrivDaemonClient(privPort, privToken)
+        return if (recreated.connect()) {
+            privClient = recreated
+            recreated
+        } else {
+            null
+        }
+    }
+
+    private fun restartBasicVideoStreamForSize(encW: Int, encH: Int, dpi: Int) {
         val handle = hostRuntimeHandle
         val winId = activeWindowId
         if (handle == 0L || winId == 0) return
@@ -648,7 +840,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
                             val total = encodedFrameCounter.incrementAndGet()
                             if (total == 1L || total == 5L || total % 60L == 0L) {
                                 if (total <= 5L) {
-                                    emitHostLog("HOST_VIDEO_SENT frames=$total ${w}x${h} bytes=${bytes.size}")
+                                    emitHostLog("HOST_VIDEO_SENT mode=basic frames=$total ${w}x${h} bytes=${bytes.size}")
                                 }
                                 _hostState.update { it.copy(encodedFrames = total) }
                             }
@@ -673,7 +865,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
                 }
             }
 
-            publishActiveWindowTopology(encW, encH)
+            publishBasicWindowTopology(encW, encH)
             enc.requestKeyframe()
         }
     }
@@ -717,7 +909,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         }
     }
 
-    private fun publishActiveWindowTopology(encW: Int, encH: Int) {
+    private fun publishBasicWindowTopology(encW: Int, encH: Int) {
         val handle = hostRuntimeHandle
         val winId = activeWindowId
         if (handle == 0L || winId == 0) return
@@ -752,6 +944,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
 
     private fun stopActiveMediaStreams() {
         activeWindowId = 0
+        runCatching { privClient?.closeAllWindows() }
         synchronized(streamLock) {
             runCatching { virtualDisplay?.surface = null }
             videoEncoder?.stop()
@@ -784,6 +977,8 @@ class AndroidHostService : Service(), NativeCallbackListener {
 
     private fun teardownInternal() {
         stopActiveMediaStreams()
+        privClient?.disconnect()
+        privClient = null
         releaseProjectionAndVirtualDisplay()
         val handle = hostRuntimeHandle
         hostRuntimeHandle = 0L
@@ -794,6 +989,7 @@ class AndroidHostService : Service(), NativeCallbackListener {
         _hostState.update {
             LocalHostUiState(
                 isRunning = false,
+                hostMode = WirelessAdbActivator.loadPreferredMode(applicationContext),
                 pin = loadSavedHostPinPref(),
                 coordStatus = "未开启被控"
             )
@@ -811,108 +1007,60 @@ class AndroidHostService : Service(), NativeCallbackListener {
         }
         lastAppsPushedAtMs = now
 
-        val devLabel = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android" }
-        val arr = JSONArray()
+        if (activeHostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) {
+            val client = ensureConnectedPrivClient()
+            if (client != null && client.requestApps()) {
+                return
+            }
+        }
 
-        // 1. Primary Full-Phone Screen entry
+        // Basic Full-Screen Mode: expose ONLY the full phone screen so users never hit
+        // Android 10-15 background-launch blocks or Dual-App WeChat "开哪个" chooser sheets.
+        val devLabel = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android" }
         val brandIconB64 = iconCacheB64.getOrPut(OpenUUConstants.FULL_DESKTOP_BUNDLE_ID) {
             encodeDrawableToBase64Png(applicationInfo.loadIcon(packageManager), 64)
         }
-        arr.put(
+        val arr = JSONArray().put(
             JSONObject().apply {
                 put("bundle_id", OpenUUConstants.FULL_DESKTOP_BUNDLE_ID)
                 put("name", "整台手机屏幕 ($devLabel)")
                 put("pid", 0)
-                put("window_count", 1)
+                put("window_count", if (activeWindowId != 0) 1 else 0)
                 put("icon_png_b64", brandIconB64)
             }
         )
 
-        // 2. Launchable Android apps (compact 56px icons so WAN/Relay handshake stays <35KB)
-        runCatching {
-            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-            val resolved = packageManager.queryIntentActivities(mainIntent, 0)
-            val priorityPkgs = setOf(
-                "com.tencent.mm",
-                "com.tencent.mobileqq",
-                "com.ss.android.lark",
-                "com.alibaba.android.rimet",
-                "com.android.chrome",
-                "com.android.settings"
-            )
-            val seen = HashSet<String>()
-            val items = resolved
-                .mapNotNull { ri ->
-                    val ai = ri.activityInfo?.applicationInfo
-                    val pkg = ri.activityInfo?.packageName?.takeIf {
-                        it.isNotBlank() && it != packageName && seen.add(it)
-                    } ?: return@mapNotNull null
-                    val isUserApp = ai != null && (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0
-                    val label = ri.loadLabel(packageManager)?.toString()?.trim().orEmpty().ifBlank { pkg }
-                    Triple(pkg, label, ri to isUserApp)
-                }
-                .sortedWith(
-                    compareByDescending<Triple<String, String, Pair<android.content.pm.ResolveInfo, Boolean>>> {
-                        it.first in priorityPkgs
-                    }.thenByDescending {
-                        it.third.second
-                    }.thenBy {
-                        it.second
-                    }
-                )
-                .take(14)
-
-            for ((pkg, label, pair) in items) {
-                val iconB64 = iconCacheB64.getOrPut(pkg) {
-                    encodeDrawableToBase64Png(pair.first.loadIcon(packageManager), 56)
-                }
-                arr.put(
-                    JSONObject().apply {
-                        put("bundle_id", pkg)
-                        put("name", label)
-                        put("pid", 0)
-                        put("window_count", 1)
-                        put("icon_png_b64", iconB64)
-                    }
-                )
-            }
-        }
-
         val jsonStr = arr.toString()
         val rc = OpenUUNativeBridge.nativeSendAppListJson(handle, jsonStr)
-        emitHostLog("HOST_APPS_SENT count=${arr.length()} bytes=${jsonStr.length} rc=$rc")
+        emitHostLog("HOST_APPS_SENT mode=basic count=${arr.length()} bytes=${jsonStr.length} rc=$rc")
     }
 
-    private fun launchTargetPackageIfPresent(pkg: String) {
-        runCatching {
-            val launchIntent = packageManager.getLaunchIntentForPackage(pkg)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            }
-            if (launchIntent != null) {
-                startActivity(launchIntent)
-            }
-        }.onFailure {
-            emitHostLog("启动应用 $pkg 失败: ${it.message}")
-        }
-    }
-
-    private fun resolveAppLabel(pkg: String): String {
-        return runCatching {
-            val ai = packageManager.getApplicationInfo(pkg, 0)
-            packageManager.getApplicationLabel(ai)?.toString()?.trim().orEmpty()
-        }.getOrDefault(pkg)
-    }
-
-    private fun stableWindowIdForPackage(pkg: String): Int {
-        return 1000 + ((pkg.hashCode() and 0x3FFF_FFFF) % 900_000)
-    }
-
-    private fun toNormalizedCoords(logicalX: Float, logicalY: Float): Pair<Float, Float> {
+    private fun toNormalizedCoordsBasic(logicalX: Float, logicalY: Float): Pair<Float, Float> {
         val lw = (currentEncWidth / 2.0f).coerceAtLeast(1f)
         val lh = (currentEncHeight / 2.0f).coerceAtLeast(1f)
         return (logicalX / lw).coerceIn(0f, 1f) to (logicalY / lh).coerceIn(0f, 1f)
+    }
+
+    private fun toNormalizedCoordsForWindow(windowId: Int, logicalX: Float, logicalY: Float): Pair<Float, Float> {
+        val fallbackW = (currentEncWidth / 2.0f).coerceAtLeast(1f)
+        val fallbackH = (currentEncHeight / 2.0f).coerceAtLeast(1f)
+        val (lw, lh) = privClient?.logicalSizeForWindow(windowId, fallbackW, fallbackH) ?: (fallbackW to fallbackH)
+        return (logicalX / lw.coerceAtLeast(1f)).coerceIn(0f, 1f) to
+            (logicalY / lh.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    }
+
+    private fun commitTextViaClipboardPaste(windowId: Int, text: String) {
+        if (text.isEmpty()) return
+        val hash = sha256Hex(text.toByteArray(Charsets.UTF_8))
+        lastSyncedClipboardHash = hash
+        mainHandler.post {
+            runCatching {
+                clipboardManager?.setPrimaryClip(ClipData.newPlainText("OpenUUInput", text))
+            }
+            mainHandler.postDelayed({
+                privClient?.sendPasteKey(windowId)
+            }, 35L)
+        }
     }
 
     private fun applyIncomingClipboard(evt: ControlEvent.ClipboardSync) {
@@ -1076,13 +1224,18 @@ class AndroidHostService : Service(), NativeCallbackListener {
 
     private fun buildOngoingNotification(overrideBody: String? = null): Notification {
         val st = _hostState.value
+        val modeTag = if (st.hostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW) "多窗口增强" else "整屏模式"
         val body = overrideBody ?: when {
             st.connectedClientName.isNotBlank() && st.isStreamingScreen ->
-                "正在向 ${st.connectedClientName} 共享屏幕 · 点击管理或随时断开"
+                if (st.hostMode == AndroidHostMode.ENHANCED_MULTI_WINDOW && st.openWindowCount > 1) {
+                    "正在向 ${st.connectedClientName} 并发推流 ${st.openWindowCount} 个独立窗口"
+                } else {
+                    "正在向 ${st.connectedClientName} 共享画面 ($modeTag)"
+                }
             st.connectedClientName.isNotBlank() ->
-                "${st.connectedClientName} 已连接 · 等待打开画面"
+                "${st.connectedClientName} 已连接 ($modeTag) · 等待打开画面"
             else ->
-                "等待远端连接 · 访问密码 ${st.pin}"
+                "$modeTag · 等待远端连接 · 访问码 ${st.pin}"
         }
 
         val openIntent = PendingIntent.getActivity(

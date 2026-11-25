@@ -950,3 +950,49 @@ Java_ren_onekb_openuu_OpenUUNativeBridge_nativeSendNotification(
         static_cast<uint64_t>(timestamp_ms)
     );
 }
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeAdbPairJson(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jstring host,
+    jint pairing_port,
+    jstring pairing_code
+) {
+    std::string h = jstring_to_utf8(env, host);
+    std::string c = jstring_to_utf8(env, pairing_code);
+    char *raw = openuu_adb_pair_json(
+        h.c_str(),
+        static_cast<uint16_t>(pairing_port & 0xFFFF),
+        c.c_str()
+    );
+    if (!raw) {
+        return utf8_to_jstring(env, "{\"ok\":false,\"guid\":\"\",\"error\":\"native null\"}");
+    }
+    jstring out = utf8_to_jstring(env, raw);
+    openuu_free_string(raw);
+    return out;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ren_onekb_openuu_OpenUUNativeBridge_nativeAdbExecShellJson(
+    JNIEnv *env,
+    jclass /*clazz*/,
+    jstring host,
+    jint connect_port,
+    jstring shell_cmd
+) {
+    std::string h = jstring_to_utf8(env, host);
+    std::string cmd = jstring_to_utf8(env, shell_cmd);
+    char *raw = openuu_adb_exec_shell_json(
+        h.c_str(),
+        static_cast<uint16_t>(connect_port & 0xFFFF),
+        cmd.c_str()
+    );
+    if (!raw) {
+        return utf8_to_jstring(env, "{\"ok\":false,\"output\":\"\",\"error\":\"native null\"}");
+    }
+    jstring out = utf8_to_jstring(env, raw);
+    openuu_free_string(raw);
+    return out;
+}

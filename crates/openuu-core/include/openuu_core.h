@@ -331,6 +331,22 @@ int32_t openuu_check_update(
 /// Free strings returned by OpenUU FFI functions.
 void openuu_free_string(char *ptr);
 
+/// Pair with Android 11+ built-in Wireless Debugging (`adb pair`) on `host:pairing_port` using `pairing_code`.
+/// Returns newly allocated JSON `{"ok":bool,"guid":"...","error":"..."}`; free with `openuu_free_string`.
+char *openuu_adb_pair_json(
+    const char *host,
+    uint16_t pairing_port,
+    const char *pairing_code
+);
+
+/// Connect to paired Wireless Debugging (`STLS` or plain TCP ADB) on `host:connect_port` and execute `shell_cmd`.
+/// Returns newly allocated JSON `{"ok":bool,"output":"...","error":"..."}`; free with `openuu_free_string`.
+char *openuu_adb_exec_shell_json(
+    const char *host,
+    uint16_t connect_port,
+    const char *shell_cmd
+);
+
 #ifdef __cplusplus
 }
 #endif

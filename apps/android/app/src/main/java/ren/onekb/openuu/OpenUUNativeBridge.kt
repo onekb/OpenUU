@@ -218,4 +218,18 @@ object OpenUUNativeBridge {
         body: String,
         timestampMs: Long
     ): Int
+
+    @JvmStatic
+    external fun nativeAdbPairJson(
+        host: String,
+        pairingPort: Int,
+        pairingCode: String
+    ): String
+
+    @JvmStatic
+    external fun nativeAdbExecShellJson(
+        host: String,
+        connectPort: Int,
+        shellCmd: String
+    ): String
 }

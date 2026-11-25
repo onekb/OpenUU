@@ -3228,6 +3228,90 @@ pub unsafe extern "C" fn openuu_free_string(ptr: *mut c_char) {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn openuu_adb_pair_json(
+    host: *const c_char,
+    pairing_port: u16,
+    pairing_code: *const c_char,
+) -> *mut c_char {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let host_str = if host.is_null() {
+            "127.0.0.1".to_string()
+        } else {
+            CStr::from_ptr(host).to_string_lossy().into_owned()
+        };
+        let code_str = if pairing_code.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(pairing_code).to_string_lossy().into_owned()
+        };
+        let res = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(crate::local_adb::pair_wireless_adb(
+                &host_str,
+                pairing_port,
+                &code_str,
+            )),
+            Err(e) => crate::local_adb::AdbPairResultJson {
+                ok: false,
+                guid: String::new(),
+                error: format!("tokio runtime init failed: {e}"),
+            },
+        };
+        let json = serde_json::to_string(&res).unwrap_or_else(|_| {
+            r#"{"ok":false,"guid":"","error":"json serialize failed"}"#.to_string()
+        });
+        CString::new(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openuu_adb_exec_shell_json(
+    host: *const c_char,
+    connect_port: u16,
+    shell_cmd: *const c_char,
+) -> *mut c_char {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let host_str = if host.is_null() {
+            "127.0.0.1".to_string()
+        } else {
+            CStr::from_ptr(host).to_string_lossy().into_owned()
+        };
+        let cmd_str = if shell_cmd.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(shell_cmd).to_string_lossy().into_owned()
+        };
+        let res = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(crate::local_adb::exec_wireless_adb_shell(
+                &host_str,
+                connect_port,
+                &cmd_str,
+            )),
+            Err(e) => crate::local_adb::AdbShellResultJson {
+                ok: false,
+                output: String::new(),
+                error: format!("tokio runtime init failed: {e}"),
+            },
+        };
+        let json = serde_json::to_string(&res).unwrap_or_else(|_| {
+            r#"{"ok":false,"output":"","error":"json serialize failed"}"#.to_string()
+        });
+        CString::new(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

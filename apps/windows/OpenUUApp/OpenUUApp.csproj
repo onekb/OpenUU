@@ -11,7 +11,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>OpenUU</AssemblyName>
     <RootNamespace>OpenUU</RootNamespace>
-    <Version>0.7.3</Version>
+    <Version>0.7.4</Version>
     <Company>OpenUU</Company>
     <Product>OpenUU</Product>
     <Description>OpenUU - 免费开源远程控制与独家单应用无缝窗口工具 (Windows 控制端 &amp; 被控端)</Description>
