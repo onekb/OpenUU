@@ -75,8 +75,10 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.contentView = interactiveView
+        window.initialFirstResponder = interactiveView
         super.init(window: window)
         window.delegate = self
+        window.makeFirstResponder(interactiveView)
         interactiveView.updateTitle(title)
     }
 
@@ -186,6 +188,28 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private static func clampedPopoverFrame(
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        height: CGFloat,
+        parentFrame: NSRect,
+        fallbackScreen: NSScreen?
+    ) -> NSRect {
+        let anchorCenter = NSPoint(x: parentFrame.midX, y: parentFrame.midY)
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(anchorCenter) })
+            ?? fallbackScreen
+            ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else {
+            return NSRect(x: x, y: y, width: width, height: height)
+        }
+        let w = min(width, max(50, visible.width - 12))
+        let h = min(height, max(50, visible.height - 12))
+        let cx = min(max(x, visible.minX + 6), max(visible.minX + 6, visible.maxX - w - 6))
+        let cy = min(max(y, visible.minY + 6), max(visible.minY + 6, visible.maxY - h - 6))
+        return NSRect(x: cx, y: cy, width: w, height: h)
+    }
+
     func updatePopoverPlacement(parentFrame: NSRect, relX: CGFloat, relY: CGFloat, fallbackSize: CGSize) {
         popoverPlacement = (parentFrame, relX, relY, fallbackSize)
         guard isFloatingPopover, let win = window else { return }
@@ -193,7 +217,14 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
         let targetH = hasAutoSized ? interactiveView.remoteLogicalSize.height : max(50, fallbackSize.height)
         let x = parentFrame.minX + relX
         let y = parentFrame.maxY - relY - targetH
-        let newFrame = NSRect(x: x, y: y, width: targetW, height: targetH)
+        let newFrame = Self.clampedPopoverFrame(
+            x: x,
+            y: y,
+            width: targetW,
+            height: targetH,
+            parentFrame: parentFrame,
+            fallbackScreen: win.screen
+        )
         if abs(win.frame.minX - newFrame.minX) > 0.5 ||
            abs(win.frame.minY - newFrame.minY) > 0.5 ||
            abs(win.frame.width - newFrame.width) > 0.5 ||
@@ -227,7 +258,15 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
             if isFloatingPopover, let placement = popoverPlacement {
                 let x = placement.parentFrame.minX + placement.relX
                 let y = placement.parentFrame.maxY - placement.relY - targetH
-                win.setFrame(NSRect(x: x, y: y, width: targetW, height: targetH), display: true)
+                let clamped = Self.clampedPopoverFrame(
+                    x: x,
+                    y: y,
+                    width: targetW,
+                    height: targetH,
+                    parentFrame: placement.parentFrame,
+                    fallbackScreen: win.screen
+                )
+                win.setFrame(clamped, display: true)
             } else if let visible = (win.screen ?? NSScreen.main)?.visibleFrame {
                 let maxW = max(320, visible.width - 40)
                 let maxH = max(240, visible.height - 40)
@@ -248,6 +287,9 @@ final class ProxyWindowController: NSWindowController, NSWindowDelegate {
             } else {
                 MainPanelCoordinator.shared.markRemoteWindowFocusRequested()
                 win.makeKeyAndOrderFront(nil)
+                if win.firstResponder !== interactiveView {
+                    win.makeFirstResponder(interactiveView)
+                }
             }
         }
     }
@@ -312,6 +354,7 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     private var pendingDragOutItems: [DragOutItemDescriptor] = []
     private var activeDraggedOutBlobIDs: [String] = []
     private var lastDragEvent: NSEvent?
+    private var lastClickWindowPoint: NSPoint?
     private var isLocalLeftMouseDown = false
     private var didStartLocalDragOut = false
 
@@ -351,8 +394,9 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
         hoverBar.onCloseRemoteClicked = { [weak self] in
             guard let self, self.remoteWindowID != 0,
                   self.remoteWindowID != MultiWindowCaptureManager.fullDesktopWindowID else { return }
-            self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: true, isRepeat: false, modifiers: 8 /* Cmd */)
-            self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: false, isRepeat: false, modifiers: 8 /* Cmd */)
+            // Bit 256 (`0x100`) marks an explicit "Close THIS Window" button click (backward-compatible with `8` = Cmd).
+            self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: true, isRepeat: false, modifiers: 8 | 256)
+            self.bridge.sendKey(windowID: self.remoteWindowID, keyCode: 13 /* W */, isDown: false, isRepeat: false, modifiers: 8 | 256)
         }
         hoverBar.onMuteClicked = { [weak self] in
             self?.onToggleAudioMute?()
@@ -597,7 +641,10 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        lastClickWindowPoint = event.locationInWindow
         isLocalLeftMouseDown = true
         didStartLocalDragOut = false
         pendingDragOutItems.removeAll()
@@ -720,6 +767,9 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
         let (x, y) = remotePoint(from: event)
         bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 1, button: 1, clickCount: UInt32(event.clickCount), modifiers: modifierMask(event.modifierFlags))
     }
@@ -727,6 +777,29 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     override func rightMouseUp(with event: NSEvent) {
         let (x, y) = remotePoint(from: event)
         bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 2, button: 1, clickCount: UInt32(event.clickCount), modifiers: modifierMask(event.modifierFlags))
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        let (x, y) = remotePoint(from: event)
+        bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 3, button: 1, modifiers: modifierMask(event.modifierFlags))
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        let (x, y) = remotePoint(from: event)
+        bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 1, button: 2, clickCount: UInt32(event.clickCount), modifiers: modifierMask(event.modifierFlags))
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        let (x, y) = remotePoint(from: event)
+        bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 2, button: 2, clickCount: UInt32(event.clickCount), modifiers: modifierMask(event.modifierFlags))
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        let (x, y) = remotePoint(from: event)
+        bridge.sendMouse(windowID: remoteWindowID, x: x, y: y, type: 3, button: 2, modifiers: modifierMask(event.modifierFlags))
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -742,11 +815,71 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
         )
     }
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Intercept `⌘W` / `⇧⌘W` BEFORE AppKit's Menu Bar `File -> Close` calls `NSWindow.performClose(_:)`,
+        // which would otherwise close ONLY the local proxy window (`stop_session` -> Host `suppressedWindows`)
+        // while leaving singleton remote child windows (like WeChat Image Viewer / Built-in Browser) open & suppressed!
+        if event.type == .keyDown, remoteWindowID != 0 {
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if (mods == .command || mods == [.command, .shift]) && event.keyCode == 13 /* W */ {
+                let mask = modifierMask(mods)
+                bridge.sendKey(windowID: remoteWindowID, keyCode: 13, isDown: true, isRepeat: event.isARepeat, modifiers: mask)
+                bridge.sendKey(windowID: remoteWindowID, keyCode: 13, isDown: false, isRepeat: false, modifiers: mask)
+                return true
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// Normalizes macOS hardware keyCodes to OpenUU's canonical cross-platform wire keyCodes:
+    /// - Numeric keypad Enter (`76`) -> Return (`36`) so Enter, Shift+Enter, and Cmd/Ctrl+Enter work identically everywhere.
+    /// - When Cmd/Ctrl is held (`isShortcut`), numeric keypad digits & operators (`+`, `-`, `=`, `/`, `0..9`) map to
+    ///   their main-keyboard equivalents so `⌘+`/`⌘-`/`⌘0` zoom and `⌘1..9` tab switching work in browsers/IDEs/WeChat.
+    private static func normalizedRemoteKeyCode(for rawKeyCode: UInt16, isShortcut: Bool) -> UInt32 {
+        if rawKeyCode == 76 /* kVK_ANSI_KeypadEnter */ {
+            return 36 /* kVK_Return */
+        }
+        if isShortcut {
+            switch rawKeyCode {
+            case 69, 81: return 24 // Keypad + / = -> = (+)
+            case 78: return 27     // Keypad -     -> -
+            case 75: return 44     // Keypad /     -> /
+            case 65: return 47     // Keypad .     -> .
+            case 82: return 29     // Keypad 0     -> 0
+            case 83: return 18     // Keypad 1     -> 1
+            case 84: return 19     // Keypad 2     -> 2
+            case 85: return 20     // Keypad 3     -> 3
+            case 86: return 21     // Keypad 4     -> 4
+            case 87: return 23     // Keypad 5     -> 5
+            case 88: return 22     // Keypad 6     -> 6
+            case 89: return 26     // Keypad 7     -> 7
+            case 91: return 28     // Keypad 8     -> 8
+            case 92: return 25     // Keypad 9     -> 9
+            default: break
+            }
+        }
+        return UInt32(rawKeyCode)
+    }
+
+    private static let nonTextControlKeyCodes: Set<UInt16> = [
+        36,  // Return
+        76,  // Keypad Enter
+        71,  // Keypad Clear / NumLock
+        48,  // Tab
+        51,  // Delete (Backspace)
+        117, // Forward Delete
+        53,  // Escape
+        123, 124, 125, 126, // Left, Right, Down, Up
+        115, 119, 116, 121, // Home, End, PageUp, PageDown
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, // F1..F12
+        105, 107, 113, 106, 64, 79, 80 // F13..F19 (Extended Keyboard)
+    ]
+
     override func keyDown(with event: NSEvent) {
         let mods = event.modifierFlags
         // Shortcuts (Cmd/Ctrl) and control keys bypass IME and go straight as KeyEvents.
         let isShortcut = mods.contains(.command) || mods.contains(.control)
-        let isControlKey = [36, 48, 51, 53, 123, 124, 125, 126].contains(Int(event.keyCode))
+        let isControlKey = Self.nonTextControlKeyCodes.contains(event.keyCode)
         if isShortcut || (isControlKey && !hasMarkedText()) {
             // Flush any brand-new local clipboard content BEFORE forwarding Cmd+V so paste is always up-to-date.
             if mods.contains(.command) && event.keyCode == 9 /* V */ {
@@ -754,7 +887,7 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
             }
             bridge.sendKey(
                 windowID: remoteWindowID,
-                keyCode: UInt32(event.keyCode),
+                keyCode: Self.normalizedRemoteKeyCode(for: event.keyCode, isShortcut: isShortcut),
                 isDown: true,
                 isRepeat: event.isARepeat,
                 modifiers: modifierMask(mods)
@@ -768,15 +901,28 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     override func keyUp(with event: NSEvent) {
         let mods = event.modifierFlags
         let isShortcut = mods.contains(.command) || mods.contains(.control)
-        let isControlKey = [36, 48, 51, 53, 123, 124, 125, 126].contains(Int(event.keyCode))
+        let isControlKey = Self.nonTextControlKeyCodes.contains(event.keyCode)
         if isShortcut || isControlKey {
             bridge.sendKey(
                 windowID: remoteWindowID,
-                keyCode: UInt32(event.keyCode),
+                keyCode: Self.normalizedRemoteKeyCode(for: event.keyCode, isShortcut: isShortcut),
                 isDown: false,
                 isRepeat: false,
                 modifiers: modifierMask(mods)
             )
+        }
+    }
+
+    override func doCommand(by selector: Selector) {
+        // Fallback safety net if AppKit's key-binding / IME system dispatches a newline command instead of insertText,
+        // and suppress default NSResponder unhandled-command beep.
+        guard !hasMarkedText(), remoteWindowID != 0 else { return }
+        if selector == #selector(NSResponder.insertNewline(_:)) ||
+           selector == #selector(NSResponder.insertLineBreak(_:)) ||
+           selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+            let mods = NSApp.currentEvent.map { modifierMask($0.modifierFlags) } ?? 0
+            bridge.sendKey(windowID: remoteWindowID, keyCode: 36, isDown: true, isRepeat: false, modifiers: mods)
+            bridge.sendKey(windowID: remoteWindowID, keyCode: 36, isDown: false, isRepeat: false, modifiers: mods)
         }
     }
 
@@ -816,8 +962,18 @@ final class ProxyInteractiveView: NSView, @preconcurrency NSTextInputClient, NSD
     func hasMarkedText() -> Bool { markedTextStorage.length > 0 }
     func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+    /// Hides macOS 14+ (`Sonoma`/`Sequoia`/`Tahoe`) `CursorUIViewService`'s round floating input-source / CapsLock
+    /// pill (`中`/`A`/`⇪`) over remote windows while keeping the normal Chinese Pinyin candidate bar intact.
+    func preferredTextAccessoryPlacement() -> NSTextCursorAccessoryPlacement { .invisible }
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
         guard let win = window else { return .zero }
+        if let clickPt = lastClickWindowPoint {
+            let screenPt = win.convertPoint(toScreen: clickPt)
+            let rect = NSRect(x: screenPt.x, y: max(win.frame.minY + 8, screenPt.y - 18), width: 1, height: 18)
+            if !rect.intersection(win.frame).isEmpty {
+                return rect
+            }
+        }
         let mouseScreen = NSEvent.mouseLocation
         return NSRect(x: mouseScreen.x, y: mouseScreen.y, width: 1, height: 18).intersection(win.frame).isEmpty
             ? NSRect(x: win.frame.midX, y: win.frame.minY + 40, width: 1, height: 18)
@@ -863,6 +1019,7 @@ private final class HoverTitlebarView: NSVisualEffectView {
         closeRemoteButton.font = NSFont.systemFont(ofSize: 10.5, weight: .medium)
         closeRemoteButton.toolTip = "关闭被控端上的这个软件窗口 (⌘W)"
         closeRemoteButton.contentTintColor = .systemRed
+        closeRemoteButton.refusesFirstResponder = true
         closeRemoteButton.target = self
         closeRemoteButton.action = #selector(handleCloseRemote)
         addSubview(closeRemoteButton)
@@ -874,6 +1031,7 @@ private final class HoverTitlebarView: NSVisualEffectView {
         muteButton.imagePosition = .imageOnly
         muteButton.toolTip = "远端声音已开启（点击静音）"
         muteButton.contentTintColor = .systemGreen
+        muteButton.refusesFirstResponder = true
         muteButton.target = self
         muteButton.action = #selector(handleMute)
         addSubview(muteButton)
@@ -886,6 +1044,7 @@ private final class HoverTitlebarView: NSVisualEffectView {
         closeButton.font = NSFont.systemFont(ofSize: 10.5, weight: .medium)
         closeButton.toolTip = "仅关闭本机投屏窗口（不关闭被控端软件）"
         closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.refusesFirstResponder = true
         closeButton.target = self
         closeButton.action = #selector(handleClose)
         addSubview(closeButton)

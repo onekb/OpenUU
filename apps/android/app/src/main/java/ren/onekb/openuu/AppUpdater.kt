@@ -88,7 +88,7 @@ class AppUpdater(
         private const val KEY_SKIPPED_VER = "skipped_ver"
 
         val currentVersion: String
-            get() = BuildConfig.VERSION_NAME.ifBlank { "0.7.5" }
+            get() = BuildConfig.VERSION_NAME.ifBlank { "0.7.7" }
 
         val displayVersion: String
             get() = if (currentVersion.startsWith("v")) currentVersion else "v$currentVersion"

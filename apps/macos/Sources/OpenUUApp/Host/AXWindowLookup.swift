@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -35,6 +36,79 @@ enum AXWindowLookup {
         return list
     }
 
+    /// Returns `kAXWindowsAttribute` plus `kAXMainWindowAttribute` and `kAXFocusedWindowAttribute` (deduped)
+    /// so floating `NSPanel` / child preview windows omitted from `kAXWindowsAttribute` are still discovered.
+    static func allWindows(pid: pid_t) -> [AXUIElement] {
+        var list = windows(pid: pid)
+        let appAX = AXUIElementCreateApplication(pid)
+        for attr in [kAXMainWindowAttribute as CFString, kAXFocusedWindowAttribute as CFString] {
+            var ref: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appAX, attr, &ref) == .success,
+               let raw = ref,
+               CFGetTypeID(raw) == AXUIElementGetTypeID() {
+                let el = raw as! AXUIElement
+                if !list.contains(where: { CFEqual($0, el) }) {
+                    list.append(el)
+                }
+            }
+        }
+        return list
+    }
+
+    /// Strictly returns `kAXFocusedWindowAttribute` ONLY (no `kAXMainWindowAttribute` fallback).
+    /// Crucial before posting `⌘W`: floating/child preview windows (such as WeChat's Image Viewer) often cannot
+    /// become `mainWindow`, so `kAXMainWindowAttribute` still points to WeChat's main window!
+    static func focusedWindowID(pid: pid_t) -> CGWindowID? {
+        let appAX = AXUIElementCreateApplication(pid)
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appAX, kAXFocusedWindowAttribute as CFString, &ref) == .success,
+           let raw = ref,
+           CFGetTypeID(raw) == AXUIElementGetTypeID(),
+           let wid = windowID(of: raw as! AXUIElement),
+           wid != 0 {
+            return wid
+        }
+        return nil
+    }
+
+    static func focusedOrMainWindowID(pid: pid_t) -> CGWindowID? {
+        let appAX = AXUIElementCreateApplication(pid)
+        for attr in [kAXFocusedWindowAttribute as CFString, kAXMainWindowAttribute as CFString] {
+            var ref: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appAX, attr, &ref) == .success,
+               let raw = ref,
+               CFGetTypeID(raw) == AXUIElementGetTypeID(),
+               let wid = windowID(of: raw as! AXUIElement),
+               wid != 0 {
+                return wid
+            }
+        }
+        return nil
+    }
+
+    /// Distinguishes genuine interactive child/preview windows (even when pinned Always-on-Top at `windowLayer == 3`,
+    /// such as WeChat 4.0's pinned Image Viewer or Built-in Browser) from borderless transient popovers/menus.
+    static func isStandardOrDialogWindow(_ element: AXUIElement) -> Bool {
+        var subroleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+           let subrole = subroleRef as? String,
+           (subrole == (kAXStandardWindowSubrole as String) || subrole == (kAXDialogSubrole as String)) {
+            return true
+        }
+        var closeRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXCloseButtonAttribute as CFString, &closeRef) == .success,
+           closeRef != nil {
+            return true
+        }
+        return false
+    }
+
+    static func activateProcess(_ pid: pid_t) {
+        let appAX = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(appAX, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        NSRunningApplication(processIdentifier: pid)?.activate()
+    }
+
     static func frame(of element: AXUIElement) -> CGRect? {
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
@@ -54,7 +128,7 @@ enum AXWindowLookup {
     /// Finds the AX window for `windowID`. Falls back to a STRICT frame match (origin AND size within 3pt).
     /// Returns nil instead of guessing, so callers never move/raise an unrelated window.
     static func find(pid: pid_t, windowID: CGWindowID, frame: CGRect?) -> AXUIElement? {
-        let list = windows(pid: pid)
+        let list = allWindows(pid: pid)
         if windowID != 0, let exact = list.first(where: { self.windowID(of: $0) == windowID }) {
             return exact
         }
@@ -94,6 +168,59 @@ enum AXWindowLookup {
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// Presses the window's own Accessibility Close button (`kAXCloseButtonAttribute` -> `kAXPressAction`).
+    /// Unlike `⌘W` (which AppKit routes through `keyWindow` -> `mainWindow` and can accidentally close WeChat's
+    /// main window when a child/image window isn't key), `kAXPressAction` acts strictly on THIS window instance.
+    @discardableResult
+    static func pressCloseButton(of element: AXUIElement) -> Bool {
+        var closeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXCloseButtonAttribute as CFString, &closeRef) == .success,
+              let raw = closeRef,
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+            return false
+        }
+        let closeBtn = raw as! AXUIElement
+        var enabledRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(closeBtn, kAXEnabledAttribute as CFString, &enabledRef) == .success,
+           let enabled = enabledRef as? NSNumber,
+           !enabled.boolValue {
+            return false
+        }
+        return AXUIElementPerformAction(closeBtn, kAXPressAction as CFString) == .success
+    }
+
+    /// Returns `true` if `windowID` is still visible on-screen (alpha > 0.01).
+    static func isWindowOnScreen(_ windowID: CGWindowID) -> Bool {
+        guard windowID != 0,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .optionIncludingWindow], windowID) as? [[String: Any]],
+              let info = list.first else {
+            return false
+        }
+        if let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha <= 0.01 {
+            return false
+        }
+        return true
+    }
+
+    /// Returns `true` if `pid` owns at least one other visible normal/child window besides `windowID`.
+    static func hasOtherNormalOnScreenWindow(pid: pid_t, excluding windowID: CGWindowID) -> Bool {
+        guard pid != 0,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        return list.contains { info in
+            guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid else { return false }
+            let wid = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+            guard wid != 0 && wid != windowID else { return false }
+            if let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha <= 0.01 { return false }
+            let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+            guard layer >= 0 && layer <= 25 else { return false }
+            guard let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: dict) else { return false }
+            return rect.width >= 140 && rect.height >= 120
+        }
     }
 
     /// Live CG bounds (top-left global coordinates, same space as SCWindow.frame / CGEvent.location).

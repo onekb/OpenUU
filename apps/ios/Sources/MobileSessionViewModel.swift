@@ -737,8 +737,8 @@ final class MobileSessionViewModel: ObservableObject {
     /// Sends ⌘W to a remote window and stops its stream, switching back to the previous window (never disconnects).
     func closeRemoteWindowTab(_ windowID: UInt32) {
         guard windowID != 0 else { return }
-        bridge.sendKey(windowID: windowID, keyCode: MacKeyCodes.w, isDown: true, isRepeat: false, modifiers: MacModifiers.command)
-        bridge.sendKey(windowID: windowID, keyCode: MacKeyCodes.w, isDown: false, isRepeat: false, modifiers: MacModifiers.command)
+        bridge.sendKey(windowID: windowID, keyCode: MacKeyCodes.w, isDown: true, isRepeat: false, modifiers: MacModifiers.command | 256)
+        bridge.sendKey(windowID: windowID, keyCode: MacKeyCodes.w, isDown: false, isRepeat: false, modifiers: MacModifiers.command | 256)
         stopRemoteWindow(windowID)
     }
 
@@ -1043,7 +1043,7 @@ final class MobileSessionViewModel: ObservableObject {
 
         for ch in rawText {
             switch ch {
-            case "\r\n", "\n", "\r":
+            case "\r\n", "\n", "\r", "\u{0003}":
                 flushBuffer()
                 sendKeyTap(keyCode: MacKeyCodes.returnKey)
             case "\t":

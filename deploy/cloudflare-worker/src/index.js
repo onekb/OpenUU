@@ -581,7 +581,7 @@ async function handleLatestRelease(reqUrl) {
     const upstream = await fetch(ghUrl, {
       headers: {
         Accept: "application/vnd.github+json",
-        "User-Agent": "OpenUU-Coord-Worker/0.7.6",
+        "User-Agent": "OpenUU-Coord-Worker/0.7.7",
       },
       cf: {
         cacheEverything: !forceRefresh,

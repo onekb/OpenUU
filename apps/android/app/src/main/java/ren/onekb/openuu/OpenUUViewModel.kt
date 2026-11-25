@@ -978,7 +978,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             MacKeyCodes.W,
             true,
             false,
-            MacModifiers.COMMAND
+            MacModifiers.COMMAND or 256
         )
         OpenUUNativeBridge.nativeSendKeyEvent(
             runtimeHandle,
@@ -986,7 +986,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
             MacKeyCodes.W,
             false,
             false,
-            MacModifiers.COMMAND
+            MacModifiers.COMMAND or 256
         )
         stopRemoteWindow(windowId)
     }
@@ -1371,7 +1371,7 @@ class OpenUUViewModel(application: Application) : AndroidViewModel(application),
                     if (i + 1 < rawText.length && rawText[i + 1] == '\n') i++
                     sendKeyTap(MacKeyCodes.RETURN)
                 }
-                '\n' -> {
+                '\n', '\u0003' -> {
                     flushChunk()
                     sendKeyTap(MacKeyCodes.RETURN)
                 }

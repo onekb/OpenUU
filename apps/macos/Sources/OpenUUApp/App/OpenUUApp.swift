@@ -1469,19 +1469,17 @@ final class MainPanelCoordinator {
         return nil
     }
 
-    /// Returns `true` if the user activated `OpenUU` by clicking directly inside a visible remote proxy window.
+    /// Returns `true` if the user activated `OpenUU` by clicking or tapping directly inside a visible remote proxy window.
+    /// Note: `NSWindow.windowNumber(at:belowWindowWithWindowNumber:)` queries global WindowServer Z-order across ALL apps
+    /// (including macOS Dock at layer 20), so if `topWinNum` belongs to a visible `RemoteProxyNSWindow`, the pointer is
+    /// guaranteed to be directly over that unoccluded remote window (even for MacBook trackpad tap-to-click where
+    /// `NSEvent.pressedMouseButtons` is already `0` by the time `applicationDidBecomeActive` fires).
     func isUserClickingRemoteProxyWindow() -> Bool {
         let mouseScreenPt = NSEvent.mouseLocation
         let topWinNum = NSWindow.windowNumber(at: mouseScreenPt, belowWindowWithWindowNumber: 0)
         if topWinNum > 0,
            NSApp.windows.contains(where: { ($0 is RemoteProxyNSWindow) && $0.isVisible && $0.windowNumber == topWinNum }) {
-            if NSEvent.pressedMouseButtons != 0 {
-                return true
-            }
-            if let evType = NSApp.currentEvent?.type,
-               evType == .leftMouseDown || evType == .rightMouseDown || evType == .otherMouseDown {
-                return true
-            }
+            return true
         }
         return false
     }

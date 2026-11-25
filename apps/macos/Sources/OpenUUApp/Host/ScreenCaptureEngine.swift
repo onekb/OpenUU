@@ -40,6 +40,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var encodedWidth: UInt16 = 0
     private var encodedHeight: UInt16 = 0
     private var forceNextKeyframe = true
+    private var currentFilter: SCContentFilter?
     private var currentConfig: SCStreamConfiguration?
     private var currentFPS: Int = 60
     private var lastTrackedSize: CGSize = .zero
@@ -121,7 +122,12 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         }
     }
 
-    func startCapture(window: SCWindow, fps: Int = 60, scaleFactor: CGFloat = 2.0) async throws {
+    func startCapture(
+        window: SCWindow,
+        fps: Int = 60,
+        scaleFactor: CGFloat = 2.0,
+        treatAsFloatingPopover: Bool? = nil
+    ) async throws {
         await stopCapture()
         // Build filter first so we can read the window's true backing `pointPixelScale` (1.0 on 1x Mac mini
         // external monitors, 2.0 on Retina displays) instead of assuming 2.0 and mismatching buffer dimensions!
@@ -130,12 +136,12 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
         self.targetWindowID = window.windowID
         self.currentFPS = fps
-        self.isFloatingPopover = window.windowLayer > 0
+        self.isFloatingPopover = treatAsFloatingPopover ?? (window.windowLayer > 0)
         // Native macOS context/popup menus (`NSMenu`, `kCGPopUpMenuWindowLevel` == 101) use `NSVisualEffectView`
         // (`CABackdropLayer`) without custom outer transparent shadow margins. Capturing them with
         // `shouldBeOpaque = true` ensures ScreenCaptureKit renders an opaque system menu material in both
         // Light Mode and Dark Mode instead of leaving the backdrop transparent black!
-        self.isNativeMenuPopover = window.windowLayer >= 100
+        self.isNativeMenuPopover = self.isFloatingPopover && (window.windowLayer >= 100)
         self.hasDetectedAlphaTrim = isNativeMenuPopover
         self.pixelCropRect = nil
         self.croppedPixelBuffer = nil
@@ -191,6 +197,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             config.includeChildWindows = false
         }
 
+        self.currentFilter = filter
         self.currentConfig = config
 
         let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
@@ -198,34 +205,62 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         try await scStream.startCapture()
         self.stream = scStream
 
+        scheduleInitialScreenshotFallbacks(scStream: scStream, filter: filter, config: config)
+    }
+
+    private func scheduleInitialScreenshotFallbacks(
+        scStream: SCStream,
+        filter: SCContentFilter,
+        config: SCStreamConfiguration
+    ) {
         // Guarantee an immediate IDR keyframe even when a newly opened window is completely static
         // (e.g. WeChat Image Viewer showing a still photo) or resides on another macOS Space where
-        // SCStream may not push an initial damage frame until interacted with.
+        // SCStream may not push an initial damage frame until interacted with. Retry at 450ms in case
+        // the window backing store was still initializing at 140ms.
         Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(140))
-            guard let self else { return }
-            let needsInitialFallback: Bool = self.captureQueue.sync {
-                self.stream === scStream && self.encodedFrameCount == 0
-            }
-            guard needsInitialFallback else { return }
-            if let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
-                contentFilter: filter,
-                configuration: config
-            ) {
-                let wrapped = SendableSampleBuffer(value: shotBuffer)
-                self.captureQueue.async { [weak self] in
-                    guard let self, self.stream === scStream, self.encodedFrameCount == 0 else { return }
-                    self.forceNextKeyframe = true
-                    self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
+            for delayMs in [140, 450] {
+                try? await Task.sleep(for: .milliseconds(delayMs))
+                guard let self else { return }
+                let needsInitialFallback: Bool = self.captureQueue.sync {
+                    self.stream === scStream && self.encodedFrameCount == 0
+                }
+                guard needsInitialFallback else { return }
+                if let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
+                    contentFilter: filter,
+                    configuration: config
+                ) {
+                    let wrapped = SendableSampleBuffer(value: shotBuffer)
+                    self.captureQueue.async { [weak self] in
+                        guard let self, self.stream === scStream, self.encodedFrameCount == 0 else { return }
+                        self.forceNextKeyframe = true
+                        self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
+                    }
                 }
             }
         }
     }
 
     /// Captures an entire macOS display (Full Remote Desktop mode) using `SCContentFilter(display:excludingWindows:)`.
-    func startDesktopCapture(display: SCDisplay, windowID: UInt32, fps: Int = 45, scaleFactor: CGFloat = 2.0) async throws {
+    func startDesktopCapture(
+        display: SCDisplay,
+        windowID: UInt32,
+        fps: Int = 45,
+        scaleFactor: CGFloat = 2.0,
+        excludeInputHUDs: Bool = true
+    ) async throws {
         await stopCapture()
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        var excludedWindows: [SCWindow] = []
+        if excludeInputHUDs,
+           let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) {
+            excludedWindows = content.windows.filter { win in
+                let bid = (win.owningApplication?.bundleIdentifier ?? "").lowercased()
+                return bid.contains("cursoruiviewservice") ||
+                    bid == "com.apple.textinputswitcher" ||
+                    bid == "com.apple.textinputmenuagent" ||
+                    bid.contains(".inputmethod.")
+            }
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         let filterScale = CGFloat(max(1.0, filter.pointPixelScale))
 
         self.targetWindowID = windowID
@@ -269,6 +304,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             config.presenterOverlayPrivacyAlertSetting = .never
         }
 
+        self.currentFilter = filter
         self.currentConfig = config
 
         let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
@@ -276,28 +312,7 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         try await scStream.startCapture()
         self.stream = scStream
 
-        // Guarantee an immediate IDR keyframe even when a newly opened window is completely static
-        // (e.g. WeChat Image Viewer showing a still photo) or resides on another macOS Space where
-        // SCStream may not push an initial damage frame until interacted with.
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(140))
-            guard let self else { return }
-            let needsInitialFallback: Bool = self.captureQueue.sync {
-                self.stream === scStream && self.encodedFrameCount == 0
-            }
-            guard needsInitialFallback else { return }
-            if let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
-                contentFilter: filter,
-                configuration: config
-            ) {
-                let wrapped = SendableSampleBuffer(value: shotBuffer)
-                self.captureQueue.async { [weak self] in
-                    guard let self, self.stream === scStream, self.encodedFrameCount == 0 else { return }
-                    self.forceNextKeyframe = true
-                    self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
-                }
-            }
-        }
+        scheduleInitialScreenshotFallbacks(scStream: scStream, filter: filter, config: config)
     }
 
     func checkWindowSizeNow() {
@@ -461,11 +476,29 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                     sourceFrameRefcon: nil,
                     infoFlagsOut: nil
                 )
+            } else if let activeStream = self.stream,
+                      let filter = self.currentFilter,
+                      let cfg = self.currentConfig {
+                // No frame has been delivered by SCStream yet (e.g. completely static Image Viewer): capture on demand!
+                Task { [weak self] in
+                    guard let self,
+                          let shotBuffer = try? await SCScreenshotManager.captureSampleBuffer(
+                              contentFilter: filter,
+                              configuration: cfg
+                          ) else { return }
+                    let wrapped = SendableSampleBuffer(value: shotBuffer)
+                    self.captureQueue.async { [weak self] in
+                        guard let self, self.stream === activeStream, self.lastEncodedPixelBuffer == nil else { return }
+                        self.forceNextKeyframe = true
+                        self.encodeCapturedSampleBuffer(wrapped.value, ignoreIdleStatus: true)
+                    }
+                }
             }
         }
     }
 
     func stopCapture() async {
+        currentFilter = nil
         currentConfig = nil
         if let stream {
             try? await stream.stopCapture()
@@ -592,6 +625,13 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             resizeDropBudget = 0
         }
 
+        // Skip 100% transparent empty popover shells (e.g. WeChat's idle `layer = 3` placeholder overlay whose
+        // `kCGWindowAlpha` is 1.0 in WindowServer metadata while every BGRA pixel has `alpha == 0`), preventing
+        // a blank `50×50` floating proxy window from spawning on the Client and intercepting clicks!
+        if isFloatingPopover && !isNativeMenuPopover && !Self.hasVisibleBGRAPixels(imageBuffer) {
+            return
+        }
+
         // On the first frame of a custom floating popover (e.g. WeChat emoji picker / sticker preview / search dropdown),
         // auto-detect transparent custom-shadow padding via the BGRA alpha channel and crop directly!
         if isFloatingPopover && !hasDetectedAlphaTrim {
@@ -686,6 +726,36 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             idleRefineWorkItem = item
             captureQueue.asyncAfter(deadline: .now() + .milliseconds(180), execute: item)
         }
+    }
+
+    private static func hasVisibleBGRAPixels(_ pixelBuffer: CVPixelBuffer) -> Bool {
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
+            return true
+        }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return true }
+        let w = CVPixelBufferGetWidth(pixelBuffer)
+        let h = CVPixelBufferGetHeight(pixelBuffer)
+        let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        guard w > 0, h > 0 else { return false }
+
+        let ptr = base.assumingMemoryBound(to: UInt8.self)
+        let stepX = max(1, w / 16)
+        let stepY = max(1, h / 12)
+        var y = stepY / 2
+        while y < h {
+            let row = y * bpr
+            var x = stepX / 2
+            while x < w {
+                if ptr[row + x * 4 + 3] >= 16 {
+                    return true
+                }
+                x += stepX
+            }
+            y += stepY
+        }
+        return false
     }
 
     private func detectAndTrimTransparentShadowMargin(_ pixelBuffer: CVPixelBuffer) {

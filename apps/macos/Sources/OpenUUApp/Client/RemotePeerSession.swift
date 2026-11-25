@@ -178,6 +178,8 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                     }
                 case "window_topology":
                     if let windows = evt.windows {
+                        let summary = windows.map { "\($0.window_id)(k\($0.kind),\(Int($0.width))x\(Int($0.height)))" }.joined(separator: ",")
+                        OpenUULogger.shared.debug("TOPO", "[\(self.alias)] window_topology count=\(windows.count) [\(summary)]")
                         self.reconcileRemoteWindows(windows)
                     }
                 case "list_apps_resp":
@@ -300,6 +302,7 @@ final class RemotePeerSession: ObservableObject, Identifiable {
                     }
                     let controller = self.ensureProxyWindow(for: winID)
                     controller.syncRemoteFrameSize(windowID: winID, width: w, height: h)
+                    router.markWindowSynced(windowID: winID, width: w, height: h)
                 }
             }
         }
@@ -602,6 +605,24 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         for item in remoteWindows {
             if let ctrl = proxyWindows[item.window_id] {
                 applyTopologyToProxyWindow(item, controller: ctrl)
+            } else if (item.kind == 0 || item.kind == 1), !locallyClosedWindows.contains(item.window_id) {
+                // Proactively request an IDR keyframe for newly announced normal windows (e.g. WeChat Image Viewer
+                // showing a static photo or newly spawned browser window) if no video packet materializes promptly.
+                let pendingID = item.window_id
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(160))
+                    guard let self, self.phase.isConnected,
+                          self.knownWindows[pendingID] != nil,
+                          !self.locallyClosedWindows.contains(pendingID),
+                          self.proxyWindows[pendingID] == nil else { return }
+                    self.bridge.requestKeyframe(windowID: pendingID)
+                    try? await Task.sleep(for: .milliseconds(420))
+                    guard self.phase.isConnected,
+                          self.knownWindows[pendingID] != nil,
+                          !self.locallyClosedWindows.contains(pendingID),
+                          self.proxyWindows[pendingID] == nil else { return }
+                    self.bridge.requestKeyframe(windowID: pendingID)
+                }
             }
         }
         for (winID, ctrl) in proxyWindows where !activeIDs.contains(winID) {
@@ -782,10 +803,11 @@ final class RemotePeerSession: ObservableObject, Identifiable {
         if subKey.hasPrefix("win-"),
            let winID = UInt32(subKey.dropFirst(4)) {
             onRemoveDockIcon?(dockKey(for: subKey))
-            fastVideoRouter.unregister(windowID: winID)
+            locallyClosedWindows.insert(winID)
+            fastVideoRouter.suppress(windowID: winID)
             if let ctrl = proxyWindows.removeValue(forKey: winID) {
-                bridge.sendKey(windowID: winID, keyCode: 13, isDown: true, isRepeat: false, modifiers: 8)
-                bridge.sendKey(windowID: winID, keyCode: 13, isDown: false, isRepeat: false, modifiers: 8)
+                bridge.sendKey(windowID: winID, keyCode: 13, isDown: true, isRepeat: false, modifiers: 8 | 256)
+                bridge.sendKey(windowID: winID, keyCode: 13, isDown: false, isRepeat: false, modifiers: 8 | 256)
                 ctrl.closeProgrammatically()
             }
             openWindowCount = proxyWindows.count

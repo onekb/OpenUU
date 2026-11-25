@@ -53,9 +53,9 @@ public sealed class SmartTargetTextBox : System.Windows.Controls.TextBox
 
     private void OnInternalPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == Key.Return || e.Key == Key.Enter)
+        if ((e.Key == Key.Return || e.Key == Key.Enter) && SubmitRequested != null)
         {
-            SubmitRequested?.Invoke();
+            SubmitRequested.Invoke();
             e.Handled = true;
         }
     }

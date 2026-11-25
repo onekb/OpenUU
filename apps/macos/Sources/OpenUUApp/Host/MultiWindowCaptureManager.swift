@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
@@ -29,6 +30,7 @@ final class MultiWindowCaptureManager {
         var seenBehindActiveWindow: Bool
         var lastFrame: CGRect
         var lastTitle: String
+        let suppressedAtInteractionSeq: UInt64
     }
 
     private struct WindowIconState {
@@ -51,6 +53,8 @@ final class MultiWindowCaptureManager {
     private var lastAppWindows: [SCWindow] = []
     private var lastCGWindowSignature: [Int] = []
     private var knownOpenAXWindowIDs: Set<UInt32> = []
+    private var knownStandardAXWindowIDs: Set<UInt32> = []
+    private var interactionSeq: UInt64 = 0
     private var pollTask: Task<Void, Never>?
     private var interactionSyncTask: Task<Void, Never>?
     private var lastTopology: [WindowTopologyItem] = []
@@ -115,7 +119,7 @@ final class MultiWindowCaptureManager {
             if app.isHidden {
                 app.unhide()
             }
-            app.activate()
+            AXWindowLookup.activateProcess(app.processIdentifier)
             // If the app has no on-screen normal window (e.g. its main window was closed with ⌘W), send a
             // "reopen" via NSWorkspace so apps like WeChat bring their main window back.
             let pid = app.processIdentifier
@@ -186,14 +190,35 @@ final class MultiWindowCaptureManager {
 
     private func canonicalSharedBundleID(for rawBundleID: String?) -> String? {
         guard let bid = rawBundleID, !bid.isEmpty else { return nil }
+        if bid.localizedCaseInsensitiveContains(".inputmethod.") { return nil }
         if sharedBundleIDs.contains(bid) { return bid }
-        if sharedBundleIDs.contains(WindowCatalog.weChatBundleID) && bid.localizedCaseInsensitiveContains("WeChatAppEx") {
-            return WindowCatalog.weChatBundleID
+        if sharedBundleIDs.contains(WindowCatalog.weChatBundleID) {
+            let lower = bid.lowercased()
+            if lower.contains("wechatappex") ||
+               lower.contains("weixinappex") ||
+               lower.contains("wechatplayer") ||
+               lower.contains("radiumwmpf") ||
+               lower.hasPrefix("com.tencent.weixin") {
+                return WindowCatalog.weChatBundleID
+            }
         }
         // Match helper / extension child processes (e.g. `com.tencent.xinWeChat.WeChatAppEx`)
         return sharedBundleIDs.first { shared in
             !shared.isEmpty && bid.hasPrefix(shared + ".")
         }
+    }
+
+    /// Returns `true` if `win` is a genuine primary/secondary application window rather than a transient menu/emoji popover.
+    /// Includes pinned Always-on-Top windows at `0 < windowLayer <= 25` (e.g. WeChat 4.0's pinned Image Viewer or Browser
+    /// running at `kCGFloatingWindowLevel == 3` or `kCGModalPanelWindowLevel == 8`) when verified as an AX standard/dialog window.
+    private func isNormalAppWindow(_ win: SCWindow, standardAXIDs: Set<UInt32>? = nil) -> Bool {
+        guard win.frame.width >= 140, win.frame.height >= 120 else { return false }
+        if win.windowLayer == 0 { return true }
+        if win.windowLayer > 0 && win.windowLayer <= 25 {
+            let axSet = standardAXIDs ?? knownStandardAXWindowIDs
+            return axSet.contains(win.windowID)
+        }
+        return false
     }
 
     private func resolvedSharedBundleID(for win: SCWindow, pidToSharedBundle: [pid_t: String] = [:]) -> String? {
@@ -256,7 +281,8 @@ final class MultiWindowCaptureManager {
             bundleID: stoppedBundle,
             seenBehindActiveWindow: false,
             lastFrame: stoppedWin?.frame ?? .zero,
-            lastTitle: stoppedWin?.title ?? ""
+            lastTitle: stoppedWin?.title ?? "",
+            suppressedAtInteractionSeq: interactionSeq
         )
         if let engine = engines.removeValue(forKey: windowID) {
             await engine.stopCapture()
@@ -266,15 +292,15 @@ final class MultiWindowCaptureManager {
         windowIconStates.removeValue(forKey: windowID)
 
         // Identify the owning bundle of `windowID`. Only remove the bundle from `sharedBundleIDs` if `windowID`
-        // is its primary window OR if no other normal (`windowLayer == 0`) windows remain for that bundle.
+        // is its primary window OR if no other normal windows remain for that bundle.
         var stoppedBundles: Set<String> = []
         for (bid, primaryID) in primaryWindowByBundle where primaryID == windowID {
             stoppedBundles.insert(bid)
         }
-        if let win = stoppedWin, win.windowLayer == 0, !stoppedBundle.isEmpty {
+        if let win = stoppedWin, isNormalAppWindow(win), !stoppedBundle.isEmpty {
             let hasOtherNormalWindow = lastAppWindows.contains {
                 $0.windowID != windowID &&
-                $0.windowLayer == 0 &&
+                isNormalAppWindow($0) &&
                 resolvedSharedBundleID(for: $0, pidToSharedBundle: pidMapSnapshot) == stoppedBundle
             }
             if !hasOtherNormalWindow {
@@ -297,12 +323,11 @@ final class MultiWindowCaptureManager {
 
         // If the user stopped streaming a secondary window (e.g. WeChat image viewer or WeChatAppEx browser via 「关投屏」)
         // while the app still has an active window, raise that remaining window in front of the suppressed window.
-        // When `stoppedWin` belongs to a separate helper process (e.g. `WeChatAppEx` vs `WeChat`), activate the
-        // fallback window's process so WindowServer actually moves it above the helper process in global Z-order.
+        // Ensure the fallback window's process is frontmost when needed so WindowServer actually updates global Z-order.
         if !stoppedBundle.isEmpty && !stoppedBundles.contains(stoppedBundle) {
             let siblingCandidates = lastAppWindows.filter {
                 $0.windowID != windowID &&
-                $0.windowLayer == 0 &&
+                isNormalAppWindow($0) &&
                 suppressedWindows[$0.windowID] == nil &&
                 resolvedSharedBundleID(for: $0, pidToSharedBundle: pidMapSnapshot) == stoppedBundle
             }
@@ -313,8 +338,9 @@ final class MultiWindowCaptureManager {
             if let fallbackWin, let pid = fallbackWin.owningApplication?.processID,
                let axWin = AXWindowLookup.find(pid: pid, windowID: fallbackWin.windowID, frame: fallbackWin.frame) {
                 let stoppedPID = stoppedWin?.owningApplication?.processID ?? pid
-                if stoppedPID != pid {
-                    NSRunningApplication(processIdentifier: pid)?.activate()
+                let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+                if stoppedPID != pid || frontPID == stoppedPID {
+                    AXWindowLookup.activateProcess(pid)
                 }
                 AXWindowLookup.raise(axWin)
                 try? await Task.sleep(for: .milliseconds(40))
@@ -326,6 +352,7 @@ final class MultiWindowCaptureManager {
             pollTask = nil
             lastAppWindows.removeAll()
             knownOpenAXWindowIDs.removeAll()
+            knownStandardAXWindowIDs.removeAll()
             // Keep the Full Remote Desktop entry alive if it is still being shared.
             publishTopology(from: [], force: false)
             virtualDisplayManager?.destroyVirtualDisplay()
@@ -358,13 +385,17 @@ final class MultiWindowCaptureManager {
     func notifyNormalWindowInteracted(windowID: UInt32) {
         if windowID != 0 {
             lastInteractedWindowID = windowID
+            interactionSeq &+= 1
         }
         interactionSyncTask?.cancel()
         interactionSyncTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(45))
             guard !Task.isCancelled, let self else { return }
             await self.syncAppWindows(forcePublish: false)
-            try? await Task.sleep(for: .milliseconds(120))
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            await self.syncAppWindows(forcePublish: false)
+            try? await Task.sleep(for: .milliseconds(260))
             guard !Task.isCancelled else { return }
             await self.syncAppWindows(forcePublish: false)
         }
@@ -387,6 +418,7 @@ final class MultiWindowCaptureManager {
         primaryWindowByBundle.removeAll()
         suppressedWindows.removeAll()
         knownOpenAXWindowIDs.removeAll()
+        knownStandardAXWindowIDs.removeAll()
         isSharingFullDesktop = false
         windowIconStates.removeAll()
         lastTopology = []
@@ -403,7 +435,7 @@ final class MultiWindowCaptureManager {
         }
     }
 
-    private func startEngine(for window: SCWindow) async throws {
+    private func startEngine(for window: SCWindow, isNormalWindow: Bool) async throws {
         let engine = ScreenCaptureEngine()
         engine.dynamicResolutionEnabled = dynamicResolutionEnabled
         engine.networkTier = networkTier
@@ -422,7 +454,11 @@ final class MultiWindowCaptureManager {
                 }
             }
         }
-        try await engine.startCapture(window: window, fps: targetFPS)
+        try await engine.startCapture(
+            window: window,
+            fps: targetFPS,
+            treatAsFloatingPopover: !isNormalWindow
+        )
         engines[window.windowID] = engine
     }
 
@@ -484,15 +520,26 @@ final class MultiWindowCaptureManager {
         let bundleID: String
         let element: AXUIElement
         let frame: CGRect
+        let isStandardWindow: Bool
     }
 
-    /// Maps all running processes (including up to 8 levels of descendant child helper processes via `sysctl KERN_PROC_ALL`,
-    /// matching `HostAudioStreamer` 1:1) back to their canonical shared bundle ID so helper windows (such as WeChat's
-    /// `WeChatAppEx` built-in browser, Channels 视频号, Mini Programs, and WebView helpers) are never missed.
+    private static func executablePath(for pid: pid_t) -> String? {
+        guard pid > 1 else { return nil }
+        var buf = [UInt8](repeating: 0, count: 4096)
+        let len = proc_pidpath(pid, &buf, UInt32(buf.count))
+        guard len > 0 else { return nil }
+        return String(decoding: buf.prefix(Int(len)), as: UTF8.self)
+    }
+
+    /// Maps all running processes (including up to 8 levels of descendant child helper processes via `sysctl KERN_PROC_ALL`
+    /// AND `launchd`-spawned `ppid == 1` helpers residing inside a shared `.app` bundle via `proc_pidpath`) back to their
+    /// canonical shared bundle ID so helper windows (such as WeChat's `WeChatAppEx`, `WeixinAppEx`, `RadiumWMPF`,
+    /// `WeChatPlayer`, Channels 视频号, Mini Programs, and WebView helpers) are never missed.
     private func resolveSharedPIDToBundleMap() -> [pid_t: String] {
         guard !sharedBundleIDs.isEmpty else { return [:] }
         let myPID = ProcessInfo.processInfo.processIdentifier
         var rootMap: [pid_t: String] = [:]
+        var sharedBundlePaths: [(prefix: String, bundleID: String)] = []
         for app in NSWorkspace.shared.runningApplications {
             let pid = app.processIdentifier
             guard pid > 1, pid != myPID,
@@ -500,6 +547,12 @@ final class MultiWindowCaptureManager {
                 continue
             }
             rootMap[pid] = bid
+            if app.bundleIdentifier == bid, let path = app.bundleURL?.standardizedFileURL.path, path.hasSuffix(".app") {
+                let prefix = path + "/"
+                if !sharedBundlePaths.contains(where: { $0.prefix == prefix }) {
+                    sharedBundlePaths.append((prefix, bid))
+                }
+            }
         }
         guard !rootMap.isEmpty else { return [:] }
 
@@ -523,36 +576,56 @@ final class MultiWindowCaptureManager {
         }
 
         var fullMap = rootMap
+        let sharesWeChat = sharedBundleIDs.contains(WindowCatalog.weChatBundleID)
         for candidatePID in ppidMap.keys where candidatePID > 1 && candidatePID != myPID && fullMap[candidatePID] == nil {
             var cur = candidatePID
+            var matched = false
             for _ in 0..<8 {
                 if let matchedBid = fullMap[cur] {
                     fullMap[candidatePID] = matchedBid
+                    matched = true
                     break
                 }
                 guard let parent = ppidMap[cur], parent > 1, parent != cur else { break }
                 cur = parent
             }
+            if !matched, (!sharedBundlePaths.isEmpty || sharesWeChat),
+               let execPath = Self.executablePath(for: candidatePID) {
+                if let hit = sharedBundlePaths.first(where: { execPath.hasPrefix($0.prefix) }) {
+                    fullMap[candidatePID] = hit.bundleID
+                } else if sharesWeChat {
+                    let lower = execPath.lowercased()
+                    if lower.contains("/wechat.app/") ||
+                       lower.contains("wechatappex") ||
+                       lower.contains("weixinappex") ||
+                       lower.contains("radiumwmpf") ||
+                       lower.contains("wechatplayer") {
+                        fullMap[candidatePID] = WindowCatalog.weChatBundleID
+                    }
+                }
+            }
         }
         return fullMap
     }
 
-    /// Queries Accessibility `kAXWindowsAttribute` across all shared PIDs (and their child helpers) so we can detect
-    /// genuinely open, non-minimized normal windows EVEN when they spawn off-screen (e.g. at stale Virtual Display
-    /// coordinates) or on an inactive macOS Space (e.g. Desktop 1 while WeChat's main window is in Full Screen).
-    private func snapshotOpenSharedAXWindows(pidToSharedBundle: [pid_t: String]) -> (items: [OpenAXWindowItem], openIDs: Set<UInt32>, signature: [Int]) {
+    /// Queries Accessibility windows (`kAXWindows` + `kAXMainWindow` + `kAXFocusedWindow`) across all shared PIDs
+    /// (and their child helpers) so we can detect genuinely open, non-minimized windows EVEN when they spawn off-screen
+    /// (e.g. at stale Virtual Display coordinates), run as floating `NSPanel`s (`windowLayer == 3`), or open on an
+    /// inactive macOS Space (e.g. Desktop 1 while WeChat's main window is in Full Screen).
+    private func snapshotOpenSharedAXWindows(pidToSharedBundle: [pid_t: String]) -> (items: [OpenAXWindowItem], openIDs: Set<UInt32>, standardIDs: Set<UInt32>, signature: [Int]) {
         guard AXIsProcessTrusted(), !pidToSharedBundle.isEmpty else {
-            return ([], [], [])
+            return ([], [], [], [])
         }
         var items: [OpenAXWindowItem] = []
         var openIDs: Set<UInt32> = []
+        var standardIDs: Set<UInt32> = []
         var sig: [Int] = []
         for pid in pidToSharedBundle.keys.sorted() {
             guard let bid = pidToSharedBundle[pid] else { continue }
             if NSRunningApplication(processIdentifier: pid)?.isHidden == true {
                 continue
             }
-            for axWin in AXWindowLookup.windows(pid: pid) {
+            for axWin in AXWindowLookup.allWindows(pid: pid) {
                 if AXWindowLookup.isMinimized(axWin) {
                     continue
                 }
@@ -561,17 +634,29 @@ final class MultiWindowCaptureManager {
                       frame.width >= 140, frame.height >= 120 else {
                     continue
                 }
+                let isStd = AXWindowLookup.isStandardOrDialogWindow(axWin)
+                if isStd {
+                    standardIDs.insert(wid)
+                }
                 if openIDs.insert(wid).inserted {
-                    items.append(OpenAXWindowItem(windowID: wid, pid: pid, bundleID: bid, element: axWin, frame: frame))
+                    items.append(OpenAXWindowItem(
+                        windowID: wid,
+                        pid: pid,
+                        bundleID: bid,
+                        element: axWin,
+                        frame: frame,
+                        isStandardWindow: isStd
+                    ))
                     sig.append(Int(wid))
                     sig.append(Int(frame.origin.x))
                     sig.append(Int(frame.origin.y))
                     sig.append(Int(frame.size.width))
                     sig.append(Int(frame.size.height))
+                    sig.append(isStd ? 1 : 0)
                 }
             }
         }
-        return (items, openIDs, sig)
+        return (items, openIDs, standardIDs, sig)
     }
 
     private func nonZeroAlphaWindowIDsInAllSpaces() -> Set<UInt32> {
@@ -596,6 +681,7 @@ final class MultiWindowCaptureManager {
         guard !sharedBundleIDs.isEmpty else {
             audioStreamer.updateScope(isFullDesktop: isSharingFullDesktop, sharedBundleIDs: sharedBundleIDs)
             knownOpenAXWindowIDs.removeAll()
+            knownStandardAXWindowIDs.removeAll()
             publishTopology(from: [], force: false)
             return
         }
@@ -676,8 +762,8 @@ final class MultiWindowCaptureManager {
                     )
                 } else if !cgSnap.visibleIDs.contains(item.windowID) && !knownOpenAXWindowIDs.contains(item.windowID) {
                     // Brand-new window spawned on an inactive macOS Space (e.g. Desktop 1 while WeChat is in Full Screen):
-                    // activate its owning process and raise the window so the Host user sees it too.
-                    NSRunningApplication(processIdentifier: item.pid)?.activate()
+                    // activate its owning process via AXFrontmost + AppKit and raise the window so the Host user sees it too.
+                    AXWindowLookup.activateProcess(item.pid)
                     AXWindowLookup.raise(item.element)
                     rescuedOrSurfacedAny = true
                     OpenUULogger.shared.info("CAPTURE", "surfaced cross-space window win=\(item.windowID) pid=\(item.pid)")
@@ -692,6 +778,7 @@ final class MultiWindowCaptureManager {
         var postSnap = currentOnScreenWindowSnapshot()
         let axPostSnap = rescuedOrSurfacedAny ? snapshotOpenSharedAXWindows(pidToSharedBundle: pidToSharedBundle) : axPreSnap
         knownOpenAXWindowIDs = axPostSnap.openIDs
+        knownStandardAXWindowIDs = axPostSnap.standardIDs
         let hasOffSpaceOpenWindows = axPostSnap.openIDs.contains { wid in
             suppressedWindows[wid] == nil && !postSnap.visibleIDs.contains(wid)
         }
@@ -719,7 +806,7 @@ final class MultiWindowCaptureManager {
            await vdm.ensureVirtualDisplayReady() {
             var movedAny = false
             let candidateNormalWins = content.windows.filter { win in
-                guard win.windowLayer == 0, win.frame.width >= 140, win.frame.height >= 120 else { return false }
+                guard isNormalAppWindow(win) else { return false }
                 return resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle) != nil
             }
             let groupedByBundle = Dictionary(grouping: candidateNormalWins) { win in
@@ -757,6 +844,7 @@ final class MultiWindowCaptureManager {
                     postSnap = currentOnScreenWindowSnapshot()
                     let axAfterVD = snapshotOpenSharedAXWindows(pidToSharedBundle: pidToSharedBundle)
                     knownOpenAXWindowIDs = axAfterVD.openIDs
+                    knownStandardAXWindowIDs = axAfterVD.standardIDs
                     lastCGWindowSignature = postSnap.signature + [-999_999] + axAfterVD.signature
                 }
             }
@@ -765,14 +853,13 @@ final class MultiWindowCaptureManager {
         let openAXWindowIDs = knownOpenAXWindowIDs
         let nonZeroAlphaAllIDs = hasOffSpaceOpenWindows ? nonZeroAlphaWindowIDsInAllSpaces() : visibleOnScreenIDs
 
-        // Include all normal windows (layer == 0) PLUS all floating popovers / emoji pickers / animated sticker
-        // hover previews / context menus (layer 1..400).
+        // Include all normal windows (layer == 0 or pinned standard windows at layer <= 25) PLUS all floating
+        // popovers / emoji pickers / animated sticker hover previews / context menus (layer 1..400).
         let existingIDsOnHost = Set(content.windows.map(\.windowID)).union(openAXWindowIDs)
         suppressedWindows = suppressedWindows.filter { existingIDsOnHost.contains($0.key) }
 
         if !suppressedWindows.isEmpty {
             let zOrderRank = currentNormalWindowZOrder()
-            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
             var minActiveRankByBundle: [String: Int] = [:]
             for win in content.windows where win.windowLayer == 0 && win.frame.width >= 140 && win.frame.height >= 120 {
                 guard suppressedWindows[win.windowID] == nil,
@@ -785,6 +872,7 @@ final class MultiWindowCaptureManager {
                 }
             }
 
+            var focusedWinByPID: [pid_t: CGWindowID] = [:]
             var unsuppressedIDs: [UInt32] = []
             for win in content.windows {
                 guard var state = suppressedWindows[win.windowID] else { continue }
@@ -793,28 +881,46 @@ final class MultiWindowCaptureManager {
                 let curTitle = win.title ?? ""
                 let frameChanged = !state.lastFrame.isEmpty && (
                     abs(win.frame.width - state.lastFrame.width) > 2 ||
-                    abs(win.frame.height - state.lastFrame.height) > 2
+                    abs(win.frame.height - state.lastFrame.height) > 2 ||
+                    abs(win.frame.origin.x - state.lastFrame.origin.x) > 2 ||
+                    abs(win.frame.origin.y - state.lastFrame.origin.y) > 2
                 )
                 let titleChanged = !curTitle.isEmpty && curTitle != state.lastTitle
+
+                if frameChanged || titleChanged {
+                    unsuppressedIDs.append(win.windowID)
+                    continue
+                }
+
+                // If the user clicked inside an active window AFTER this window was suppressed (e.g. clicked another
+                // image or link in WeChat) and macOS Accessibility reports this reused window as now focused/main,
+                // unsuppress immediately — even for pinned `windowLayer == 3` panels or cross-Space windows!
+                if interactionSeq > state.suppressedAtInteractionSeq, winPID != 0 {
+                    let focusedID: CGWindowID
+                    if let cached = focusedWinByPID[winPID] {
+                        focusedID = cached
+                    } else {
+                        let queried = AXWindowLookup.focusedOrMainWindowID(pid: winPID) ?? 0
+                        focusedWinByPID[winPID] = queried
+                        focusedID = queried
+                    }
+                    if focusedID == win.windowID {
+                        unsuppressedIDs.append(win.windowID)
+                        continue
+                    }
+                }
 
                 if win.windowLayer == 0,
                    let myRank = zOrderRank[win.windowID],
                    let activeRank = minActiveRankByBundle[bid] {
-                    if myRank > activeRank || (winPID != 0 && frontmostPID != 0 && winPID != frontmostPID) {
-                        if myRank > activeRank {
-                            state.seenBehindActiveWindow = true
-                            state.lastFrame = win.frame
-                            state.lastTitle = curTitle
-                            suppressedWindows[win.windowID] = state
-                        } else if !state.seenBehindActiveWindow {
-                            state.seenBehindActiveWindow = true
-                            suppressedWindows[win.windowID] = state
-                        }
-                    } else if state.seenBehindActiveWindow || frameChanged || titleChanged {
+                    if myRank > activeRank {
+                        state.seenBehindActiveWindow = true
+                        state.lastFrame = win.frame
+                        state.lastTitle = curTitle
+                        suppressedWindows[win.windowID] = state
+                    } else if state.seenBehindActiveWindow {
                         unsuppressedIDs.append(win.windowID)
                     }
-                } else if frameChanged || titleChanged {
-                    unsuppressedIDs.append(win.windowID)
                 }
             }
             for id in unsuppressedIDs {
@@ -825,14 +931,15 @@ final class MultiWindowCaptureManager {
 
         let appWindows = content.windows.filter { win in
             guard suppressedWindows[win.windowID] == nil else { return false }
+            let isNormal = isNormalAppWindow(win)
             let isOnCurrentSpace = visibleOnScreenIDs.isEmpty || visibleOnScreenIDs.contains(win.windowID)
-            let isOpenOnAnotherSpace = win.windowLayer == 0 &&
+            let isOpenOnAnotherSpace = isNormal &&
                 openAXWindowIDs.contains(win.windowID) &&
                 nonZeroAlphaAllIDs.contains(win.windowID)
             guard isOnCurrentSpace || isOpenOnAnotherSpace else { return false }
             guard resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle) != nil else { return false }
-            if win.windowLayer == 0 {
-                return win.frame.width >= 140 && win.frame.height >= 120
+            if isNormal {
+                return true
             }
             if win.windowLayer > 0 && win.windowLayer < Self.maxCapturablePopoverLayer {
                 return Self.isCapturablePopoverFrame(win.frame)
@@ -840,7 +947,7 @@ final class MultiWindowCaptureManager {
             return false
         }
 
-        let normalWindowsByBundle = Dictionary(grouping: appWindows.filter { $0.windowLayer == 0 }) { win in
+        let normalWindowsByBundle = Dictionary(grouping: appWindows.filter { isNormalAppWindow($0) }) { win in
             resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
                 ?? (win.owningApplication?.bundleIdentifier ?? "")
         }
@@ -877,7 +984,7 @@ final class MultiWindowCaptureManager {
         windowIconStates = windowIconStates.filter { currentIDs.contains($0.key) }
 
         let prevSizesByID: [UInt32: CGSize] = Dictionary(uniqueKeysWithValues: lastAppWindows.map { ($0.windowID, $0.frame.size) })
-        for win in appWindows where win.windowLayer > 0 && trackedIDs.contains(win.windowID) {
+        for win in appWindows where !isNormalAppWindow(win) && trackedIDs.contains(win.windowID) {
             if let prevSize = prevSizesByID[win.windowID],
                (abs(win.frame.width - prevSize.width) > 2 || abs(win.frame.height - prevSize.height) > 2) {
                 windowCroppedSizes.removeValue(forKey: win.windowID)
@@ -900,7 +1007,8 @@ final class MultiWindowCaptureManager {
                 engines[win.windowID]?.updateWindowLogicalSize(win.frame.size)
                 continue
             }
-            if win.windowLayer == 0 {
+            let isNormal = isNormalAppWindow(win)
+            if isNormal {
                 let bid = resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
                     ?? (win.owningApplication?.bundleIdentifier ?? "")
                 if !bid.isEmpty, primaryWindowByBundle[bid] == nil {
@@ -908,10 +1016,10 @@ final class MultiWindowCaptureManager {
                 }
             }
             do {
-                try await startEngine(for: win)
+                try await startEngine(for: win, isNormalWindow: isNormal)
                 startedAny = true
                 let appName = win.owningApplication?.applicationName ?? "App"
-                OpenUULogger.shared.info("CAPTURE", "started win=\(win.windowID) app=\(appName) layer=\(win.windowLayer) frame=\(Int(win.frame.origin.x)),\(Int(win.frame.origin.y)) \(Int(win.frame.width))x\(Int(win.frame.height))")
+                OpenUULogger.shared.info("CAPTURE", "started win=\(win.windowID) app=\(appName) layer=\(win.windowLayer) normal=\(isNormal) frame=\(Int(win.frame.origin.x)),\(Int(win.frame.origin.y)) \(Int(win.frame.width))x\(Int(win.frame.height))")
                 onStatus?("开始传输窗口: \(appName) - \(win.title ?? appName)")
             } catch {
                 OpenUULogger.shared.warn("CAPTURE", "startEngine failed win=\(win.windowID) error=\(error.localizedDescription)")
@@ -932,11 +1040,11 @@ final class MultiWindowCaptureManager {
 
     private func publishTopology(from windows: [SCWindow], pidToSharedBundle: [pid_t: String] = [:], force: Bool) {
         let frameByID: [UInt32: CGRect] = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0.frame) })
-        let normalWindowsByBundle = Dictionary(grouping: windows.filter { $0.windowLayer == 0 }) { win in
+        let normalWindowsByBundle = Dictionary(grouping: windows.filter { isNormalAppWindow($0) }) { win in
             resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
                 ?? (win.owningApplication?.bundleIdentifier ?? "")
         }
-        let hasPopover = windows.contains { $0.windowLayer > 0 }
+        let hasPopover = windows.contains { !isNormalAppWindow($0) }
         let zOrderRank = hasPopover ? currentNormalWindowZOrder() : [:]
 
         var items: [WindowTopologyItem] = windows.map { win in
@@ -944,7 +1052,7 @@ final class MultiWindowCaptureManager {
                 ?? (win.owningApplication?.bundleIdentifier ?? "")
             let appName = win.owningApplication?.applicationName ?? "App"
             let primaryID = primaryWindowByBundle[bid] ?? win.windowID
-            let isPopover = win.windowLayer > 0
+            let isPopover = !isNormalAppWindow(win)
             let isMain = !isPopover && win.windowID == primaryID
             let anchorID: UInt32
             if isMain {
@@ -1007,7 +1115,7 @@ final class MultiWindowCaptureManager {
     }
 
     private func isHelperOrDistinctIconWindow(_ win: SCWindow, canonicalBundleID: String, primaryPID: pid_t) -> Bool {
-        guard win.windowLayer == 0 else { return false }
+        guard isNormalAppWindow(win) else { return false }
         let rawBid = win.owningApplication?.bundleIdentifier ?? ""
         let winPID = win.owningApplication?.processID ?? 0
         if !rawBid.isEmpty && rawBid != canonicalBundleID {
@@ -1028,7 +1136,7 @@ final class MultiWindowCaptureManager {
         let retryDelays: [CFAbsoluteTime] = [0.8, 2.0, 4.5]
 
         var requests: [LiveDockIconExtractor.Request] = []
-        for win in windows where win.windowLayer == 0 {
+        for win in windows where isNormalAppWindow(win) {
             let canonicalBid = resolvedSharedBundleID(for: win, pidToSharedBundle: pidToSharedBundle)
                 ?? (win.owningApplication?.bundleIdentifier ?? "")
             let primaryID = primaryWindowByBundle[canonicalBid] ?? win.windowID

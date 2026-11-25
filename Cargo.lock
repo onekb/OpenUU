@@ -2309,7 +2309,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "openuu-cli"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "openuu-core",
  "serde_json",
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "openuu-coord"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "axum",
  "hex",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "openuu-core"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "base64 0.22.1",
  "bytes",

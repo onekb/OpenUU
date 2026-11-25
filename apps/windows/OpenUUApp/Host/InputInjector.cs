@@ -492,8 +492,11 @@ public sealed class InputInjector : IDisposable
         if (!KeyCodeMapper.TryMapCgKeyCodeToVk(cgKeyCode, out ushort vk))
             return;
 
-        // Translate Mac/iOS/Android Command+<Key> shortcuts (Copy/Paste/Cut/Undo/SelectAll/Save/Find) into Windows Ctrl+<Key>
-        bool cmdAsCtrl = (modifiers & KeyCodeMapper.ModCmd) != 0 && vk is >= 0x30 and <= 0x5A;
+        bool isModifierKey = vk is 0x10 or 0xA0 or 0xA1 or 0x11 or 0xA2 or 0xA3 or 0x12 or 0xA4 or 0xA5 or 0x5B or 0x5C;
+
+        // Translate Mac/iOS/Android Command+<Key> shortcuts (Copy/Paste/Undo/Zoom `⌘+`/`⌘-`, Send `⌘+Enter`,
+        // Comment `⌘+/`, Jump/Delete Word `⌘+←/→/⌫`, Switch Tab `⌘+Tab`, etc.) into Windows Ctrl+<Key>
+        bool cmdAsCtrl = (modifiers & KeyCodeMapper.ModCmd) != 0 && !isModifierKey && vk != 0x1B;
         bool wantCtrl = ((modifiers & KeyCodeMapper.ModCtrl) != 0) || cmdAsCtrl;
         bool wantShift = (modifiers & KeyCodeMapper.ModShift) != 0;
         bool wantAlt = (modifiers & KeyCodeMapper.ModAlt) != 0;
@@ -504,7 +507,6 @@ public sealed class InputInjector : IDisposable
         }
 
         var inputs = new List<Win32Interop.INPUT>(8);
-        bool isModifierKey = vk is 0x10 or 0xA0 or 0xA1 or 0x11 or 0xA2 or 0xA3 or 0x12 or 0xA4 or 0xA5 or 0x5B or 0x5C;
 
         if (isDown && !isModifierKey)
         {
@@ -539,7 +541,7 @@ public sealed class InputInjector : IDisposable
     {
         ushort scan = (ushort)Win32Interop.MapVirtualKey(vk, 0);
         uint flags = isDown ? 0u : Win32Interop.KEYEVENTF_KEYUP;
-        if (vk is >= 0x21 and <= 0x2E or 0x5B or 0x5C)
+        if (vk is >= 0x21 and <= 0x2E or 0x5B or 0x5C or 0x6F or 0xA3 or 0xA5)
             flags |= Win32Interop.KEYEVENTF_EXTENDEDKEY;
 
         return new Win32Interop.INPUT

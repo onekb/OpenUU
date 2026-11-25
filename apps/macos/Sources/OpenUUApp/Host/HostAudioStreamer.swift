@@ -722,8 +722,15 @@ final class HostAudioStreamer: NSObject, SCStreamOutput, @unchecked Sendable {
     private static func bundleMatches(_ rawBundleID: String?, sharedBundles: Set<String>) -> Bool {
         guard let bid = rawBundleID, !bid.isEmpty else { return false }
         if sharedBundles.contains(bid) { return true }
-        if sharedBundles.contains(WindowCatalog.weChatBundleID) && bid.localizedCaseInsensitiveContains("WeChatAppEx") {
-            return true
+        if sharedBundles.contains(WindowCatalog.weChatBundleID) {
+            let lower = bid.lowercased()
+            if lower.contains("wechatappex") ||
+               lower.contains("weixinappex") ||
+               lower.contains("wechatplayer") ||
+               lower.contains("radiumwmpf") ||
+               lower.hasPrefix("com.tencent.weixin") {
+                return true
+            }
         }
         return sharedBundles.contains { shared in
             !shared.isEmpty && bid.hasPrefix(shared + ".")

@@ -29,6 +29,7 @@ final class FastVideoRouter: @unchecked Sendable {
         let renderer: VideoDisplayRenderer
         var width: UInt16
         var height: UInt16
+        var hasSyncedWindow: Bool
     }
 
     private let lock = NSLock()
@@ -55,12 +56,12 @@ final class FastVideoRouter: @unchecked Sendable {
         }
         let created = VideoDisplayRenderer()
         created.setWanJitterMode(isWanMode)
-        entries[windowID] = Entry(renderer: created, width: 0, height: 0)
+        entries[windowID] = Entry(renderer: created, width: 0, height: 0, hasSyncedWindow: false)
         return created
     }
 
     /// Enqueues the video packet directly onto the window's renderQueue in strict FIFO order.
-    /// Returns `true` if this is the first frame or if the encoded dimensions changed (requiring a `@MainActor` window sync).
+    /// Returns `true` until `@MainActor` confirms proxy window creation via `markWindowSynced`, or whenever dimensions change.
     func routeAndEnqueue(_ packet: EncodedVideoPacket) -> Bool {
         lock.lock()
         if suppressedWindowIDs.contains(packet.windowID) {
@@ -70,7 +71,7 @@ final class FastVideoRouter: @unchecked Sendable {
         var needsWindowSync = false
         let targetRenderer: VideoDisplayRenderer
         if var existing = entries[packet.windowID] {
-            if existing.width != packet.width || existing.height != packet.height {
+            if !existing.hasSyncedWindow || existing.width != packet.width || existing.height != packet.height {
                 existing.width = packet.width
                 existing.height = packet.height
                 entries[packet.windowID] = existing
@@ -80,7 +81,12 @@ final class FastVideoRouter: @unchecked Sendable {
         } else {
             let created = VideoDisplayRenderer()
             created.setWanJitterMode(isWanMode)
-            entries[packet.windowID] = Entry(renderer: created, width: packet.width, height: packet.height)
+            entries[packet.windowID] = Entry(
+                renderer: created,
+                width: packet.width,
+                height: packet.height,
+                hasSyncedWindow: false
+            )
             targetRenderer = created
             needsWindowSync = true
         }
@@ -88,6 +94,15 @@ final class FastVideoRouter: @unchecked Sendable {
 
         targetRenderer.enqueue(packet: packet)
         return needsWindowSync
+    }
+
+    func markWindowSynced(windowID: UInt32, width: UInt16, height: UInt16) {
+        lock.lock()
+        if var existing = entries[windowID] {
+            existing.hasSyncedWindow = (existing.width == width && existing.height == height)
+            entries[windowID] = existing
+        }
+        lock.unlock()
     }
 
     func suppress(windowID: UInt32) {
@@ -100,12 +115,22 @@ final class FastVideoRouter: @unchecked Sendable {
     func unsuppress(windowID: UInt32) {
         lock.lock()
         suppressedWindowIDs.remove(windowID)
+        if var existing = entries[windowID] {
+            existing.hasSyncedWindow = false
+            entries[windowID] = existing
+        }
         lock.unlock()
     }
 
     func unsuppressAll() {
         lock.lock()
         suppressedWindowIDs.removeAll()
+        for key in Array(entries.keys) {
+            if var existing = entries[key] {
+                existing.hasSyncedWindow = false
+                entries[key] = existing
+            }
+        }
         lock.unlock()
     }
 

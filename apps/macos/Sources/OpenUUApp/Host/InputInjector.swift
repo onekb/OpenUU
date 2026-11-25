@@ -16,9 +16,11 @@ final class InputInjector: @unchecked Sendable {
     private var lastKnownHostCursorPosition: CGPoint?
     private var pendingCursorRestore: DispatchWorkItem?
     private var isRemoteMouseButtonDown: Bool = false
+    private var lastMouseDownPostedAt: CFAbsoluteTime = 0
     private var lastMouseEventPoint: CGPoint?
     private var dragPasteboardBaselineCount: Int = 0
     private var dragOutEmittedForCurrentDrag: Bool = false
+    private var suppressedCmdWKeyUpWindowID: CGWindowID = 0
     private var lastHoverTime: CFAbsoluteTime = 0
     private var lastCursorKind: String = ""
     var silentMode: Bool = true
@@ -126,7 +128,13 @@ final class InputInjector: @unchecked Sendable {
             }
             guard let dict = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: dict) else { return false }
-            return rect.width >= 42 && rect.height >= 22 && (rect.width >= 50 || rect.height >= 36)
+            if layer >= 100 {
+                // Native NSMenu context menus (including single-item Copy/Paste ~52x26pt)
+                return rect.width >= 42 && rect.height >= 22 && (rect.width >= 50 || rect.height >= 36)
+            }
+            // Custom app popovers (e.g. WeChat emoji picker / sticker hover preview); exclude tiny idle
+            // placeholder overlays (~50x24pt) kept permanently on-screen at layer 3 by WeChat!
+            return rect.width >= 84 && rect.height >= 48
         }
     }
 
@@ -223,7 +231,9 @@ final class InputInjector: @unchecked Sendable {
         self.fallbackFrame = resolved.frame
         if msg.type == "mouse" && (msg.event_type == 1 || msg.event_type == 2 || msg.event_type == 3) ||
             msg.type == "scroll" || msg.type == "key" || msg.type == "text_commit" {
-            onNormalWindowInteracted?(resolved.layer == 0 ? effectiveWinID : 0)
+            let isInteractiveWindow = resolved.layer == 0 ||
+                (resolved.layer <= 25 && resolved.frame.width >= 140 && resolved.frame.height >= 120)
+            onNormalWindowInteracted?(isInteractiveWindow ? effectiveWinID : 0)
         }
         let inset = windowContentInsets[effectiveWinID] ?? .zero
 
@@ -274,10 +284,68 @@ final class InputInjector: @unchecked Sendable {
             scheduleHostCursorRestore(delayMs: 20)
 
         case "key":
-            let keyCode = CGKeyCode(msg.key_code ?? 0)
+            let rawModifiers = msg.modifiers ?? 0
+            let flags = cgFlags(from: rawModifiers)
+            let keyCode = Self.normalizedInjectedKeyCode(CGKeyCode(msg.key_code ?? 0), flags: flags)
             let isDown = msg.is_down ?? true
             let isRepeat = msg.is_repeat ?? false
-            let flags = cgFlags(from: msg.modifiers ?? 0)
+
+            // 1. Explicit "Close Remote Window" button (HoverBar 「关对端窗」 / Dock / mobile tab close -> bit 256):
+            //    Close ONLY `effectiveWinID` via its own AX Close button (never blindly sending ⌘W to WeChat's main window).
+            if (rawModifiers & 256) != 0 && keyCode == 13 /* W */ {
+                if isDown {
+                    closeSpecificRemoteWindow(
+                        windowID: effectiveWinID,
+                        pid: resolved.pid,
+                        rawFrame: resolved.frame,
+                        windowLayer: resolved.layer
+                    )
+                }
+                return
+            }
+
+            // 2. Keyboard `⌘W` (`keyCode == 13`, `.maskCommand` without Ctrl/Opt/Shift):
+            //    Posting `⌘W` via `postToPid` while an app is inactive (`keyWindow == nil`) or while another window of
+            //    the same app is focused causes AppKit/WeChat to route `performClose:` to `mainWindow` (closing WeChat's
+            //    main window instead of the image viewer!). Ensure `effectiveWinID` is active & focused first; if a
+            //    sibling window still holds focus, close `effectiveWinID` directly via AX Close / Esc instead of `⌘W`.
+            let isPlainCmdW = keyCode == 13 /* W */ &&
+                flags.contains(.maskCommand) &&
+                !flags.contains(.maskShift) &&
+                !flags.contains(.maskAlternate) &&
+                !flags.contains(.maskControl)
+            if isPlainCmdW {
+                if !isDown {
+                    if suppressedCmdWKeyUpWindowID == effectiveWinID {
+                        suppressedCmdWKeyUpWindowID = 0
+                        return
+                    }
+                } else {
+                    let hasSibling = AXWindowLookup.hasOtherNormalOnScreenWindow(pid: resolved.pid, excluding: effectiveWinID)
+                    let focusedOK = activateAndFocusSpecificWindow(
+                        windowID: effectiveWinID,
+                        pid: resolved.pid,
+                        rawFrame: resolved.frame,
+                        windowLayer: resolved.layer
+                    )
+                    if hasSibling && !focusedOK {
+                        suppressedCmdWKeyUpWindowID = effectiveWinID
+                        closeSpecificRemoteWindow(
+                            windowID: effectiveWinID,
+                            pid: resolved.pid,
+                            rawFrame: resolved.frame,
+                            windowLayer: resolved.layer
+                        )
+                        return
+                    }
+                }
+                if let ev = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: isDown) {
+                    ev.flags = flags
+                    ev.post(tap: .cghidEventTap)
+                }
+                return
+            }
+
             // Give a just-arrived pre-paste ClipboardSync 15ms to commit to NSPasteboard on main thread.
             if isDown && keyCode == 9 /* V */ && flags.contains(.maskCommand) {
                 usleep(15_000)
@@ -295,10 +363,21 @@ final class InputInjector: @unchecked Sendable {
                     isSystemGlobalShortcut ||
                     (keyCode == 53 && (isRemoteMouseButtonDown || targetAppHasOpenFloatingPopover()))
                 if silentMode && !requiresHIDTap {
+                    if isDown && !isRepeat {
+                        ensureWindowFocusedInsideApp(
+                            windowID: effectiveWinID,
+                            pid: resolved.pid,
+                            rawFrame: resolved.frame,
+                            windowLayer: resolved.layer
+                        )
+                    }
                     ev.postToPid(targetPID)
                 } else {
                     if !isRemoteMouseButtonDown && !isSystemGlobalShortcut {
-                        bringTargetWindowToFront(windowID: effectiveWinID, rawFrame: resolved.frame, windowLayer: resolved.layer, clickPoint: nil)
+                        let changed = bringTargetWindowToFront(windowID: effectiveWinID, rawFrame: resolved.frame, windowLayer: resolved.layer, clickPoint: nil)
+                        if changed && isDown {
+                            usleep(35_000)
+                        }
                     }
                     ev.post(tap: .cghidEventTap)
                 }
@@ -307,6 +386,12 @@ final class InputInjector: @unchecked Sendable {
         case "text_commit":
             guard let text = msg.text, !text.isEmpty else { return }
             onDebugLog?("注入文本: \(text)")
+            ensureWindowFocusedInsideApp(
+                windowID: effectiveWinID,
+                pid: resolved.pid,
+                rawFrame: resolved.frame,
+                windowLayer: resolved.layer
+            )
             injectUnicodeText(text)
 
         case "resize_window":
@@ -395,7 +480,7 @@ final class InputInjector: @unchecked Sendable {
             }
 
         case "key":
-            let keyCode = CGKeyCode(msg.key_code ?? 0)
+            let keyCode = Self.normalizedInjectedKeyCode(CGKeyCode(msg.key_code ?? 0), flags: flags)
             let isDown = msg.is_down ?? true
             let isRepeat = msg.is_repeat ?? false
             if isDown && keyCode == 9 && flags.contains(.maskCommand) {
@@ -439,7 +524,7 @@ final class InputInjector: @unchecked Sendable {
         targetWidth: CGFloat,
         targetHeight: CGFloat
     ) {
-        guard windowLayer == 0,
+        guard windowLayer <= 25,
               let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame) else {
             return
         }
@@ -518,10 +603,11 @@ final class InputInjector: @unchecked Sendable {
     ) -> (rawFrame: CGRect, contentFrame: CGRect, point: CGPoint) {
         var currentRaw = rawFrame
 
+        let isRelocatableWindow = windowLayer == 0 || (windowLayer <= 25 && currentRaw.width >= 140 && currentRaw.height >= 120)
         if allowRelocate, let vBounds = activeVirtualDisplayBounds() {
             // Scheme C: normal windows MUST stay completely inside the virtual display so no part of the window
             // overflows onto the adjacent main display (where WindowServer clips it and clicks hit main-screen apps).
-            if windowLayer == 0 && !vBounds.insetBy(dx: -2, dy: -2).contains(currentRaw) {
+            if isRelocatableWindow && !vBounds.insetBy(dx: -2, dy: -2).contains(currentRaw) {
                 currentRaw = relocateWindowIntoVirtualDisplay(windowID: windowID, currentRaw: currentRaw, vBounds: vBounds)
             }
         }
@@ -539,7 +625,7 @@ final class InputInjector: @unchecked Sendable {
             let safe = vBounds.insetBy(dx: 2, dy: 2)
             clickPoint.x = min(max(clickPoint.x, safe.minX), safe.maxX)
             clickPoint.y = min(max(clickPoint.y, safe.minY), safe.maxY)
-        } else if allowRelocate && windowLayer == 0 && !isPointOnAnyDisplay(clickPoint) {
+        } else if allowRelocate && isRelocatableWindow && !isPointOnAnyDisplay(clickPoint) {
             let nudged = nudgeWindowIntoDisplayBounds(windowID: windowID, for: clickPoint, rawFrame: currentRaw)
             currentRaw = nudged.rawFrame
             contentFrame = CGRect(
@@ -644,7 +730,9 @@ final class InputInjector: @unchecked Sendable {
 
         // Raise the exact AXWindow matching `windowID` (never blindly raising `windows[0]` when another windowID was clicked).
         var raisedWindow = false
-        if windowLayer == 0, let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame) {
+        if windowLayer <= 25,
+           let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame),
+           (windowLayer == 0 || AXWindowLookup.isStandardOrDialogWindow(matched)) {
             AXUIElementSetAttributeValue(matched, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
             AXUIElementSetAttributeValue(matched, kAXMainAttribute as CFString, kCFBooleanTrue)
             AXUIElementSetAttributeValue(matched, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -656,6 +744,90 @@ final class InputInjector: @unchecked Sendable {
             NSRunningApplication(processIdentifier: pid)?.activate()
         }
         return !wasActive || raisedWindow
+    }
+
+    /// Ensures `windowID` is the focused AX window inside `pid` (without stealing global foreground focus in `silentMode`)
+    /// so `postToPid` keyboard events (`Esc`, `←/→`, `⌘C`, IME text) hit the right child/chat window rather than `windows[0]`.
+    private func ensureWindowFocusedInsideApp(windowID: CGWindowID, pid: pid_t, rawFrame: CGRect, windowLayer: Int) {
+        guard windowID != 0, windowLayer <= 25 else { return }
+        if AXWindowLookup.focusedWindowID(pid: pid) == windowID {
+            return
+        }
+        if let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame),
+           (windowLayer == 0 || AXWindowLookup.isStandardOrDialogWindow(matched)) {
+            AXWindowLookup.raise(matched)
+            usleep(25_000)
+        }
+    }
+
+    /// Activates `pid`, raises `windowID`, and polls up to ~90ms to verify `kAXFocusedWindowAttribute == windowID`.
+    private func activateAndFocusSpecificWindow(windowID: CGWindowID, pid: pid_t, rawFrame: CGRect, windowLayer: Int) -> Bool {
+        let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame)
+        let wasActive = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        if !wasActive {
+            AXWindowLookup.activateProcess(pid)
+        }
+        if let matched {
+            AXWindowLookup.raise(matched)
+        }
+        for _ in 0..<6 {
+            let activeNow = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+            if activeNow && AXWindowLookup.focusedWindowID(pid: pid) == windowID {
+                return true
+            }
+            usleep(15_000)
+        }
+        let activeNow = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        return activeNow && AXWindowLookup.focusedWindowID(pid: pid) == windowID
+    }
+
+    /// Deterministically closes ONLY `windowID` without ever sending an unfocused `⌘W` that could close a sibling main window.
+    private func closeSpecificRemoteWindow(windowID: CGWindowID, pid: pid_t, rawFrame: CGRect, windowLayer: Int) {
+        if let matched = AXWindowLookup.find(pid: pid, windowID: windowID, frame: rawFrame),
+           AXWindowLookup.pressCloseButton(of: matched) {
+            usleep(65_000)
+            if !AXWindowLookup.isWindowOnScreen(windowID) {
+                onDebugLog?("已精准关闭远端窗口 win=\(windowID)")
+                return
+            }
+        }
+
+        let hasSibling = AXWindowLookup.hasOtherNormalOnScreenWindow(pid: pid, excluding: windowID)
+        let focusedOK = activateAndFocusSpecificWindow(windowID: windowID, pid: pid, rawFrame: rawFrame, windowLayer: windowLayer)
+
+        if focusedOK || !hasSibling {
+            if let down = CGEvent(keyboardEventSource: nil, virtualKey: 13 /* W */, keyDown: true),
+               let up = CGEvent(keyboardEventSource: nil, virtualKey: 13 /* W */, keyDown: false) {
+                down.flags = .maskCommand
+                up.flags = .maskCommand
+                down.post(tap: .cghidEventTap)
+                usleep(12_000)
+                up.post(tap: .cghidEventTap)
+            }
+            usleep(65_000)
+            if !AXWindowLookup.isWindowOnScreen(windowID) {
+                onDebugLog?("已通过 ⌘W 关闭远端焦点窗口 win=\(windowID)")
+                return
+            }
+        }
+
+        // Safe fallback (e.g. borderless/non-focusable image viewer or preview panel while WeChat main window is open):
+        // send `Esc` (NEVER `⌘W`!), which dismisses image viewers/previews without ever closing WeChat's main window.
+        if let down = CGEvent(keyboardEventSource: nil, virtualKey: 53 /* Esc */, keyDown: true),
+           let up = CGEvent(keyboardEventSource: nil, virtualKey: 53 /* Esc */, keyDown: false) {
+            down.flags = []
+            up.flags = []
+            if NSRunningApplication(processIdentifier: pid)?.isActive == true {
+                down.post(tap: .cghidEventTap)
+                usleep(12_000)
+                up.post(tap: .cghidEventTap)
+            } else {
+                down.postToPid(pid)
+                usleep(12_000)
+                up.postToPid(pid)
+            }
+            onDebugLog?("已通过 Esc 安全关闭远端预览窗口 win=\(windowID)")
+        }
     }
 
     private func isPointOnAnyDisplay(_ point: CGPoint) -> Bool {
@@ -841,9 +1013,22 @@ final class InputInjector: @unchecked Sendable {
             lastMouseEventPoint = nil
             pendingCursorRestore?.cancel()
             pendingCursorRestore = nil
-            // Ensure cursor is still at clickPoint when mouseUp is posted even if the host mouse moved slightly.
-            CGWarpMouseCursorPosition(clickPoint)
-            CGAssociateMouseAndMouseCursorPosition(1)
+            // When `mouseDown` slept 55ms+ to activate/raise the window, `mouseUp` is often already queued on
+            // `injectQueue` <0.1ms behind it; enforce at least one 16ms runloop turn between down and up so
+            // draggable items (such as WeChat image bubbles and web link cards) reliably complete click hit-testing.
+            let elapsedSinceDown = CFAbsoluteTimeGetCurrent() - lastMouseDownPostedAt
+            if elapsedSinceDown >= 0 && elapsedSinceDown < 0.016 {
+                let remainUS = useconds_t(((0.016 - elapsedSinceDown) * 1_000_000).rounded())
+                if remainUS > 0 {
+                    usleep(remainUS)
+                }
+            }
+            // Only re-warp before mouseUp if the host physical mouse actually drifted away from clickPoint.
+            if let cur = CGEvent(source: nil)?.location,
+               hypot(cur.x - clickPoint.x, cur.y - clickPoint.y) > 2.0 {
+                CGWarpMouseCursorPosition(clickPoint)
+                CGAssociateMouseAndMouseCursorPosition(1)
+            }
         }
 
         if let ev = CGEvent(mouseEventSource: nil, mouseType: cgType, mouseCursorPosition: clickPoint, mouseButton: cgButton) {
@@ -854,6 +1039,9 @@ final class InputInjector: @unchecked Sendable {
             }
             ev.flags = flags
             ev.post(tap: .cghidEventTap)
+            if type == 1 {
+                lastMouseDownPostedAt = CFAbsoluteTimeGetCurrent()
+            }
         }
 
         // Detect when the remote app (e.g. WeChat) begins dragging file(s) or an image onto macOS's `.drag`
@@ -880,9 +1068,9 @@ final class InputInjector: @unchecked Sendable {
         }
 
         if type == 2 {
-            // Wait 60ms AFTER mouseUp so the target app finishes processing the click (and spawning any popover such
-            // as WeChat's emoji picker) before we check `targetAppHasOpenFloatingPopover()` and restore the cursor.
-            scheduleHostCursorRestore(delayMs: 60)
+            // Wait 180ms AFTER mouseUp so the target app finishes click/double-click dispatch and spawning any
+            // child window or popover before checking `targetAppHasOpenFloatingPopover()` and restoring the cursor.
+            scheduleHostCursorRestore(delayMs: 180)
         }
     }
 
@@ -955,6 +1143,32 @@ final class InputInjector: @unchecked Sendable {
             }
             idx = end
         }
+    }
+
+    private static func normalizedInjectedKeyCode(_ raw: CGKeyCode, flags: CGEventFlags) -> CGKeyCode {
+        if raw == 76 /* Keypad Enter */ {
+            return 36 /* Return */
+        }
+        if flags.contains(.maskCommand) || flags.contains(.maskControl) {
+            switch raw {
+            case 69, 81: return 24 // Keypad + / = -> = (+)
+            case 78: return 27     // Keypad -     -> -
+            case 75: return 44     // Keypad /     -> /
+            case 65: return 47     // Keypad .     -> .
+            case 82: return 29     // Keypad 0     -> 0
+            case 83: return 18     // Keypad 1     -> 1
+            case 84: return 19     // Keypad 2     -> 2
+            case 85: return 20     // Keypad 3     -> 3
+            case 86: return 21     // Keypad 4     -> 4
+            case 87: return 23     // Keypad 5     -> 5
+            case 88: return 22     // Keypad 6     -> 6
+            case 89: return 26     // Keypad 7     -> 7
+            case 91: return 28     // Keypad 8     -> 8
+            case 92: return 25     // Keypad 9     -> 9
+            default: break
+            }
+        }
+        return raw
     }
 
     private func cgFlags(from mask: UInt32) -> CGEventFlags {

@@ -18,9 +18,12 @@ public sealed class MultiWindowCaptureManager : IDisposable
     {
         public string AppId { get; init; } = "";
         public bool SeenBehindActiveWindow { get; set; }
+        public float LastX { get; set; }
+        public float LastY { get; set; }
         public float LastW { get; set; }
         public float LastH { get; set; }
         public string LastTitle { get; set; } = "";
+        public ulong SuppressedAtInteractionSeq { get; init; }
     }
 
     private readonly HashSet<string> _sharedAppIds = new(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +39,7 @@ public sealed class MultiWindowCaptureManager : IDisposable
     private (int W, int H) _fullDesktopLogicalSize = (1920, 1080);
     private DispatcherTimer? _pollTimer;
     private CancellationTokenSource? _fastSyncCts;
+    private ulong _interactionSeq;
 
     private bool _dynamicResolutionEnabled = true;
     private int _targetFps = 45;
@@ -163,9 +167,12 @@ public sealed class MultiWindowCaptureManager : IDisposable
             {
                 AppId = stoppedAppId,
                 SeenBehindActiveWindow = false,
+                LastX = stoppedWin?.LogicalX ?? 0,
+                LastY = stoppedWin?.LogicalY ?? 0,
                 LastW = stoppedWin?.LogicalWidth ?? 0,
                 LastH = stoppedWin?.LogicalHeight ?? 0,
-                LastTitle = stoppedWin?.Title ?? ""
+                LastTitle = stoppedWin?.Title ?? "",
+                SuppressedAtInteractionSeq = _interactionSeq
             };
         }
 
@@ -234,6 +241,8 @@ public sealed class MultiWindowCaptureManager : IDisposable
 
     public void NotifyWindowInteracted(uint windowId)
     {
+        if (windowId != 0)
+            _interactionSeq++;
         _fastSyncCts?.Cancel();
         _fastSyncCts = new CancellationTokenSource();
         var ct = _fastSyncCts.Token;
@@ -310,13 +319,18 @@ public sealed class MultiWindowCaptureManager : IDisposable
                     zRank[rawCandidates[i].WindowId] = i;
             }
 
+            IntPtr fgHwnd = Win32Interop.GetForegroundWindow();
             foreach (var w in rawCandidates)
             {
                 if (!_suppressedWindows.TryGetValue(w.WindowId, out var st))
                     continue;
-                bool sizeChanged = MathF.Abs(w.LogicalWidth - st.LastW) > 3f || MathF.Abs(w.LogicalHeight - st.LastH) > 3f;
+                bool geomChanged = MathF.Abs(w.LogicalWidth - st.LastW) > 3f ||
+                                   MathF.Abs(w.LogicalHeight - st.LastH) > 3f ||
+                                   MathF.Abs(w.LogicalX - st.LastX) > 3f ||
+                                   MathF.Abs(w.LogicalY - st.LastY) > 3f;
                 bool titleChanged = !string.IsNullOrEmpty(w.Title) && w.Title != st.LastTitle;
-                if (sizeChanged || titleChanged)
+                bool refocusedAfterClick = _interactionSeq > st.SuppressedAtInteractionSeq && fgHwnd != IntPtr.Zero && w.Hwnd == fgHwnd;
+                if (geomChanged || titleChanged || refocusedAfterClick)
                 {
                     _suppressedWindows.Remove(w.WindowId);
                     continue;

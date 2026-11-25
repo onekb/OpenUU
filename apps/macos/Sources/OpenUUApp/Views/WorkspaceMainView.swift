@@ -635,6 +635,9 @@ struct RemoteControlHomeView: View {
                         }
                         .font(.system(size: 13.5, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            state.connectFromQuickInput(autoOpenDesktop: false)
+                        }
 
                         Button {
                             state.isQuickPasswordRevealed.toggle()
@@ -655,6 +658,9 @@ struct RemoteControlHomeView: View {
                         .font(.system(size: 13.5, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 74)
+                        .onSubmit {
+                            state.connectFromQuickInput(autoOpenDesktop: false)
+                        }
                 }
             }
 
@@ -1863,6 +1869,7 @@ struct DeviceEditorSheet: View {
                 Button("取消") {
                     dismiss()
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("保存设备") {
                     let p = UInt16(portText) ?? 39481
                     let cleanTarget = DeviceCodeFormatter.sanitizeForUse(target)
@@ -1870,6 +1877,7 @@ struct DeviceEditorSheet: View {
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
                 .disabled(DeviceCodeFormatter.sanitizeForUse(target).isEmpty)
             }
         }
@@ -2226,6 +2234,9 @@ struct SmartTargetTextField: NSViewRepresentable {
         tf.drawsBackground = true
         tf.usesSingleLineMode = true
         tf.lineBreakMode = .byTruncatingTail
+        tf.cell?.sendsActionOnEndEditing = false
+        tf.target = context.coordinator
+        tf.action = #selector(Coordinator.handleTextFieldAction(_:))
         tf.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let initialFormatted = DeviceCodeFormatter.formatInput(text)
         tf.stringValue = initialFormatted
@@ -2291,12 +2302,28 @@ struct SmartTargetTextField: NSViewRepresentable {
             }
         }
 
+        private var lastSubmitAt: CFAbsoluteTime = 0
+
+        private func triggerSubmitIfNeeded() -> Bool {
+            guard let onSubmit = parent.onSubmit else { return false }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastSubmitAt >= 0.08 {
+                lastSubmitAt = now
+                onSubmit()
+            }
+            return true
+        }
+
+        @objc func handleTextFieldAction(_ sender: NSTextField) {
+            // Fires when AppKit ends single-line editing via Return or Numeric Keypad Enter (`\u{03}`).
+            _ = triggerSubmitIfNeeded()
+        }
+
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                if let onSubmit = parent.onSubmit {
-                    onSubmit()
-                    return true
-                }
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) ||
+               commandSelector == #selector(NSResponder.insertLineBreak(_:)) ||
+               commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                return triggerSubmitIfNeeded()
             }
             return false
         }

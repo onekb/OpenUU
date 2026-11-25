@@ -818,8 +818,8 @@ public partial class ProxyWindow : Window
     {
         if (_currentWindowId == 0 || _currentWindowId == MultiWindowCaptureManager.FullDesktopWindowId)
             return;
-        _bridge.SendKey(_currentWindowId, 13 /* W */, isDown: true, isRepeat: false, modifiers: KeyCodeMapper.ModCmd);
-        _bridge.SendKey(_currentWindowId, 13 /* W */, isDown: false, isRepeat: false, modifiers: KeyCodeMapper.ModCmd);
+        _bridge.SendKey(_currentWindowId, 13 /* W */, isDown: true, isRepeat: false, modifiers: KeyCodeMapper.ModCmd | 256u);
+        _bridge.SendKey(_currentWindowId, 13 /* W */, isDown: false, isRepeat: false, modifiers: KeyCodeMapper.ModCmd | 256u);
     }
 
     public void SetAudioMuted(bool muted)

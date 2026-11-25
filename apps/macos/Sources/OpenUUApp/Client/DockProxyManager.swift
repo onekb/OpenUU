@@ -151,6 +151,9 @@ final class DockProxyManager {
         latestIcons.removeValue(forKey: appKey)
         if let entry = entries.removeValue(forKey: appKey) {
             if entry.process.isRunning {
+                if NSApp.windows.contains(where: { ($0 is RemoteProxyNSWindow) && $0.isVisible }) {
+                    MainPanelCoordinator.shared.markRemoteWindowFocusRequested()
+                }
                 entry.process.terminate()
             }
             try? FileManager.default.removeItem(at: entry.slotDir)

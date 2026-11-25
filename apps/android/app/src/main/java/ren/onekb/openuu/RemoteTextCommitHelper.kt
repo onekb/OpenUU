@@ -93,7 +93,7 @@ object RemoteTextCommitHelper {
             MacKeyCodes.F12 -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
             MacKeyCodes.DELETE -> deleteBackward(service)
             MacKeyCodes.FORWARD_DELETE -> deleteForward(service)
-            MacKeyCodes.RETURN -> performEnter(service)
+            MacKeyCodes.RETURN, MacKeyCodes.KEYPAD_ENTER -> performEnter(service)
             MacKeyCodes.LEFT -> moveSelection(service, -1)
             MacKeyCodes.RIGHT -> moveSelection(service, +1)
             else -> {
@@ -263,19 +263,23 @@ object RemoteTextCommitHelper {
             MacKeyCodes.X -> 'x' to 'X'
             MacKeyCodes.Y -> 'y' to 'Y'
             MacKeyCodes.Z -> 'z' to 'Z'
-            MacKeyCodes.NUM_0 -> '0' to ')'
-            MacKeyCodes.NUM_1 -> '1' to '!'
-            MacKeyCodes.NUM_2 -> '2' to '@'
-            MacKeyCodes.NUM_3 -> '3' to '#'
-            MacKeyCodes.NUM_4 -> '4' to '$'
-            MacKeyCodes.NUM_5 -> '5' to '%'
-            MacKeyCodes.NUM_6 -> '6' to '^'
-            MacKeyCodes.NUM_7 -> '7' to '&'
-            MacKeyCodes.NUM_8 -> '8' to '*'
-            MacKeyCodes.NUM_9 -> '9' to '('
+            MacKeyCodes.NUM_0, MacKeyCodes.KEYPAD_0 -> '0' to ')'
+            MacKeyCodes.NUM_1, MacKeyCodes.KEYPAD_1 -> '1' to '!'
+            MacKeyCodes.NUM_2, MacKeyCodes.KEYPAD_2 -> '2' to '@'
+            MacKeyCodes.NUM_3, MacKeyCodes.KEYPAD_3 -> '3' to '#'
+            MacKeyCodes.NUM_4, MacKeyCodes.KEYPAD_4 -> '4' to '$'
+            MacKeyCodes.NUM_5, MacKeyCodes.KEYPAD_5 -> '5' to '%'
+            MacKeyCodes.NUM_6, MacKeyCodes.KEYPAD_6 -> '6' to '^'
+            MacKeyCodes.NUM_7, MacKeyCodes.KEYPAD_7 -> '7' to '&'
+            MacKeyCodes.NUM_8, MacKeyCodes.KEYPAD_8 -> '8' to '*'
+            MacKeyCodes.NUM_9, MacKeyCodes.KEYPAD_9 -> '9' to '('
             MacKeyCodes.SPACE -> ' ' to ' '
-            MacKeyCodes.MINUS -> '-' to '_'
-            MacKeyCodes.EQUAL -> '=' to '+'
+            MacKeyCodes.MINUS, MacKeyCodes.KEYPAD_MINUS -> '-' to '_'
+            MacKeyCodes.EQUAL, MacKeyCodes.KEYPAD_EQUALS -> '=' to '+'
+            MacKeyCodes.KEYPAD_PLUS -> '+' to '+'
+            MacKeyCodes.KEYPAD_MULTIPLY -> '*' to '*'
+            MacKeyCodes.KEYPAD_DIVIDE -> '/' to '/'
+            MacKeyCodes.KEYPAD_DECIMAL -> '.' to '.'
             MacKeyCodes.LEFT_BRACKET -> '[' to '{'
             MacKeyCodes.RIGHT_BRACKET -> ']' to '}'
             MacKeyCodes.BACKSLASH -> '\\' to '|'

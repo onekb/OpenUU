@@ -182,6 +182,9 @@ struct RemoteWorkspaceContainer: View {
                             onReturnKey: {
                                 viewModel.sendKeyTap(keyCode: MacKeyCodes.returnKey)
                             },
+                            onHardwareKeyTap: { keyCode, explicitMods, isRepeat in
+                                viewModel.sendKeyTap(keyCode: keyCode, explicitModifiers: explicitMods, isRepeat: isRepeat)
+                            },
                             onComposingPreview: { preview in
                                 imeComposingPreview = preview
                             },
@@ -1166,6 +1169,7 @@ private struct DirectRemoteIMEHost: UIViewRepresentable {
     let onCommitText: (String) -> Void
     let onBackspace: (Bool) -> Void
     let onReturnKey: () -> Void
+    let onHardwareKeyTap: (UInt32, UInt32?, Bool) -> Void
     let onComposingPreview: (String) -> Void
     let onEditingChanged: (Bool) -> Void
 
@@ -1208,6 +1212,7 @@ private struct DirectRemoteIMEHost: UIViewRepresentable {
         tf.onCommitText = onCommitText
         tf.onBackspace = onBackspace
         tf.onReturnKey = onReturnKey
+        tf.onHardwareKeyTap = onHardwareKeyTap
         tf.onComposingPreview = onComposingPreview
         tf.onEditingStateChanged = onEditingChanged
     }
@@ -1219,6 +1224,7 @@ private final class DirectRemoteIMETextField: UITextField, UITextFieldDelegate {
     var onCommitText: ((String) -> Void)?
     var onBackspace: ((Bool) -> Void)?
     var onReturnKey: (() -> Void)?
+    var onHardwareKeyTap: ((UInt32, UInt32?, Bool) -> Void)?
     var onComposingPreview: ((String) -> Void)?
     var onEditingStateChanged: ((Bool) -> Void)?
 
@@ -1258,6 +1264,69 @@ private final class DirectRemoteIMETextField: UITextField, UITextFieldDelegate {
         }
         resetToSentinel()
         onBackspace?(false)
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard markedTextRange == nil else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
+        var unhandled = Set<UIPress>()
+        for press in presses {
+            guard let key = press.key else {
+                unhandled.insert(press)
+                continue
+            }
+            var mods: UInt32 = 0
+            if key.modifierFlags.contains(.shift) { mods |= MacModifiers.shift }
+            if key.modifierFlags.contains(.control) { mods |= MacModifiers.control }
+            if key.modifierFlags.contains(.alternate) { mods |= MacModifiers.option }
+            if key.modifierFlags.contains(.command) { mods |= MacModifiers.command }
+            let explicitMods: UInt32? = mods != 0 ? mods : nil
+
+            let mappedSpecial: UInt32? = switch key.keyCode {
+            case .keyboardReturnOrEnter, .keypadEnter: MacKeyCodes.returnKey
+            case .keyboardEscape: MacKeyCodes.escape
+            case .keyboardTab: MacKeyCodes.tab
+            case .keyboardDeleteForward: MacKeyCodes.forwardDelete
+            case .keyboardLeftArrow: MacKeyCodes.left
+            case .keyboardRightArrow: MacKeyCodes.right
+            case .keyboardUpArrow: MacKeyCodes.up
+            case .keyboardDownArrow: MacKeyCodes.down
+            case .keyboardHome: MacKeyCodes.home
+            case .keyboardEnd: MacKeyCodes.end
+            case .keyboardPageUp: MacKeyCodes.pageUp
+            case .keyboardPageDown: MacKeyCodes.pageDown
+            case .keyboardF1: MacKeyCodes.f1
+            case .keyboardF2: MacKeyCodes.f2
+            case .keyboardF3: MacKeyCodes.f3
+            case .keyboardF4: MacKeyCodes.f4
+            case .keyboardF5: MacKeyCodes.f5
+            case .keyboardF6: MacKeyCodes.f6
+            case .keyboardF7: MacKeyCodes.f7
+            case .keyboardF8: MacKeyCodes.f8
+            case .keyboardF9: MacKeyCodes.f9
+            case .keyboardF10: MacKeyCodes.f10
+            case .keyboardF11: MacKeyCodes.f11
+            case .keyboardF12: MacKeyCodes.f12
+            default: nil
+            }
+
+            if let special = mappedSpecial {
+                resetToSentinel()
+                onHardwareKeyTap?(special, explicitMods, false)
+            } else if (mods & (MacModifiers.command | MacModifiers.control)) != 0,
+                      let ch = key.charactersIgnoringModifiers.first,
+                      let (code, _) = MacKeyCodes.asciiToKeyAndShift(ch) {
+                resetToSentinel()
+                onHardwareKeyTap?(code, mods, false)
+            } else {
+                unhandled.insert(press)
+            }
+        }
+        if !unhandled.isEmpty {
+            super.pressesBegan(unhandled, with: event)
+        }
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {

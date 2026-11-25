@@ -2491,14 +2491,14 @@ private class DirectRemoteImeEditText(context: Context) : EditText(context) {
                         KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                             if (event.action == KeyEvent.ACTION_DOWN) {
                                 resetToSentinel()
-                                onKeyTapCallback?.invoke(MacKeyCodes.RETURN, false)
+                                onKeyTapCallback?.invoke(MacKeyCodes.RETURN, isRepeat)
                             }
                             return true
                         }
                         KeyEvent.KEYCODE_TAB -> {
                             if (event.action == KeyEvent.ACTION_DOWN) {
                                 resetToSentinel()
-                                onKeyTapCallback?.invoke(MacKeyCodes.TAB, false)
+                                onKeyTapCallback?.invoke(MacKeyCodes.TAB, isRepeat)
                             }
                             return true
                         }
@@ -2525,6 +2525,34 @@ private class DirectRemoteImeEditText(context: Context) : EditText(context) {
                             if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.DOWN, isRepeat)
                             return true
                         }
+                        KeyEvent.KEYCODE_MOVE_HOME -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.HOME, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_MOVE_END -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.END, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_PAGE_UP -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.PAGE_UP, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_PAGE_DOWN -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.PAGE_DOWN, isRepeat)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_F1 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F1, false); return true }
+                        KeyEvent.KEYCODE_F2 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F2, false); return true }
+                        KeyEvent.KEYCODE_F3 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F3, false); return true }
+                        KeyEvent.KEYCODE_F4 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F4, false); return true }
+                        KeyEvent.KEYCODE_F5 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F5, false); return true }
+                        KeyEvent.KEYCODE_F6 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F6, false); return true }
+                        KeyEvent.KEYCODE_F7 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F7, false); return true }
+                        KeyEvent.KEYCODE_F8 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F8, false); return true }
+                        KeyEvent.KEYCODE_F9 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F9, false); return true }
+                        KeyEvent.KEYCODE_F10 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F10, false); return true }
+                        KeyEvent.KEYCODE_F11 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F11, false); return true }
+                        KeyEvent.KEYCODE_F12 -> { if (event.action == KeyEvent.ACTION_DOWN) onKeyTapCallback?.invoke(MacKeyCodes.F12, false); return true }
                     }
                 }
                 return super.sendKeyEvent(event)

@@ -108,6 +108,31 @@ public static class KeyCodeMapper
         [0x79] = 109, // F10
         [0x7A] = 103, // F11
         [0x7B] = 111, // F12
+        [0x7C] = 105, // F13
+        [0x7D] = 107, // F14
+        [0x7E] = 113, // F15
+        [0x7F] = 106, // F16
+        [0x80] = 64,  // F17
+        [0x81] = 79,  // F18
+        [0x82] = 80,  // F19
+
+        // Numeric Keypad (placed after main-row keys so reverse table preserves main-row VKs for 0..9)
+        [0x0C] = 71,  // VK_CLEAR -> Keypad Clear
+        [0x60] = 82,  // VK_NUMPAD0
+        [0x61] = 83,  // VK_NUMPAD1
+        [0x62] = 84,  // VK_NUMPAD2
+        [0x63] = 85,  // VK_NUMPAD3
+        [0x64] = 86,  // VK_NUMPAD4
+        [0x65] = 87,  // VK_NUMPAD5
+        [0x66] = 88,  // VK_NUMPAD6
+        [0x67] = 89,  // VK_NUMPAD7
+        [0x68] = 91,  // VK_NUMPAD8
+        [0x69] = 92,  // VK_NUMPAD9
+        [0x6A] = 67,  // VK_MULTIPLY -> Keypad *
+        [0x6B] = 69,  // VK_ADD      -> Keypad +
+        [0x6D] = 78,  // VK_SUBTRACT -> Keypad -
+        [0x6E] = 65,  // VK_DECIMAL  -> Keypad .
+        [0x6F] = 75,  // VK_DIVIDE   -> Keypad /
     };
 
     private static readonly Dictionary<uint, ushort> CgKeyCodeToVk = BuildReverseTable();
@@ -120,6 +145,24 @@ public static class KeyCodeMapper
             if (!rev.ContainsKey(kv.Value))
                 rev[kv.Value] = (ushort)kv.Key;
         }
+        // macOS Numeric Keypad virtual keycodes -> Win32 VK_* equivalents
+        rev[76] = 0x0D; // kVK_ANSI_KeypadEnter -> VK_RETURN
+        rev[65] = 0x6E; // kVK_ANSI_KeypadDecimal -> VK_DECIMAL
+        rev[67] = 0x6A; // kVK_ANSI_KeypadMultiply -> VK_MULTIPLY
+        rev[69] = 0x6B; // kVK_ANSI_KeypadPlus -> VK_ADD
+        rev[75] = 0x6F; // kVK_ANSI_KeypadDivide -> VK_DIVIDE
+        rev[78] = 0x6D; // kVK_ANSI_KeypadMinus -> VK_SUBTRACT
+        rev[81] = 0xBB; // kVK_ANSI_KeypadEquals -> VK_OEM_PLUS
+        rev[82] = 0x60; // Keypad 0
+        rev[83] = 0x61; // Keypad 1
+        rev[84] = 0x62; // Keypad 2
+        rev[85] = 0x63; // Keypad 3
+        rev[86] = 0x64; // Keypad 4
+        rev[87] = 0x65; // Keypad 5
+        rev[88] = 0x66; // Keypad 6
+        rev[89] = 0x67; // Keypad 7
+        rev[91] = 0x68; // Keypad 8
+        rev[92] = 0x69; // Keypad 9
         return rev;
     }
 
@@ -137,9 +180,9 @@ public static class KeyCodeMapper
 
     public static bool IsNonTextControlVk(int vk) => vk switch
     {
-        0x08 or 0x09 or 0x0D or 0x1B or 0x21 or 0x22 or 0x23 or 0x24 or
+        0x08 or 0x09 or 0x0C or 0x0D or 0x1B or 0x21 or 0x22 or 0x23 or 0x24 or
         0x25 or 0x26 or 0x27 or 0x28 or 0x2D or 0x2E => true,
-        >= 0x70 and <= 0x7B => true, // F1..F12
+        >= 0x70 and <= 0x82 => true, // F1..F19
         _ => false
     };
 

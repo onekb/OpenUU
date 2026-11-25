@@ -1672,7 +1672,7 @@ private class PerDisplayInputInjector(
     }
 
     private fun mapMacKeyToAndroidKeyCode(mac: Int): Int? = when (mac) {
-        MacKeyCodes.RETURN -> KeyEvent.KEYCODE_ENTER
+        MacKeyCodes.RETURN, MacKeyCodes.KEYPAD_ENTER -> KeyEvent.KEYCODE_ENTER
         MacKeyCodes.TAB -> KeyEvent.KEYCODE_TAB
         MacKeyCodes.SPACE -> KeyEvent.KEYCODE_SPACE
         MacKeyCodes.DELETE -> KeyEvent.KEYCODE_DEL
@@ -1712,18 +1712,23 @@ private class PerDisplayInputInjector(
         MacKeyCodes.X -> KeyEvent.KEYCODE_X
         MacKeyCodes.Y -> KeyEvent.KEYCODE_Y
         MacKeyCodes.Z -> KeyEvent.KEYCODE_Z
-        MacKeyCodes.NUM_0 -> KeyEvent.KEYCODE_0
-        MacKeyCodes.NUM_1 -> KeyEvent.KEYCODE_1
-        MacKeyCodes.NUM_2 -> KeyEvent.KEYCODE_2
-        MacKeyCodes.NUM_3 -> KeyEvent.KEYCODE_3
-        MacKeyCodes.NUM_4 -> KeyEvent.KEYCODE_4
-        MacKeyCodes.NUM_5 -> KeyEvent.KEYCODE_5
-        MacKeyCodes.NUM_6 -> KeyEvent.KEYCODE_6
-        MacKeyCodes.NUM_7 -> KeyEvent.KEYCODE_7
-        MacKeyCodes.NUM_8 -> KeyEvent.KEYCODE_8
-        MacKeyCodes.NUM_9 -> KeyEvent.KEYCODE_9
-        MacKeyCodes.MINUS -> KeyEvent.KEYCODE_MINUS
-        MacKeyCodes.EQUAL -> KeyEvent.KEYCODE_EQUALS
+        MacKeyCodes.NUM_0, MacKeyCodes.KEYPAD_0 -> KeyEvent.KEYCODE_0
+        MacKeyCodes.NUM_1, MacKeyCodes.KEYPAD_1 -> KeyEvent.KEYCODE_1
+        MacKeyCodes.NUM_2, MacKeyCodes.KEYPAD_2 -> KeyEvent.KEYCODE_2
+        MacKeyCodes.NUM_3, MacKeyCodes.KEYPAD_3 -> KeyEvent.KEYCODE_3
+        MacKeyCodes.NUM_4, MacKeyCodes.KEYPAD_4 -> KeyEvent.KEYCODE_4
+        MacKeyCodes.NUM_5, MacKeyCodes.KEYPAD_5 -> KeyEvent.KEYCODE_5
+        MacKeyCodes.NUM_6, MacKeyCodes.KEYPAD_6 -> KeyEvent.KEYCODE_6
+        MacKeyCodes.NUM_7, MacKeyCodes.KEYPAD_7 -> KeyEvent.KEYCODE_7
+        MacKeyCodes.NUM_8, MacKeyCodes.KEYPAD_8 -> KeyEvent.KEYCODE_8
+        MacKeyCodes.NUM_9, MacKeyCodes.KEYPAD_9 -> KeyEvent.KEYCODE_9
+        MacKeyCodes.MINUS, MacKeyCodes.KEYPAD_MINUS -> KeyEvent.KEYCODE_MINUS
+        MacKeyCodes.EQUAL, MacKeyCodes.KEYPAD_EQUALS -> KeyEvent.KEYCODE_EQUALS
+        MacKeyCodes.KEYPAD_PLUS -> KeyEvent.KEYCODE_NUMPAD_ADD
+        MacKeyCodes.KEYPAD_MULTIPLY -> KeyEvent.KEYCODE_NUMPAD_MULTIPLY
+        MacKeyCodes.KEYPAD_DIVIDE -> KeyEvent.KEYCODE_NUMPAD_DIVIDE
+        MacKeyCodes.KEYPAD_DECIMAL -> KeyEvent.KEYCODE_NUMPAD_DOT
+        MacKeyCodes.KEYPAD_CLEAR -> KeyEvent.KEYCODE_CLEAR
         MacKeyCodes.LEFT_BRACKET -> KeyEvent.KEYCODE_LEFT_BRACKET
         MacKeyCodes.RIGHT_BRACKET -> KeyEvent.KEYCODE_RIGHT_BRACKET
         MacKeyCodes.BACKSLASH -> KeyEvent.KEYCODE_BACKSLASH

@@ -1542,6 +1542,15 @@ public partial class MainWindow : Window
         if (!_syncingUi) _state.QuickConnectPort = QuickPortBox.Text;
     }
 
+    private void QuickInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Return || e.Key == Key.Enter)
+        {
+            QuickConnectAppsBtn_Click(sender, e);
+            e.Handled = true;
+        }
+    }
+
     private void QuickConnectAppsBtn_Click(object sender, RoutedEventArgs e)
     {
         _state.QuickConnectTarget = QuickTargetBox.Text;
